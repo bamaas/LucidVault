@@ -74,8 +74,7 @@ docker run -d \
   --restart unless-stopped \
   -e RAINDROP_ACCESS_TOKEN=<your-token> \
   -e OLLAMA_API_KEY=<your-key> \
-  -e VAULT_PATH=/vault \
-  -v ~/obsidian-vault:/vault \
+  -v ~/obsidian-vault:/vault
   lucid:latest
 ```
 
@@ -152,7 +151,3 @@ This avoids reading large raw files unnecessarily and keeps token usage low.
 ### Personal notes indexing
 - [ ] Scan `notes/` for new/changed markdown files and add them to `index.md`
 - [ ] Extract tags and wiki-links from personal notes so they connect to the knowledge graph
-
-### Tag index
-- [ ] Generate per-tag index files (e.g. `tags/distributed-systems.md`) listing all pages with that tag
-- [ ] Update tag indexes when wiki pages or notes are added/changed

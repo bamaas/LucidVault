@@ -51,12 +51,12 @@ Read ` + "`soul.md`" + ` first if it exists. It describes who the user is, what 
 
 When answering questions, follow this lookup order to minimize token usage:
 
-1. **Start with index.md** — Read ` + "`index.md`" + ` at the vault root. It lists all wiki pages with titles, tags, and links. Use this to identify relevant pages.
+1. **Grep index.md** — Do not read the full index. Grep ` + "`index.md`" + ` for keywords or tags relevant to the question. Each line contains a page link, title, and tags.
 2. **Read wiki pages** — Open matching pages from ` + "`wiki/`" + `. These are LLM-enriched summaries with tags, key takeaways, and wiki-links.
 3. **Read raw pages (last resort)** — Only read files from ` + "`raw/`" + ` if the wiki page lacks sufficient detail. Raw files contain the full scraped source content and are much larger.
-4. **Check personal notes** — Only search ` + "`notes/`" + ` if the index and wiki pages don't answer the question. Do not glob or scan the full ` + "`notes/`" + ` directory — grep for specific keywords instead.
+4. **Check personal notes** — Only search ` + "`notes/`" + ` if the index and wiki pages don't answer the question. Grep for specific keywords, do not glob or scan the directory.
 
-Never read all files in a directory. Always start from the index and follow links.
+Never read all files in a directory. Always grep for keywords first.
 
 ## Vault Structure
 
