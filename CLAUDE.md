@@ -41,7 +41,7 @@ mise run lint:go               # go vet
 
 ## Workflow
 
-- **Commit after every feature or fix** — When you complete a new feature or bug fix, create a git commit immediately. Do not batch multiple features/fixes into a single commit.
+- **Commit after every feature or fix** — When you complete a new feature or bug fix, present a summary of the changes for review. On approval, create a git commit immediately. Do not batch multiple features/fixes into a single commit.
 
 ## ADRs
 
