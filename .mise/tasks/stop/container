@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Stop and remove the container"
+docker stop lucid && docker rm lucid

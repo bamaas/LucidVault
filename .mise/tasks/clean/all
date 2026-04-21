@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Remove build artifacts and stopped container"
+rm -rf ./bin
+docker rm -f lucid 2>/dev/null || true

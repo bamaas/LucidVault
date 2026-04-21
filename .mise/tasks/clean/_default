@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Clean all build artifacts"
+#MISE depends=["clean:all"]

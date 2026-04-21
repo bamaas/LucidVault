@@ -1,0 +1,24 @@
+{
+  "name": "Lucid",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/${localWorkspaceFolder},type=bind",
+  "workspaceFolder": "/${localWorkspaceFolder}",
+  "mounts": [
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+    "source=${localEnv:HOME}/.ssh,target=/root/.ssh,type=bind,readonly",
+    "source=${localEnv:HOME}/.gitconfig,target=/root/.gitconfig,type=bind,readonly"
+  ],
+  "postCreateCommand": "mise trust",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "alexcvzz.vscode-sqlite"
+      ]
+    }
+  },
+  "remoteUser": "root"
+}

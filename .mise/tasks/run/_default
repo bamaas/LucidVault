@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Run the Go service locally"
+#MISE depends=["run:binary"]

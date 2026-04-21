@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Tail container logs"
+docker logs -f lucid

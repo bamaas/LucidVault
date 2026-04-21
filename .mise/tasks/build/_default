@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Build binary and Docker image"
+#MISE depends=["build:binary", "build:image"]
