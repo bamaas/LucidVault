@@ -1,10 +1,10 @@
-# Lucid
+# LucidVault
 
-You save dozens of articles, blog posts, and links every week. Most of them disappear into a bookmark graveyard — never read, never searchable, never connected to anything. Lucid fixes that.
+You save dozens of articles, blog posts, and links every week. Most of them disappear into a bookmark graveyard — never read, never searchable, never connected to anything. LucidVault fixes that.
 
-Lucid turns saved bookmarks into a structured, searchable knowledge base inside your Obsidian vault. It scrapes the full content, summarizes it with an LLM, extracts key takeaways, and links it to your existing notes — automatically. Your personal notes live alongside enriched pages, and a `soul.md` file personalizes everything to your background and interests.
+LucidVault turns saved bookmarks into a structured, searchable knowledge base inside your Obsidian vault. It scrapes the full content, summarizes it with an LLM, extracts key takeaways, and links it to your existing notes — automatically. Your personal notes live alongside enriched pages, and a `soul.md` file personalizes everything to your background and interests.
 
-Lucid generates a `CLAUDE.md` in your vault, so Claude Code can query your knowledge base efficiently, making it a daily companion for development work.
+LucidVault generates a `CLAUDE.md` in your vault, so Claude Code can query your knowledge base efficiently, making it a daily companion for development work.
 
 ## Features
 
@@ -38,7 +38,7 @@ mkdir -p ~/obsidian-vault
 
 ### 3. (Optional) Create a soul.md
 
-`soul.md` personalizes your entire Lucid experience. It's used during enrichment (tailoring summaries to your interests) and during retrieval (Claude Code reads it to tailor answers to your background). Place it at the root of your vault:
+`soul.md` personalizes your entire LucidVault experience. It's used during enrichment (tailoring summaries to your interests) and during retrieval (Claude Code reads it to tailor answers to your background). Place it at the root of your vault:
 
 ```bash
 cat > ~/obsidian-vault/soul.md << 'EOF'
@@ -70,20 +70,20 @@ Edit this to reflect your background and interests. If you skip this step, every
 
 ```bash
 docker run -d \
-  --name lucid \
+  --name lucidvault \
   --restart unless-stopped \
   -e RAINDROP_ACCESS_TOKEN=<your-token> \
   -e OLLAMA_API_KEY=<your-key> \
   -v ~/obsidian-vault:/vault
-  lucid:latest
+  lucidvault:latest
 ```
 
-That's it. Lucid will poll Raindrop every 5 minutes. On first run, it backfills all your existing bookmarks.
+That's it. LucidVault will poll Raindrop every 5 minutes. On first run, it backfills all your existing bookmarks.
 
 ### 5. Check it's working
 
 ```bash
-docker logs -f lucid
+docker logs -f lucidvault
 ```
 
 You should see bookmarks being fetched, scraped, and enriched. Files appear in your vault under `raw/` (scraped content) and `wiki/` (enriched pages).
@@ -105,7 +105,7 @@ All configuration is via environment variables:
 
 ## Vault structure
 
-Lucid creates and manages these directories inside your vault:
+LucidVault creates and manages these directories inside your vault:
 
 ```text
 vault/
@@ -115,12 +115,12 @@ vault/
 ├── templates/    # Obsidian templates
 ├── index.md      # Master catalog of all wiki pages
 ├── soul.md       # Your profile for LLM personalization (optional, you create this)
-└── .lucid.db     # SQLite state database
+└── .lucidvault.db  # SQLite state database
 ```
 
 ## Querying your vault with Claude Code
 
-Lucid auto-generates a `CLAUDE.md` in your vault on first run. When you open the vault directory with Claude Code, it automatically follows an efficient retrieval strategy:
+LucidVault auto-generates a `CLAUDE.md` in your vault on first run. When you open the vault directory with Claude Code, it automatically follows an efficient retrieval strategy:
 
 1. Read `index.md` to find relevant pages by title/tags
 2. Read the matching `wiki/` page (enriched summary)

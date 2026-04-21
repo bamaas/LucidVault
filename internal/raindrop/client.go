@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"lucid/internal/source"
+	"lucidvault/internal/source"
 )
 
 const baseURL = "https://api.raindrop.io/rest/v1"

@@ -1,4 +1,4 @@
-# Lucid
+# LucidVault
 
 AI-powered personal knowledge base. Polls Raindrop.io, scrapes via Jina Reader, enriches via Ollama Cloud, writes to Obsidian vault.
 

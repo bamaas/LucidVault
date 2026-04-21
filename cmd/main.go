@@ -12,13 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	"lucid/internal/enrich"
-	"lucid/internal/scraper"
-	"lucid/internal/source"
-	"lucid/internal/store"
-	"lucid/internal/vault"
+	"lucidvault/internal/enrich"
+	"lucidvault/internal/scraper"
+	"lucidvault/internal/source"
+	"lucidvault/internal/store"
+	"lucidvault/internal/vault"
 
-	_ "lucid/internal/raindrop" // register raindrop source
+	_ "lucidvault/internal/raindrop" // register raindrop source
 )
 
 type config struct {
@@ -51,7 +51,7 @@ func main() {
 	slog.Info("vault initialized", "path", cfg.vaultPath)
 
 	// Initialize SQLite store
-	dbPath := filepath.Join(cfg.vaultPath, ".lucid.db")
+	dbPath := filepath.Join(cfg.vaultPath, ".lucidvault.db")
 	db, err := store.New(dbPath)
 	if err != nil {
 		slog.Error("failed to initialize database", "error", err)
@@ -79,7 +79,7 @@ func main() {
 		cancel()
 	}()
 
-	slog.Info("starting lucid", "poll_interval", cfg.pollInterval, "model", cfg.ollamaModel)
+	slog.Info("starting lucidvault", "poll_interval", cfg.pollInterval, "model", cfg.ollamaModel)
 
 	// Run immediately on startup, then on ticker
 	runPollCycle(ctx, cfg, rd, sc, en, db, v)

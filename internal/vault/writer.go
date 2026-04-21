@@ -39,9 +39,9 @@ func (v *Vault) Init() error {
 	// Create CLAUDE.md for Claude Code retrieval strategy
 	claudePath := filepath.Join(v.BasePath, "CLAUDE.md")
 	if _, err := os.Stat(claudePath); os.IsNotExist(err) {
-		content := `# Lucid Vault
+		content := `# LucidVault
 
-This is a personal knowledge base managed by Lucid.
+This is a personal knowledge base managed by LucidVault.
 
 ## User Context
 

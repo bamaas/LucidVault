@@ -1,4 +1,4 @@
-module lucid
+module lucidvault
 
 go 1.25.0
 
