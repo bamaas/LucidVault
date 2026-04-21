@@ -8,4 +8,5 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /lucidvault ./cmd/main.
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /lucidvault /lucidvault
+ENV VAULT_PATH=/vault
 ENTRYPOINT ["/lucidvault"]

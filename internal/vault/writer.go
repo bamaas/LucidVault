@@ -36,41 +36,6 @@ func (v *Vault) Init() error {
 		}
 	}
 
-	// Create CLAUDE.md for Claude Code retrieval strategy
-	claudePath := filepath.Join(v.BasePath, "CLAUDE.md")
-	if _, err := os.Stat(claudePath); os.IsNotExist(err) {
-		content := `# LucidVault
-
-This is a personal knowledge base managed by LucidVault.
-
-## User Context
-
-Read ` + "`soul.md`" + ` first if it exists. It describes who the user is, what they care about, and how they prefer answers. Use it to tailor your responses.
-
-## Retrieval Strategy
-
-When answering questions, follow this lookup order to minimize token usage:
-
-1. **Grep index.md** — Do not read the full index. Grep ` + "`index.md`" + ` for keywords or tags relevant to the question. Each line contains a page link, title, and tags.
-2. **Read wiki pages** — Open matching pages from ` + "`wiki/`" + `. These are LLM-enriched summaries with tags, key takeaways, and wiki-links.
-3. **Read raw pages (last resort)** — Only read files from ` + "`raw/`" + ` if the wiki page lacks sufficient detail. Raw files contain the full scraped source content and are much larger.
-4. **Check personal notes** — Only search ` + "`notes/`" + ` if the index and wiki pages don't answer the question. Grep for specific keywords, do not glob or scan the directory.
-
-Never read all files in a directory. Always grep for keywords first.
-
-## Vault Structure
-
-- ` + "`soul.md`" + ` — User profile and preferences (read this first)
-- ` + "`index.md`" + ` — Master catalog of all wiki pages (start here for lookups)
-- ` + "`wiki/`" + ` — LLM-enriched summaries (preferred reading)
-- ` + "`raw/`" + ` — Full scraped source content (large, use sparingly)
-- ` + "`notes/`" + ` — Personal notes written by the user (search by keyword, don't scan)
-`
-		if err := os.WriteFile(claudePath, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("creating CLAUDE.md: %w", err)
-		}
-	}
-
 	// Create note template
 	noteTemplatePath := filepath.Join(v.BasePath, "templates", "note.md")
 	if _, err := os.Stat(noteTemplatePath); os.IsNotExist(err) {
