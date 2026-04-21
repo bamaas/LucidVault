@@ -39,6 +39,10 @@ mise run lint:go               # go vet
 - `OLLAMA_API_KEY` — Ollama Cloud API key
 - `VAULT_PATH` — Path to Obsidian vault
 
+## Workflow
+
+- **Commit after every feature or fix** — When you complete a new feature or bug fix, create a git commit immediately. Do not batch multiple features/fixes into a single commit.
+
 ## ADRs
 
 Read `docs/adr/` before implementing — these capture architectural decisions and their reasoning.
