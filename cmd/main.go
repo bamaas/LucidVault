@@ -446,11 +446,10 @@ When the user asks about any topic, technology, or concept:
 1. **Grep index.md** — Do not read the full index. Grep ` + "`%s/index.md`" + ` for keywords or tags relevant to the question.
 2. **Read wiki pages** — Open matching pages from ` + "`%s/wiki/`" + `. These are LLM-enriched summaries with tags, key takeaways, and wiki-links.
 3. **Check personal notes** — Search ` + "`%s/notes/`" + ` by keyword if wiki pages don't fully answer the question. Grep for keywords, do not scan the directory.
-4. **Read raw pages (last resort)** — Only read from ` + "`%s/raw/`" + ` if the wiki and notes lack detail. Raw files are much larger.
+4. **Read raw pages** — Only read from ` + "`%s/raw/`" + ` if the wiki and notes lack detail. Raw files are much larger.
+5. **Fetch a URL (last resort)** — If the vault has no answer, offer to fetch a URL from a vault page or one the user provides. Ask before fetching.
 
 Never read all files in a directory. Always grep for keywords first.
-
-If the vault lacks coverage on a topic, say so. You may offer to fetch a URL if the user provides one, but do not search the web unprompted.
 
 ### Vault Structure
 - ` + "`soul.md`" + ` — User profile and preferences

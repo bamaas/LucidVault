@@ -146,7 +146,8 @@ Claude Code is instructed to:
 2. Grep `index.md` for keywords — never read the full index
 3. Read matching `wiki/` pages (enriched summaries)
 4. Search `notes/` by keyword for personal context
-5. Fall back to `raw/` only as a last resort (large files)
+5. Fall back to `raw/` only if wiki and notes lack detail (large files)
+6. Offer to fetch a URL as a last resort, either one found in a vault page or provided by the user
 
 It will never scan entire directories, and will not search the web unprompted.
 
