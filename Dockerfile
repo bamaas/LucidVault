@@ -1,12 +1,14 @@
-FROM golang:1.25-alpine AS builder
+FROM jdxcode/mise@sha256:9018ae3c83379d46a0a495ff1b7a5231a488218788ee2eb38bd6be3e5aa081ab AS builder
 WORKDIR /app
+COPY .mise/mise.toml .mise.toml
+RUN mise trust && mise install
 COPY go.mod go.sum ./
-RUN go mod download
+RUN mise exec -- go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /lucidvault ./cmd/main.go
+RUN mise run build:binary
 
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /lucidvault /lucidvault
+COPY --from=builder /app/bin/lucidvault /lucidvault
 ENV VAULT_PATH=/vault
 ENTRYPOINT ["/lucidvault"]

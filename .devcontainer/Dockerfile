@@ -1,4 +1,4 @@
-FROM jdxcode/mise:latest
+FROM jdxcode/mise:@sha256:9018ae3c83379d46a0a495ff1b7a5231a488218788ee2eb38bd6be3e5aa081a
 WORKDIR /src
 USER root
 COPY mise.toml ./
