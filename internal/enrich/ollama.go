@@ -52,12 +52,13 @@ func NewClient(apiKey, model string, maxRetries, delayMs int) *Client {
 	return &Client{
 		apiKey:  apiKey,
 		model:   model,
-		baseURL: "https://api.ollama.com",
+		baseURL: "https://ollama.com",
 		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: 300 * time.Second,
 			Transport: &http.Transport{
-				ResponseHeaderTimeout: 30 * time.Second,
+				ResponseHeaderTimeout: 300 * time.Second,
 				IdleConnTimeout:       90 * time.Second,
+				ForceAttemptHTTP2:     true,
 			},
 		},
 		maxRetries: maxRetries,
