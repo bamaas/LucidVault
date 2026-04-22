@@ -60,7 +60,7 @@ func (c *Client) FetchBookmarks(lastSyncAt time.Time, batchSize int) ([]source.B
 	var allBookmarks []source.Bookmark
 
 	for page := 0; ; page++ {
-		url := fmt.Sprintf("%s/raindrops/0?sort=-created&page=%d&perpage=25", baseURL, page)
+		url := fmt.Sprintf("%s/raindrops/0?sort=created&page=%d&perpage=25", baseURL, page)
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			return nil, fmt.Errorf("creating request: %w", err)
@@ -91,11 +91,9 @@ func (c *Client) FetchBookmarks(lastSyncAt time.Time, batchSize int) ([]source.B
 			break
 		}
 
-		reachedOld := false
 		for _, item := range result.Items {
-			if item.Created.Before(lastSyncAt) || item.Created.Equal(lastSyncAt) {
-				reachedOld = true
-				break
+			if !item.Created.After(lastSyncAt) {
+				continue // already seen
 			}
 			allBookmarks = append(allBookmarks, source.Bookmark{
 				ID:      item.ID,
@@ -105,23 +103,12 @@ func (c *Client) FetchBookmarks(lastSyncAt time.Time, batchSize int) ([]source.B
 				Tags:    item.Tags,
 				Created: item.Created,
 			})
-		}
-
-		if reachedOld {
-			break
-		}
-
-		if batchSize > 0 && len(allBookmarks) >= batchSize {
-			allBookmarks = allBookmarks[:batchSize]
-			break
+			if batchSize > 0 && len(allBookmarks) >= batchSize {
+				return allBookmarks, nil
+			}
 		}
 
 		slog.Info("fetched raindrop page", "page", page, "items", len(result.Items), "total", len(allBookmarks))
-	}
-
-	// Reverse to process oldest first
-	for i, j := 0, len(allBookmarks)-1; i < j; i, j = i+1, j-1 {
-		allBookmarks[i], allBookmarks[j] = allBookmarks[j], allBookmarks[i]
 	}
 
 	return allBookmarks, nil

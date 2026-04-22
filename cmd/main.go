@@ -159,8 +159,12 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 		processed++
 	}
 
-	// Update sync state to now
-	if err := db.UpdateSyncState(0, time.Now()); err != nil {
+	// Advance sync state to the Created time of the newest bookmark in this batch.
+	// bookmarks is oldest-first (sort=created), so the last entry is the newest.
+	// This ensures the next poll starts just after the newest item we saw, rather
+	// than time.Now(), which would skip any unprocessed older bookmarks.
+	newestCreated := bookmarks[len(bookmarks)-1].Created
+	if err := db.UpdateSyncState(0, newestCreated); err != nil {
 		slog.Error("failed to update sync state", "error", err)
 	}
 
