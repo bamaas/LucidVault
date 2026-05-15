@@ -132,7 +132,7 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 
 	slog.Info("polling raindrop", "last_sync_at", syncState.LastSyncAt)
 
-	bookmarks, err := rd.FetchBookmarks(syncState.LastSyncAt, cfg.batchSize)
+	bookmarks, err := rd.FetchBookmarks(cfg.batchSize)
 	if err != nil {
 		slog.Error("failed to fetch bookmarks", "error", err)
 		return

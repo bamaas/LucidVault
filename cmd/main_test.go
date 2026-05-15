@@ -22,17 +22,11 @@ type mockSource struct {
 	bookmarks []source.Bookmark
 }
 
-func (m *mockSource) FetchBookmarks(lastSyncAt time.Time, batchSize int) ([]source.Bookmark, error) {
-	var result []source.Bookmark
-	for _, bm := range m.bookmarks {
-		if bm.Created.After(lastSyncAt) {
-			result = append(result, bm)
-			if batchSize > 0 && len(result) >= batchSize {
-				break
-			}
-		}
+func (m *mockSource) FetchBookmarks(batchSize int) ([]source.Bookmark, error) {
+	if batchSize > 0 && batchSize < len(m.bookmarks) {
+		return m.bookmarks[:batchSize], nil
 	}
-	return result, nil
+	return m.bookmarks, nil
 }
 
 // validWikiResponse returns a minimal response that passes validateResponse.
