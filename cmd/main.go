@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 
 	"lucidvault/internal/enrich"
+	"lucidvault/internal/notes"
 	"lucidvault/internal/scraper"
 	"lucidvault/internal/source"
 	"lucidvault/internal/store"
@@ -127,6 +129,14 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 	if ctx.Err() != nil {
 		return
 	}
+	processBookmarks(ctx, cfg, rd, sc, en, db, v)
+	processNotes(ctx, db, v)
+}
+
+func processBookmarks(ctx context.Context, cfg *config, rd source.Client, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) {
+	if ctx.Err() != nil {
+		return
+	}
 
 	slog.Info("polling source")
 
@@ -152,7 +162,7 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 		}
 
 		if err := processBookmark(ctx, cfg, bm, sc, en, db, v); err != nil {
-			if err == errSkipped {
+			if errors.Is(err, errSkipped) {
 				skipped++
 			} else {
 				slog.Error("failed to process bookmark", "title", bm.Title, "url", bm.Link, "error", err)
@@ -167,7 +177,110 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 		slog.Warn("some bookmarks failed — will be retried next cycle", "failed", failed)
 	}
 
-	slog.Info("poll cycle complete", "processed", processed, "failed", failed, "skipped", skipped)
+	slog.Info("bookmarks cycle complete", "processed", processed, "failed", failed, "skipped", skipped)
+}
+
+func processNotes(ctx context.Context, db *store.Store, v *vault.Vault) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	slog.Info("scanning notes")
+
+	scanned, err := notes.Scan(v.BasePath)
+	if err != nil {
+		slog.Error("failed to scan notes", "error", err)
+		return
+	}
+
+	// Build full set of scanned paths upfront for deletion detection.
+	// This must happen before the processing loop so that an early shutdown
+	// doesn't cause the reconciliation step to falsely delete valid notes.
+	scannedPaths := make(map[string]struct{}, len(scanned))
+	for _, nf := range scanned {
+		scannedPaths[nf.Path] = struct{}{}
+	}
+
+	var indexed, updated, skipped int
+
+	for _, nf := range scanned {
+		if ctx.Err() != nil {
+			slog.Info("shutdown requested, stopping notes processing")
+			break
+		}
+
+		existingHash, err := db.GetNoteHash(nf.Path)
+		if err != nil {
+			slog.Error("failed to check note hash", "path", nf.Path, "error", err)
+			continue
+		}
+
+		if existingHash == nf.ContentHash {
+			skipped++
+			continue
+		}
+
+		// Derive slug from path: "notes/sub/my-note.md" → "notes/sub/my-note"
+		slug := strings.TrimSuffix(nf.Path, ".md")
+
+		// Remove existing entry first so tags/title get refreshed on updates
+		if existingHash != "" {
+			if err := v.RemoveFromIndex(slug); err != nil {
+				slog.Error("failed to remove old index entry for note", "path", nf.Path, "error", err)
+				continue
+			}
+		}
+
+		if err := v.UpdateIndex(slug, nf.Title, nf.Tags); err != nil {
+			slog.Error("failed to update index for note", "path", nf.Path, "error", err)
+			continue
+		}
+
+		if err := db.UpsertNote(nf.Path, nf.ContentHash); err != nil {
+			slog.Error("failed to upsert note record", "path", nf.Path, "error", err)
+			continue
+		}
+
+		if existingHash == "" {
+			slog.Info("note indexed", "path", nf.Path)
+			indexed++
+		} else {
+			slog.Info("note updated", "path", nf.Path)
+			updated++
+		}
+	}
+
+	// Reconcile deletions: remove DB records for notes no longer on disk
+	if ctx.Err() != nil {
+		return
+	}
+	dbNotes, err := db.ListNotes()
+	if err != nil {
+		slog.Error("failed to list notes from db", "error", err)
+	} else {
+		var deleted int
+		for _, rec := range dbNotes {
+			if _, exists := scannedPaths[rec.Path]; exists {
+				continue
+			}
+			slug := strings.TrimSuffix(rec.Path, ".md")
+			if err := v.RemoveFromIndex(slug); err != nil {
+				slog.Error("failed to remove note from index", "path", rec.Path, "error", err)
+				continue
+			}
+			if err := db.DeleteNote(rec.Path); err != nil {
+				slog.Error("failed to delete note record", "path", rec.Path, "error", err)
+			} else {
+				slog.Info("note removed", "path", rec.Path)
+				deleted++
+			}
+		}
+		if deleted > 0 {
+			slog.Info("reconciled deleted notes", "count", deleted)
+		}
+	}
+
+	slog.Info("notes cycle complete", "indexed", indexed, "updated", updated, "skipped", skipped)
 }
 
 var errSkipped = fmt.Errorf("skipped")
@@ -259,11 +372,14 @@ func processBookmark(ctx context.Context, cfg *config, bm source.Bookmark, sc *s
 	}
 
 	// Extract tags from the enriched content for index
-	tags := extractTags(wikiContent, bm.Tags)
+	tags := notes.ParseFrontmatter(wikiContent)
+	if len(tags) == 0 {
+		tags = bm.Tags
+	}
 
 	// Update index
 	title := bm.Title
-	if enrichedTitle := extractTitle(wikiContent); enrichedTitle != "" {
+	if enrichedTitle := notes.ParseTitle(wikiContent); enrichedTitle != "" {
 		title = enrichedTitle
 	}
 	if err := v.UpdateIndex(slug, title, tags); err != nil {
@@ -299,62 +415,6 @@ func buildFallbackContent(bm source.Bookmark) string {
 		fmt.Fprintf(&b, "Tags: %s\n", strings.Join(bm.Tags, ", "))
 	}
 	return b.String()
-}
-
-func extractTags(content string, fallbackTags []string) []string {
-	// Try to extract tags from YAML frontmatter
-	if !strings.HasPrefix(content, "---") {
-		return fallbackTags
-	}
-	parts := strings.SplitN(content, "---", 3)
-	if len(parts) < 3 {
-		return fallbackTags
-	}
-
-	frontmatter := parts[1]
-	var tags []string
-	inTags := false
-	for _, line := range strings.Split(frontmatter, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "tags:" {
-			inTags = true
-			continue
-		}
-		if inTags {
-			if strings.HasPrefix(trimmed, "- ") {
-				tag := strings.TrimPrefix(trimmed, "- ")
-				tags = append(tags, strings.TrimSpace(tag))
-			} else {
-				break
-			}
-		}
-	}
-
-	if len(tags) > 0 {
-		return tags
-	}
-	return fallbackTags
-}
-
-func extractTitle(content string) string {
-	if !strings.HasPrefix(content, "---") {
-		return ""
-	}
-	parts := strings.SplitN(content, "---", 3)
-	if len(parts) < 3 {
-		return ""
-	}
-
-	for _, line := range strings.Split(parts[1], "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "title:") {
-			title := strings.TrimPrefix(trimmed, "title:")
-			title = strings.TrimSpace(title)
-			title = strings.Trim(title, `"'`)
-			return title
-		}
-	}
-	return ""
 }
 
 func loadConfig() (*config, error) {

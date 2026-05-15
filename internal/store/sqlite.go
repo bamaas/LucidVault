@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,6 +11,12 @@ import (
 
 type Store struct {
 	db *sql.DB
+}
+
+type NoteRecord struct {
+	Path          string
+	ContentHash   string
+	LastProcessed time.Time
 }
 
 type BookmarkRecord struct {
@@ -51,6 +58,11 @@ func (s *Store) migrate() error {
 			url TEXT,
 			url_normalized TEXT,
 			processed_at TEXT
+		);
+		CREATE TABLE IF NOT EXISTS notes (
+			path TEXT PRIMARY KEY,
+			content_hash TEXT NOT NULL,
+			last_processed TEXT NOT NULL
 		);
 	`)
 	if err != nil {
@@ -99,7 +111,7 @@ func (s *Store) GetBookmarkBySourceID(sourceID int) (*BookmarkRecord, error) {
 	var rec BookmarkRecord
 	var processedAt string
 	err := row.Scan(&rec.SourceID, &rec.WikiPath, &rec.RawPath, &rec.Title, &rec.URL, &rec.URLNormalized, &processedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -120,6 +132,63 @@ func (s *Store) DeleteBySourceID(sourceID int) error {
 		return fmt.Errorf("deleting source_id %d: %w", sourceID, err)
 	}
 	return nil
+}
+
+func (s *Store) GetNoteHash(path string) (string, error) {
+	var hash string
+	err := s.db.QueryRow("SELECT content_hash FROM notes WHERE path = ?", path).Scan(&hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("querying note hash for %q: %w", path, err)
+	}
+	return hash, nil
+}
+
+func (s *Store) UpsertNote(path, contentHash string) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO notes (path, content_hash, last_processed) VALUES (?, ?, ?)`,
+		path, contentHash, time.Now().UTC().Format(time.RFC3339),
+	)
+	if err != nil {
+		return fmt.Errorf("upserting note %q: %w", path, err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteNote(path string) error {
+	_, err := s.db.Exec("DELETE FROM notes WHERE path = ?", path)
+	if err != nil {
+		return fmt.Errorf("deleting note %q: %w", path, err)
+	}
+	return nil
+}
+
+func (s *Store) ListNotes() ([]NoteRecord, error) {
+	rows, err := s.db.Query("SELECT path, content_hash, last_processed FROM notes")
+	if err != nil {
+		return nil, fmt.Errorf("listing notes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var records []NoteRecord
+	for rows.Next() {
+		var rec NoteRecord
+		var lastProcessed string
+		if err := rows.Scan(&rec.Path, &rec.ContentHash, &lastProcessed); err != nil {
+			return nil, fmt.Errorf("scanning note row: %w", err)
+		}
+		rec.LastProcessed, err = time.Parse(time.RFC3339, lastProcessed)
+		if err != nil {
+			return nil, fmt.Errorf("parsing last_processed for note %q: %w", rec.Path, err)
+		}
+		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating note rows: %w", err)
+	}
+	return records, nil
 }
 
 func (s *Store) Close() error {
