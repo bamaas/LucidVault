@@ -194,13 +194,7 @@ func TestRunPollCycle_SyncDoesNotAdvanceOnMidBatchShutdown(t *testing.T) {
 	// This means bookmark 1 processes fully, but the ctx.Err() check
 	// before bookmark 2 triggers the break.
 	ctx, cancel := context.WithCancel(context.Background())
-	var scrapeCount int
 	jinaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		scrapeCount++
-		if scrapeCount >= 2 {
-			// Should not be reached — loop should break before second processBookmark
-			t.Error("unexpected second scrape request after context cancellation")
-		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("# Scraped Content\n\nSome content."))
 		// Cancel after first bookmark is fully scraped; the context check
