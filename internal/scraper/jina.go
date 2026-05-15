@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 type Scraper struct {
 	baseURL    string
 	httpClient *http.Client
+	youtube    *YouTubeClient
 }
 
 type Result struct {
@@ -33,10 +35,18 @@ func New() *Scraper {
 // SetBaseURL overrides the Jina Reader endpoint (used in tests).
 func (s *Scraper) SetBaseURL(url string) { s.baseURL = url }
 
-// Scrape fetches the markdown content of a URL via Jina Reader.
-func (s *Scraper) Scrape(targetURL string) (*Result, error) {
+// SetYouTubeClient attaches a Supadata YouTube client for transcript fetching.
+func (s *Scraper) SetYouTubeClient(yt *YouTubeClient) { s.youtube = yt }
+
+// Scrape fetches content for a URL. YouTube URLs are routed to Supadata
+// for transcript extraction when a YouTubeClient is configured.
+func (s *Scraper) Scrape(ctx context.Context, targetURL string) (*Result, error) {
+	if s.youtube != nil && IsYouTubeURL(targetURL) {
+		return s.youtube.FetchTranscript(ctx, targetURL)
+	}
+
 	jinaURL := s.baseURL + targetURL
-	req, err := http.NewRequest("GET", jinaURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", jinaURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating jina request: %w", err)
 	}

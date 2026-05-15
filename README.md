@@ -9,6 +9,7 @@ LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.m
 ## Features
 
 - **Capture** — Save a bookmark on your phone, it appears in your vault within minutes: scraped, summarized, tagged, and linked
+- **YouTube transcripts** — YouTube URLs are automatically detected and their transcripts fetched via the [Supadata](https://supadata.ai) API, then enriched like any other page
 - **Enrich** — LLM generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** — Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **Resilient** — Falls back to basic metadata when scraping fails (paywalled sites, blocked content)
@@ -119,6 +120,7 @@ All configuration is via environment variables:
 | `BATCH_SIZE` | No | `10` | Max bookmarks per poll cycle |
 | `ENRICH_DELAY_MS` | No | `500` | Delay between API calls (rate limiting) |
 | `ENRICH_MAX_RETRIES` | No | `3` | Max retries on API failure |
+| `SUPADATA_API_KEY` | No | — | [Supadata](https://supadata.ai) API key for YouTube transcript extraction. When set, YouTube URLs are routed to Supadata instead of Jina. |
 | `CLAUDE_MD_PATH` | No | `/CLAUDE.md` | Path to CLAUDE.md for Claude Code integration (override only if needed) |
 
 ## Vault structure
@@ -156,7 +158,7 @@ It will never scan entire directories, and will not search the web unprompted.
 | Component | Choice |
 |-----------|--------|
 | Language | Go |
-| Web scraping | Jina Reader |
+| Web scraping | Jina Reader, Supadata (YouTube) |
 | LLM | Ollama Cloud |
 | Storage | Obsidian vault (markdown) |
 | State | SQLite (modernc.org/sqlite) |
@@ -164,12 +166,6 @@ It will never scan entire directories, and will not search the web unprompted.
 | Bookmark source | Raindrop.io |
 
 ## To do
-
-### YouTube support
-- [ ] Extract a `Scraper` interface (`internal/scraper`) so multiple scraping strategies can coexist
-- [ ] Add a YouTube transcript scraper that picks up `youtube.com`/`youtu.be` URLs
-- [ ] Route to the correct scraper based on URL pattern (YouTube → transcript, everything else → Jina)
-- [ ] Feed transcript through the existing enrichment pipeline for summarization
 
 ### Personal notes indexing
 - [ ] Scan `notes/` for new/changed markdown files and add them to `index.md`

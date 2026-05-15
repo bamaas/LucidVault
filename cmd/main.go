@@ -32,6 +32,7 @@ type config struct {
 	pollInterval   time.Duration
 	enrichDelayMs  int
 	enrichRetries  int
+	supadataAPIKey string
 }
 
 func main() {
@@ -87,6 +88,10 @@ func main() {
 		os.Exit(1)
 	}
 	sc := scraper.New()
+	if cfg.supadataAPIKey != "" {
+		sc.SetYouTubeClient(scraper.NewYouTubeClient(cfg.supadataAPIKey))
+		slog.Info("youtube transcript support enabled via supadata")
+	}
 	en := enrich.NewClient(cfg.ollamaAPIKey, cfg.ollamaModel, cfg.enrichRetries, cfg.enrichDelayMs)
 
 	// Graceful shutdown
@@ -196,7 +201,7 @@ func processBookmark(ctx context.Context, cfg *config, bm source.Bookmark, sc *s
 	slog.Info("processing bookmark", "title", bm.Title, "url", bm.Link)
 
 	// Scrape via Jina
-	scrapeResult, err := sc.Scrape(bm.Link)
+	scrapeResult, err := sc.Scrape(ctx, bm.Link)
 	var rawContent string
 	if err != nil || !scrapeResult.OK {
 		slog.Warn("scrape failed, using fallback", "url", bm.Link, "error", err)
@@ -402,15 +407,18 @@ func loadConfig() (*config, error) {
 		enrichRetries = n
 	}
 
+	supadataAPIKey := os.Getenv("SUPADATA_API_KEY")
+
 	return &config{
-		sourceName:    sourceName,
-		sourceToken:   sourceToken,
-		ollamaAPIKey:  apiKey,
-		ollamaModel:   model,
-		vaultPath:     vaultPath,
-		pollInterval:  pollInterval,
-		enrichDelayMs: enrichDelayMs,
-		enrichRetries: enrichRetries,
+		sourceName:     sourceName,
+		sourceToken:    sourceToken,
+		ollamaAPIKey:   apiKey,
+		ollamaModel:    model,
+		vaultPath:      vaultPath,
+		pollInterval:   pollInterval,
+		enrichDelayMs:  enrichDelayMs,
+		enrichRetries:  enrichRetries,
+		supadataAPIKey: supadataAPIKey,
 	}, nil
 }
 

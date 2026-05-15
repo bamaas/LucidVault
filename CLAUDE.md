@@ -8,7 +8,7 @@ AI-powered personal knowledge base. Polls Raindrop.io, scrapes via Jina Reader, 
 cmd/main.go              — Entry point, poll loop, graceful shutdown
 internal/source/         — Bookmark source interface and factory
 internal/raindrop/       — Raindrop API client (implements source.Client)
-internal/scraper/        — Jina Reader scraper
+internal/scraper/        — Scraper (Jina Reader + Supadata YouTube transcripts)
 internal/enrich/         — Ollama Cloud enrichment
 internal/store/          — SQLite state (modernc.org/sqlite, pure Go)
 internal/vault/          — Vault file writer, slug/URL helpers
@@ -38,11 +38,13 @@ mise run lint:go               # golangci-lint
 - `SOURCE_TOKEN` — Access token for the bookmark source (falls back to `RAINDROP_ACCESS_TOKEN`)
 - `OLLAMA_API_KEY` — Ollama Cloud API key
 - `VAULT_PATH` — Path to Obsidian vault
+- `SUPADATA_API_KEY` — (optional) Supadata API key for YouTube transcript extraction
 
 ## Workflow
 
 - **Commit after every feature or fix** — When you complete a new feature or bug fix, present a summary of the changes for review. On approval, create a git commit immediately. Do not batch multiple features/fixes into a single commit.
 - **Conventional Commits** — All commit messages must follow the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/#specification) specification (e.g. `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`).
+- **Update docs on feature changes** — When adding features, changing env vars, or modifying the pipeline, update `README.md` (features, config table, tech stack, to-do) and `CLAUDE.md` (project structure, env vars) before committing.
 
 ## ADRs
 
