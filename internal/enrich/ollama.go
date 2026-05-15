@@ -191,6 +191,11 @@ func validateResponse(content string) error {
 		return fmt.Errorf("missing Key Takeaways section")
 	}
 
+	wordCount := len(strings.Fields(body))
+	if wordCount > 1200 {
+		slog.Warn("wiki page body exceeds 1200 word budget", "words", wordCount)
+	}
+
 	return nil
 }
 
@@ -242,11 +247,11 @@ You will receive:
 
 ## Your Task
 
-Create a wiki page that:
-1. Provides a thorough summary of the article's insights and important details
-2. Extracts concepts, tools, people, or ideas worth remembering
-3. Links to existing wiki pages where connections exist
-4. Tags appropriately for future retrieval
+Create a wiki page that matches its depth to the source — be thorough on complex articles, concise on simple ones. Specifically:
+1. Summarize the article's insights and important details (depth proportional to source complexity)
+2. Extract concepts, tools, people, or ideas worth remembering
+3. Link to existing wiki pages where connections exist
+4. Tag appropriately for future retrieval
 
 ## Output Format
 
@@ -271,20 +276,18 @@ type: bookmark
 For long-form or complex articles, you MAY use ### sub-headings within the Summary to organize it (e.g. ### Background, ### Core Argument, ### Implications). For shorter articles, use plain prose without sub-headings.}
 
 ## Key Takeaways
+{Typically 5-10 points. Each point should be 1-2 sentences. Include as many as the content warrants, but keep each concise.}
 - {most important point}
 - {second most important point}
-- {third point}
-- {add as many points as the content warrants — no fixed limit}
-- {include practical, actionable, or thought-provoking insights}
-- {capture all points worth remembering, not just the top 3-5}
+- {more points as needed — practical, actionable, or thought-provoking}
 
 ## Concepts
-{OPTIONAL — only include if the article introduces or defines specific terms, tools, or frameworks worth remembering. Max 5 entries.}
+{OPTIONAL — only include if the article introduces or defines specific terms, tools, or frameworks worth remembering. Max 5 entries. If not warranted, omit this entire section including the heading.}
 - **{Term}** — {1-sentence definition or explanation}
 - **{Term}** — {1-sentence definition or explanation}
 
 ## Notable Quotes
-{OPTIONAL — only include if the article contains 1-2 particularly well-stated or memorable lines. Max 2 quotes.}
+{OPTIONAL — only include if the article contains 1-2 particularly well-stated or memorable lines. Max 2 quotes. If not warranted, omit this entire section including the heading. If you cannot recall the exact wording, omit the quote rather than paraphrasing.}
 > "{exact quote from the source}"
 
 ## Related
@@ -318,13 +321,13 @@ For long-form or complex articles, you MAY use ### sub-headings within the Summa
 - If the article is news: extract what's significant and why it matters
 - Ignore ads, navigation, footers, "subscribe to newsletter" prompts
 - If content is very long, prioritize the main argument over details
-- Go deeper on topics that align with the user's Profile interests — these deserve more detail and context
+- Go deeper on topics that align with the user's Profile interests — allocate more of the word budget to these topics, but do not exceed the overall budget
 
 ## Compression Rule
 
 Remove noise (ads, filler, repetition) but preserve meaningful detail.
-The summary should be comprehensive enough to serve as a standalone reference.
-Aim for depth on key points rather than brevity for its own sake.
+For long or dense content, focus depth on the main argument and key supporting points — cut tangential details rather than compressing everything equally.
+The result should be useful as a standalone reference within the word budget.
 
 ## Anti-Hallucination Rule
 
@@ -335,9 +338,8 @@ If unsure whether a connection exists, omit it.
 ## Budget
 
 The entire page body (everything after frontmatter) must stay under 1200 words.
-Budget guideline: Summary up to 600 words, Key Takeaways unlimited but concise per point, Concepts max 5, Notable Quotes max 2.
-Omit optional sections (Concepts, Notable Quotes) if they would push over budget or add no value.
-A short article should produce a short page — scale depth to source complexity.
+Budget guideline: Summary up to 600 words, Key Takeaways typically 5-10 points (1-2 sentences each), Concepts max 5, Notable Quotes max 2.
+Omit optional sections (Concepts, Notable Quotes) entirely — including their headings — if they would push over budget or add no value.
 
 ## Quality Bar
 
