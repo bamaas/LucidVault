@@ -1,6 +1,6 @@
 # Notes Processing — Implementation Plan
 
-Ref: ADR-011
+Ref: ADR-012
 
 ## Tasks
 
