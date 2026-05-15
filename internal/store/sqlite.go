@@ -90,6 +90,38 @@ func (s *Store) SaveBookmark(rec *BookmarkRecord) error {
 	return nil
 }
 
+func (s *Store) GetBookmarkBySourceID(sourceID int) (*BookmarkRecord, error) {
+	row := s.db.QueryRow(
+		`SELECT source_id, wiki_path, raw_path, title, url, url_normalized, processed_at
+		 FROM bookmarks WHERE source_id = ? LIMIT 1`, sourceID,
+	)
+
+	var rec BookmarkRecord
+	var processedAt string
+	err := row.Scan(&rec.SourceID, &rec.WikiPath, &rec.RawPath, &rec.Title, &rec.URL, &rec.URLNormalized, &processedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying source_id %d: %w", sourceID, err)
+	}
+
+	rec.ProcessedAt, err = time.Parse(time.RFC3339, processedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parsing processed_at for source_id %d: %w", sourceID, err)
+	}
+
+	return &rec, nil
+}
+
+func (s *Store) DeleteBySourceID(sourceID int) error {
+	_, err := s.db.Exec("DELETE FROM bookmarks WHERE source_id = ?", sourceID)
+	if err != nil {
+		return fmt.Errorf("deleting source_id %d: %w", sourceID, err)
+	}
+	return nil
+}
+
 func (s *Store) Close() error {
 	return s.db.Close()
 }
