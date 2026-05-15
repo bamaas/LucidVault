@@ -32,12 +32,11 @@ jobs:
       - name: Bump version
         id: bump
         run: |
-          cz bump --ci --changelog 2>&1 | tee /tmp/cz-output.txt
-          if grep -q "NO_INCREMENT_DETECTED" /tmp/cz-output.txt; then
-            echo "bumped=false" >> "$GITHUB_OUTPUT"
-          else
+          if cz bump --yes --changelog --changelog-to-stdout > /tmp/cz-changelog.md 2>&1; then
             echo "bumped=true" >> "$GITHUB_OUTPUT"
             echo "version=$(cz version --project)" >> "$GITHUB_OUTPUT"
+          else
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Push changes
@@ -53,5 +52,4 @@ jobs:
         run: |
           gh release create "v${{ steps.bump.outputs.version }}" \
             --title "v${{ steps.bump.outputs.version }}" \
-            --generate-notes \
-            --verify-tag
+            --notes-file /tmp/cz-changelog.md
