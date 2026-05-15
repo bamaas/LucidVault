@@ -82,7 +82,11 @@ Every architectural or design decision **must** have an ADR in `docs/adr/`. Keep
 - Skip this for simple, obvious fixes — don't over-engineer
 - Challenge your own work before presenting it
 
-### 6. Autonomous Bug Fixing
+### 6. Design Validation
+- For architectural decisions or ambiguous requirements, suggest `/grill-me` before implementing
+- Don't auto-trigger — only when the plan involves trade-offs worth exploring
+
+### 7. Autonomous Bug Fixing
 - When given a bug report: just fix it. Don't ask for hand-holding
 - Point at logs, errors, failing tests — then resolve them
 - Zero context switching required from the user
