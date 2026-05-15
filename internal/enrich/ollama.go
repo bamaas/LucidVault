@@ -191,6 +191,11 @@ func validateResponse(content string) error {
 		return fmt.Errorf("missing Key Takeaways section")
 	}
 
+	wordCount := len(strings.Fields(body))
+	if wordCount > 1200 {
+		slog.Warn("wiki page body exceeds 1200 word budget", "words", wordCount)
+	}
+
 	return nil
 }
 
@@ -242,11 +247,11 @@ You will receive:
 
 ## Your Task
 
-Create a wiki page that:
-1. Distills the article into its essential insights (not a summary of everything)
-2. Extracts concepts, tools, people, or ideas worth remembering
-3. Links to existing wiki pages where connections exist
-4. Tags appropriately for future retrieval
+Create a wiki page that matches its depth to the source — be thorough on complex articles, concise on simple ones. Specifically:
+1. Summarize the article's insights and important details (depth proportional to source complexity)
+2. Extract concepts, tools, people, or ideas worth remembering
+3. Link to existing wiki pages where connections exist
+4. Tag appropriately for future retrieval
 
 ## Output Format
 
@@ -266,14 +271,24 @@ type: bookmark
 # {Title}
 
 ## Summary
-{2-3 sentences capturing the core insight or argument. Not "this article discusses X" — instead, state the insight directly.}
+{A thorough summary of up to 600 words capturing the core insights, arguments, and important details. Not "this article discusses X" — instead, state the insights directly. Cover the main thesis, supporting evidence, and significant nuances. The summary should be useful as a standalone reference without needing to read the original article.
+
+For long-form or complex articles, you MAY use ### sub-headings within the Summary to organize it (e.g. ### Background, ### Core Argument, ### Implications). For shorter articles, use plain prose without sub-headings.}
 
 ## Key Takeaways
+{Typically 5-10 points. Each point should be 1-2 sentences. Include as many as the content warrants, but keep each concise.}
 - {most important point}
 - {second most important point}
-- {third point — practical, actionable, or thought-provoking}
-- {optional fourth point}
-- {optional fifth point}
+- {more points as needed — practical, actionable, or thought-provoking}
+
+## Concepts
+{OPTIONAL — only include if the article introduces or defines specific terms, tools, or frameworks worth remembering. Max 5 entries. If not warranted, omit this entire section including the heading.}
+- **{Term}** — {1-sentence definition or explanation}
+- **{Term}** — {1-sentence definition or explanation}
+
+## Notable Quotes
+{OPTIONAL — only include if the article contains 1-2 particularly well-stated or memorable lines. Max 2 quotes. If not warranted, omit this entire section including the heading. If you cannot recall the exact wording, omit the quote rather than paraphrasing.}
+> "{exact quote from the source}"
 
 ## Related
 - [[{existing-wiki-page}]] — {brief reason for connection}
@@ -300,18 +315,19 @@ type: bookmark
 
 ## Content Handling
 
-- If the article is a tutorial: extract the key technique or pattern, not step-by-step instructions
+- If the article is a tutorial: extract the key technique or pattern, and include 1-2 concrete examples or code snippets if they illustrate the core idea
 - If the article is opinion/analysis: extract the core argument and supporting points
-- If the article is reference/documentation: extract the key concepts, not the full API
+- If the article is reference/documentation: extract the key concepts and notable API patterns, not the full API
 - If the article is news: extract what's significant and why it matters
 - Ignore ads, navigation, footers, "subscribe to newsletter" prompts
 - If content is very long, prioritize the main argument over details
+- Go deeper on topics that align with the user's Profile interests — allocate more of the word budget to these topics, but do not exceed the overall budget
 
 ## Compression Rule
 
-If the content is verbose or repetitive, aggressively compress it.
-Prefer losing detail over keeping noise.
-A good wiki page is shorter than the source, not longer.
+Remove noise (ads, filler, repetition) but preserve meaningful detail.
+For long or dense content, focus depth on the main argument and key supporting points — cut tangential details rather than compressing everything equally.
+The result should be useful as a standalone reference within the word budget.
 
 ## Anti-Hallucination Rule
 
@@ -319,12 +335,19 @@ Only extract concepts explicitly present or strongly implied in the source.
 Do not invent frameworks, ideas, or relationships.
 If unsure whether a connection exists, omit it.
 
+## Budget
+
+The entire page body (everything after frontmatter) must stay under 1200 words.
+Budget guideline: Summary up to 600 words, Key Takeaways typically 5-10 points (1-2 sentences each), Concepts max 5, Notable Quotes max 2.
+Omit optional sections (Concepts, Notable Quotes) entirely — including their headings — if they would push over budget or add no value.
+
 ## Quality Bar
 
 - Summary should be useful even without reading the full article
 - Key takeaways should be things you'd want to remember in 6 months
 - Tags should make this findable via search
 - Links should create real knowledge graph edges
+- Optional sections should earn their place — omit if they add no real value
 
 ---
 
