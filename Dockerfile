@@ -1,7 +1,7 @@
 FROM jdxcode/mise@sha256:9018ae3c83379d46a0a495ff1b7a5231a488218788ee2eb38bd6be3e5aa081ab AS builder
 WORKDIR /src
 COPY .mise/config.toml .mise.toml
-RUN mise trust && mise install
+RUN MISE_DISABLED_TOOLS=pipx:commitizen mise trust && MISE_DISABLED_TOOLS=pipx:commitizen mise install
 COPY go.mod go.sum ./
 RUN mise exec -- go mod download
 COPY . .
