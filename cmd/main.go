@@ -78,7 +78,7 @@ func main() {
 		slog.Error("failed to initialize database", "error", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	slog.Info("database initialized", "path", dbPath)
 
 	// Initialize clients

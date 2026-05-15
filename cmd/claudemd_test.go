@@ -26,7 +26,9 @@ func TestUpsertClaudeMD_AppendsToExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 
-	os.WriteFile(path, []byte("# My Config\n\nSome existing content.\n"), 0644)
+	if err := os.WriteFile(path, []byte("# My Config\n\nSome existing content.\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	if err := upsertClaudeMD(path, "/vault"); err != nil {
 		t.Fatalf("upsertClaudeMD: %v", err)
@@ -44,7 +46,9 @@ func TestUpsertClaudeMD_ReplacesExisting(t *testing.T) {
 	path := filepath.Join(dir, "CLAUDE.md")
 
 	old := "# Config\n\n" + claudeMDStartMarker + "\nold content\n" + claudeMDEndMarker + "\n\n# Footer\n"
-	os.WriteFile(path, []byte(old), 0644)
+	if err := os.WriteFile(path, []byte(old), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	if err := upsertClaudeMD(path, "/new/vault"); err != nil {
 		t.Fatalf("upsertClaudeMD: %v", err)

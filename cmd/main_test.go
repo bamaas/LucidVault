@@ -71,12 +71,14 @@ func setupTestEnv(t *testing.T) (string, *store.Store, *vault.Vault, *scraper.Sc
 	if err != nil {
 		t.Fatalf("store init: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	// Test HTTP server for Jina scraper
 	jinaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("# Scraped Content\n\nSome content here."))
+		if _, err := w.Write([]byte("# Scraped Content\n\nSome content here.")); err != nil {
+			t.Errorf("w.Write: %v", err)
+		}
 	}))
 	t.Cleanup(jinaServer.Close)
 
@@ -92,7 +94,9 @@ func setupTestEnv(t *testing.T) (string, *store.Store, *vault.Vault, *scraper.Sc
 		}{}
 		resp.Message.Content = validWikiResponse
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Errorf("json.Encode: %v", err)
+		}
 	}))
 	t.Cleanup(ollamaServer.Close)
 
@@ -154,7 +158,7 @@ func TestRunPollCycle_SyncDoesNotAdvanceOnFailure(t *testing.T) {
 	if err := os.Chmod(rawDir, 0o555); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(rawDir, 0o755) })
+	t.Cleanup(func() { _ = os.Chmod(rawDir, 0o755) })
 
 	cfg := &config{
 		batchSize:     0,
@@ -188,7 +192,7 @@ func TestRunPollCycle_SyncDoesNotAdvanceOnMidBatchShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store init: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	// Cancel context from the Jina handler after serving the first scrape.
 	// This means bookmark 1 processes fully, but the ctx.Err() check
@@ -196,7 +200,9 @@ func TestRunPollCycle_SyncDoesNotAdvanceOnMidBatchShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	jinaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("# Scraped Content\n\nSome content."))
+		if _, err := w.Write([]byte("# Scraped Content\n\nSome content.")); err != nil {
+			t.Errorf("w.Write: %v", err)
+		}
 		// Cancel after first bookmark is fully scraped; the context check
 		// at the top of the next loop iteration will catch this.
 		cancel()
@@ -214,7 +220,9 @@ func TestRunPollCycle_SyncDoesNotAdvanceOnMidBatchShutdown(t *testing.T) {
 		}{}
 		resp.Message.Content = validWikiResponse
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Errorf("json.Encode: %v", err)
+		}
 	}))
 	t.Cleanup(ollamaServer.Close)
 
@@ -304,7 +312,7 @@ func TestRunPollCycle_PartialFailureDoesNotAdvance(t *testing.T) {
 	if err := os.Chmod(rawDir, 0o555); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(rawDir, 0o755) })
+	t.Cleanup(func() { _ = os.Chmod(rawDir, 0o755) })
 
 	// Second run: new bookmarks fail at WriteRaw
 	runPollCycle(ctx, cfg, ms, sc, en, db, v)

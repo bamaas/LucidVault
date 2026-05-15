@@ -134,7 +134,7 @@ func (c *Client) callAPI(prompt string) (string, int, error) {
 	if err != nil {
 		return "", 0, fmt.Errorf("calling ollama API: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
