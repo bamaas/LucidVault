@@ -175,8 +175,57 @@ func TestRunPollCycle_SyncDoesNotAdvanceOnFailure(t *testing.T) {
 	}
 }
 
-func TestRunPollCycle_SyncDoesNotAdvanceOnShutdown(t *testing.T) {
-	_, db, v, sc, en := setupTestEnv(t)
+func TestRunPollCycle_SyncDoesNotAdvanceOnMidBatchShutdown(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	v := vault.New(tmpDir)
+	if err := v.Init(); err != nil {
+		t.Fatalf("vault init: %v", err)
+	}
+
+	dbPath := filepath.Join(tmpDir, ".lucidvault.db")
+	db, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// Cancel context from the Jina handler after serving the first scrape.
+	// This means bookmark 1 processes fully, but the ctx.Err() check
+	// before bookmark 2 triggers the break.
+	ctx, cancel := context.WithCancel(context.Background())
+	var scrapeCount int
+	jinaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scrapeCount++
+		if scrapeCount >= 2 {
+			// Should not be reached — loop should break before second processBookmark
+			t.Error("unexpected second scrape request after context cancellation")
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("# Scraped Content\n\nSome content."))
+		// Cancel after first bookmark is fully scraped; the context check
+		// at the top of the next loop iteration will catch this.
+		cancel()
+	}))
+	t.Cleanup(jinaServer.Close)
+
+	sc := scraper.New()
+	sc.SetBaseURL(jinaServer.URL + "/")
+
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		}{}
+		resp.Message.Content = validWikiResponse
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(ollamaServer.Close)
+
+	en := enrich.NewClient("test-key", "test-model", 0, 0)
+	en.SetBaseURL(ollamaServer.URL)
 
 	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
 	t2 := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
@@ -194,19 +243,25 @@ func TestRunPollCycle_SyncDoesNotAdvanceOnShutdown(t *testing.T) {
 		enrichRetries: 0,
 	}
 
-	// Cancel context immediately so processing loop breaks
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
 	runPollCycle(ctx, cfg, ms, sc, en, db, v)
 
-	// Verify sync state did NOT advance
+	// Bookmark 1 was processed, but context was cancelled before bookmark 2.
+	// Sync state must NOT advance because not all bookmarks were attempted.
 	state, err := db.GetSyncState()
 	if err != nil {
 		t.Fatalf("get sync state: %v", err)
 	}
 	if !state.LastSyncAt.Equal(time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("expected sync state to remain at epoch, got %v", state.LastSyncAt)
+	}
+
+	// Verify bookmark 1 was actually processed (proving we tested the in-loop break)
+	exists, err := db.IsProcessedBySourceID(20)
+	if err != nil {
+		t.Fatalf("checking source_id: %v", err)
+	}
+	if !exists {
+		t.Error("expected bookmark 20 to be processed before shutdown")
 	}
 }
 
@@ -267,5 +322,72 @@ func TestRunPollCycle_PartialFailureDoesNotAdvance(t *testing.T) {
 	}
 	if !state.LastSyncAt.Equal(t3) {
 		t.Errorf("expected sync to stay at t3 after failure, got %v", state.LastSyncAt)
+	}
+}
+
+func TestRunPollCycle_MixedSuccessAndFailureInSingleBatch(t *testing.T) {
+	tmpDir, db, v, sc, en := setupTestEnv(t)
+
+	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
+	t3 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	ms := &mockSource{
+		bookmarks: []source.Bookmark{
+			{ID: 40, Title: "Success One", Link: "http://example.com/s1", Created: t1},
+			{ID: 41, Title: "Will Fail", Link: "http://example.com/fail", Created: t2},
+			{ID: 42, Title: "Success Two", Link: "http://example.com/s2", Created: t3},
+		},
+	}
+
+	// Sabotage bookmark 2's wiki write by creating a directory where the
+	// wiki file should be written. os.WriteFile will fail on a directory.
+	wikiDir := filepath.Join(tmpDir, "wiki", "will-fail.md")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	cfg := &config{
+		batchSize:     0,
+		enrichDelayMs: 0,
+		enrichRetries: 0,
+	}
+
+	ctx := context.Background()
+	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+
+	// Sync must NOT advance — bookmark 2 failed even though 1 and 3 succeeded
+	state, err := db.GetSyncState()
+	if err != nil {
+		t.Fatalf("get sync state: %v", err)
+	}
+	if !state.LastSyncAt.Equal(time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("expected sync state to remain at epoch, got %v", state.LastSyncAt)
+	}
+
+	// Verify bookmark 1 and 3 were processed despite bookmark 2 failing
+	exists, err := db.IsProcessedBySourceID(40)
+	if err != nil {
+		t.Fatalf("checking source_id 40: %v", err)
+	}
+	if !exists {
+		t.Error("expected bookmark 40 to be processed")
+	}
+
+	exists, err = db.IsProcessedBySourceID(42)
+	if err != nil {
+		t.Fatalf("checking source_id 42: %v", err)
+	}
+	if !exists {
+		t.Error("expected bookmark 42 to be processed")
+	}
+
+	// Verify bookmark 2 was NOT recorded
+	exists, err = db.IsProcessedBySourceID(41)
+	if err != nil {
+		t.Fatalf("checking source_id 41: %v", err)
+	}
+	if exists {
+		t.Error("expected bookmark 41 to NOT be processed")
 	}
 }
