@@ -30,7 +30,6 @@ type config struct {
 	ollamaModel    string
 	vaultPath      string
 	pollInterval   time.Duration
-	batchSize      int
 	enrichDelayMs  int
 	enrichRetries  int
 }
@@ -124,22 +123,16 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 		return
 	}
 
-	syncState, err := db.GetSyncState()
-	if err != nil {
-		slog.Error("failed to get sync state", "error", err)
-		return
-	}
+	slog.Info("polling source")
 
-	slog.Info("polling raindrop", "last_sync_at", syncState.LastSyncAt)
-
-	bookmarks, err := rd.FetchBookmarks(syncState.LastSyncAt, cfg.batchSize)
+	bookmarks, err := rd.FetchBookmarks()
 	if err != nil {
 		slog.Error("failed to fetch bookmarks", "error", err)
 		return
 	}
 
 	if len(bookmarks) == 0 {
-		slog.Info("no new bookmarks")
+		slog.Info("no bookmarks found")
 		return
 	}
 
@@ -165,17 +158,8 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 		processed++
 	}
 
-	// Only advance sync state when every bookmark in the batch was handled
-	// (processed successfully or dedup-skipped). If any bookmark failed, we
-	// keep the sync pointer where it is so the next poll re-fetches from the
-	// same point. Already-processed items will be deduped by source ID / URL.
-	if failed == 0 && ctx.Err() == nil {
-		newestCreated := bookmarks[len(bookmarks)-1].Created
-		if err := db.UpdateSyncState(0, newestCreated); err != nil {
-			slog.Error("failed to update sync state", "error", err)
-		}
-	} else if failed > 0 {
-		slog.Warn("sync state not advanced due to failures — failed bookmarks will be retried next cycle", "failed", failed)
+	if failed > 0 {
+		slog.Warn("some bookmarks failed — will be retried next cycle", "failed", failed)
 	}
 
 	slog.Info("poll cycle complete", "processed", processed, "failed", failed, "skipped", skipped)
@@ -400,15 +384,6 @@ func loadConfig() (*config, error) {
 		pollInterval = d
 	}
 
-	batchSize := 0
-	if v := os.Getenv("BATCH_SIZE"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return nil, fmt.Errorf("parsing BATCH_SIZE: %w", err)
-		}
-		batchSize = n
-	}
-
 	enrichDelayMs := 500
 	if v := os.Getenv("ENRICH_DELAY_MS"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -434,7 +409,6 @@ func loadConfig() (*config, error) {
 		ollamaModel:   model,
 		vaultPath:     vaultPath,
 		pollInterval:  pollInterval,
-		batchSize:     batchSize,
 		enrichDelayMs: enrichDelayMs,
 		enrichRetries: enrichRetries,
 	}, nil
