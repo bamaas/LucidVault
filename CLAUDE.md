@@ -88,7 +88,7 @@ Every architectural or design decision **must** have an ADR in `docs/adr/`. Keep
 
 ### 7. Review Before Merge
 - For non-trivial changes, spawn a subagent to review the diff before creating a PR
-- Create the PR with auto-merge enabled (`--auto --squash`) so it merges when CI passes
+- Create the PR with auto-merge enabled (`--auto --squash --delete-branch`) so it merges when CI passes and the branch is deleted
 - Skip the review agent for docs-only or config-only changes
 
 ### 8. Autonomous Bug Fixing
