@@ -86,7 +86,12 @@ Every architectural or design decision **must** have an ADR in `docs/adr/`. Keep
 - For architectural decisions or ambiguous requirements, suggest `/grill-me` before implementing
 - Don't auto-trigger — only when the plan involves trade-offs worth exploring
 
-### 7. Autonomous Bug Fixing
+### 7. Review Before Merge
+- For non-trivial changes, spawn a subagent to review the diff before creating a PR
+- Create the PR with auto-merge enabled (`--auto --squash`) so it merges when CI passes
+- Skip the review agent for docs-only or config-only changes
+
+### 8. Autonomous Bug Fixing
 - When given a bug report: just fix it. Don't ask for hand-holding
 - Point at logs, errors, failing tests — then resolve them
 - Zero context switching required from the user
