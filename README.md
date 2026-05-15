@@ -163,6 +163,7 @@ It will never scan entire directories, and will not search the web unprompted.
 | Storage | Obsidian vault (markdown) |
 | State | SQLite (modernc.org/sqlite) |
 | Deployment | Docker / static binary |
+| Versioning | Commitizen (conventional commits, auto changelog) |
 | Bookmark source | Raindrop.io |
 
 ## To do

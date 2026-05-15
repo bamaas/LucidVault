@@ -22,6 +22,7 @@ mise run run:binary            # Run locally
 mise run build:image           # Build Docker image
 mise run run:container         # Run in Docker
 mise run lint:go               # golangci-lint
+mise run lint:commits          # Check commit message (used by commit-msg hook)
 ```
 
 ## Design Principles
