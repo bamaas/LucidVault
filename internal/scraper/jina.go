@@ -8,6 +8,7 @@ import (
 )
 
 type Scraper struct {
+	baseURL    string
 	httpClient *http.Client
 }
 
@@ -18,6 +19,7 @@ type Result struct {
 
 func New() *Scraper {
 	return &Scraper{
+		baseURL: "https://r.jina.ai/",
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
@@ -28,9 +30,12 @@ func New() *Scraper {
 	}
 }
 
+// SetBaseURL overrides the Jina Reader endpoint (used in tests).
+func (s *Scraper) SetBaseURL(url string) { s.baseURL = url }
+
 // Scrape fetches the markdown content of a URL via Jina Reader.
 func (s *Scraper) Scrape(targetURL string) (*Result, error) {
-	jinaURL := "https://r.jina.ai/" + targetURL
+	jinaURL := s.baseURL + targetURL
 	req, err := http.NewRequest("GET", jinaURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating jina request: %w", err)
