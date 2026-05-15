@@ -12,11 +12,6 @@ type Store struct {
 	db *sql.DB
 }
 
-type SyncState struct {
-	LastSourceID int
-	LastSyncAt   time.Time
-}
-
 type BookmarkRecord struct {
 	SourceID      int
 	WikiPath      string
@@ -47,15 +42,6 @@ func New(dbPath string) (*Store, error) {
 
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS sync_state (
-			id INTEGER PRIMARY KEY CHECK (id = 1),
-			last_source_id INTEGER,
-			last_sync_at TEXT
-		);
-
-		INSERT OR IGNORE INTO sync_state (id, last_source_id, last_sync_at)
-		VALUES (1, 0, '1970-01-01T00:00:00Z');
-
 		CREATE TABLE IF NOT EXISTS bookmarks (
 			id INTEGER PRIMARY KEY,
 			source_id INTEGER UNIQUE,
@@ -69,34 +55,6 @@ func (s *Store) migrate() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("executing migrations: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) GetSyncState() (*SyncState, error) {
-	var lastID int
-	var lastSync string
-	err := s.db.QueryRow("SELECT last_source_id, last_sync_at FROM sync_state WHERE id = 1").
-		Scan(&lastID, &lastSync)
-	if err != nil {
-		return nil, fmt.Errorf("querying sync state: %w", err)
-	}
-
-	t, err := time.Parse(time.RFC3339, lastSync)
-	if err != nil {
-		return nil, fmt.Errorf("parsing last_sync_at %q: %w", lastSync, err)
-	}
-
-	return &SyncState{LastSourceID: lastID, LastSyncAt: t}, nil
-}
-
-func (s *Store) UpdateSyncState(lastID int, syncAt time.Time) error {
-	_, err := s.db.Exec(
-		"UPDATE sync_state SET last_source_id = ?, last_sync_at = ? WHERE id = 1",
-		lastID, syncAt.UTC().Format(time.RFC3339),
-	)
-	if err != nil {
-		return fmt.Errorf("updating sync state: %w", err)
 	}
 	return nil
 }

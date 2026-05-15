@@ -53,11 +53,11 @@ func NewClient(token string) *Client {
 	}
 }
 
-// FetchBookmarks fetches all bookmarks from Raindrop sorted by creation date
-// (oldest first via sort=created). It paginates through all results and returns
-// up to batchSize bookmarks in chronological order. Deduplication against
-// already-processed bookmarks is handled by the caller via the database.
-func (c *Client) FetchBookmarks(batchSize int) ([]source.Bookmark, error) {
+// FetchBookmarks fetches all bookmarks from Raindrop. It paginates through
+// all results and returns them in chronological order (oldest first via
+// sort=created). Deduplication against already-processed bookmarks is handled
+// by the caller via the database.
+func (c *Client) FetchBookmarks() ([]source.Bookmark, error) {
 	var allBookmarks []source.Bookmark
 
 	for page := 0; ; page++ {
@@ -101,9 +101,6 @@ func (c *Client) FetchBookmarks(batchSize int) ([]source.Bookmark, error) {
 				Tags:    item.Tags,
 				Created: item.Created,
 			})
-			if batchSize > 0 && len(allBookmarks) >= batchSize {
-				return allBookmarks, nil
-			}
 		}
 
 		slog.Info("fetched raindrop page", "page", page, "items", len(result.Items), "total", len(allBookmarks))

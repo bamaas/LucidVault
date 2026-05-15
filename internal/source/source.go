@@ -17,7 +17,7 @@ type Bookmark struct {
 
 // Client fetches bookmarks from an external source.
 type Client interface {
-	FetchBookmarks(batchSize int) ([]Bookmark, error)
+	FetchBookmarks() ([]Bookmark, error)
 }
 
 // Factory is a constructor that creates a Client from a token.
