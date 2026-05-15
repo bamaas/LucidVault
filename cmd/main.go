@@ -165,13 +165,17 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 		processed++
 	}
 
-	// Advance sync state to the Created time of the newest bookmark in this batch.
-	// bookmarks is oldest-first after reversal, so the last entry is the newest.
-	// This ensures the next poll starts just after the newest item we saw, rather
-	// than time.Now(), which would skip any unprocessed older bookmarks.
-	newestCreated := bookmarks[len(bookmarks)-1].Created
-	if err := db.UpdateSyncState(0, newestCreated); err != nil {
-		slog.Error("failed to update sync state", "error", err)
+	// Only advance sync state when every bookmark in the batch was handled
+	// (processed successfully or dedup-skipped). If any bookmark failed, we
+	// keep the sync pointer where it is so the next poll re-fetches from the
+	// same point. Already-processed items will be deduped by source ID / URL.
+	if failed == 0 && ctx.Err() == nil {
+		newestCreated := bookmarks[len(bookmarks)-1].Created
+		if err := db.UpdateSyncState(0, newestCreated); err != nil {
+			slog.Error("failed to update sync state", "error", err)
+		}
+	} else if failed > 0 {
+		slog.Warn("sync state not advanced due to failures — failed bookmarks will be retried next cycle", "failed", failed)
 	}
 
 	slog.Info("poll cycle complete", "processed", processed, "failed", failed, "skipped", skipped)

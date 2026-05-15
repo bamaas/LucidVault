@@ -53,9 +53,9 @@ func NewClient(token string) *Client {
 	}
 }
 
-// FetchBookmarks fetches bookmarks from Raindrop, newest first.
-// It paginates through all results since lastSyncAt.
-// Returns bookmarks in chronological order (oldest first) for processing.
+// FetchBookmarks fetches bookmarks from Raindrop sorted by creation date
+// (oldest first via sort=created). It paginates through results created
+// after lastSyncAt and returns up to batchSize bookmarks in chronological order.
 func (c *Client) FetchBookmarks(lastSyncAt time.Time, batchSize int) ([]source.Bookmark, error) {
 	var allBookmarks []source.Bookmark
 
