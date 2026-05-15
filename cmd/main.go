@@ -173,23 +173,30 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 var errSkipped = fmt.Errorf("skipped")
 
 func processBookmark(ctx context.Context, cfg *config, bm source.Bookmark, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) error {
-	// Dedup by source ID
-	exists, err := db.IsProcessedBySourceID(bm.ID)
+	// Dedup by source ID, with vault file reconciliation
+	rec, err := db.GetBookmarkBySourceID(bm.ID)
 	if err != nil {
 		return fmt.Errorf("checking source_id: %w", err)
 	}
-	if exists {
-		slog.Debug("skipping already processed bookmark", "source_id", bm.ID)
-		return errSkipped
+	if rec != nil {
+		if v.FileExists(rec.WikiPath) {
+			slog.Debug("skipping already processed bookmark", "source_id", bm.ID)
+			return errSkipped
+		}
+		// Wiki file missing or empty — remove stale DB record and re-process
+		if err := db.DeleteBySourceID(bm.ID); err != nil {
+			return fmt.Errorf("deleting stale record: %w", err)
+		}
+		slog.Info("reconciled missing vault file, re-processing", "source_id", bm.ID, "wiki_path", rec.WikiPath)
 	}
 
 	// Dedup by normalized URL
 	normalizedURL := vault.NormalizeURL(bm.Link)
-	exists, err = db.IsProcessedByURL(normalizedURL)
+	urlExists, err := db.IsProcessedByURL(normalizedURL)
 	if err != nil {
 		return fmt.Errorf("checking url: %w", err)
 	}
-	if exists {
+	if urlExists {
 		slog.Debug("skipping duplicate URL", "url", bm.Link)
 		return errSkipped
 	}

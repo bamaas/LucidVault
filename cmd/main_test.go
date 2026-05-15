@@ -331,3 +331,104 @@ func TestRunPollCycle_MixedSuccessAndFailure(t *testing.T) {
 		t.Error("expected bookmark 41 to NOT be processed")
 	}
 }
+
+func TestRunPollCycle_ReconcilesDeletedWikiFile(t *testing.T) {
+	tmpDir, db, v, sc, en := setupTestEnv(t)
+
+	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	ms := &mockSource{
+		bookmarks: []source.Bookmark{
+			{ID: 50, Title: "Reconcile Me", Link: "http://example.com/reconcile", Created: t1},
+		},
+	}
+
+	cfg := &config{
+		enrichDelayMs: 0,
+		enrichRetries: 0,
+	}
+
+	ctx := context.Background()
+
+	// First run: process the bookmark
+	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+
+	exists, err := db.IsProcessedBySourceID(50)
+	if err != nil {
+		t.Fatalf("checking source_id 50: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected bookmark 50 to be processed after first run")
+	}
+
+	// Delete the wiki file from the vault
+	wikiFile := filepath.Join(tmpDir, "wiki", "reconcile-me.md")
+	if err := os.Remove(wikiFile); err != nil {
+		t.Fatalf("removing wiki file: %v", err)
+	}
+
+	// Second run: should reconcile and re-process
+	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+
+	// Verify bookmark is still in DB (re-processed)
+	exists, err = db.IsProcessedBySourceID(50)
+	if err != nil {
+		t.Fatalf("checking source_id 50 after reconciliation: %v", err)
+	}
+	if !exists {
+		t.Error("expected bookmark 50 to be re-processed after reconciliation")
+	}
+
+	// Verify wiki file was re-created
+	if _, err := os.Stat(wikiFile); os.IsNotExist(err) {
+		t.Error("expected wiki file to be re-created after reconciliation")
+	}
+}
+
+func TestRunPollCycle_ReconcilesEmptyWikiFile(t *testing.T) {
+	tmpDir, db, v, sc, en := setupTestEnv(t)
+
+	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	ms := &mockSource{
+		bookmarks: []source.Bookmark{
+			{ID: 60, Title: "Empty Wiki", Link: "http://example.com/empty", Created: t1},
+		},
+	}
+
+	cfg := &config{
+		enrichDelayMs: 0,
+		enrichRetries: 0,
+	}
+
+	ctx := context.Background()
+
+	// First run: process the bookmark
+	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+
+	exists, err := db.IsProcessedBySourceID(60)
+	if err != nil {
+		t.Fatalf("checking source_id 60: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected bookmark 60 to be processed after first run")
+	}
+
+	// Empty the wiki file
+	wikiFile := filepath.Join(tmpDir, "wiki", "empty-wiki.md")
+	if err := os.WriteFile(wikiFile, []byte(""), 0o644); err != nil {
+		t.Fatalf("emptying wiki file: %v", err)
+	}
+
+	// Second run: should reconcile and re-process
+	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+
+	// Verify wiki file was re-written with content
+	data, err := os.ReadFile(wikiFile)
+	if err != nil {
+		t.Fatalf("reading wiki file: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("expected wiki file to have content after reconciliation")
+	}
+}

@@ -54,6 +54,15 @@ tags: []
 	return nil
 }
 
+func (v *Vault) FileExists(relPath string) bool {
+	absPath := filepath.Join(v.BasePath, relPath)
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(data))) > 0
+}
+
 func (v *Vault) WriteRaw(filename, content string) (string, error) {
 	relPath := filepath.Join("raw", filename)
 	absPath := filepath.Join(v.BasePath, relPath)
