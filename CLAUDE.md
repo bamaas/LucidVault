@@ -21,7 +21,7 @@ mise run build:binary          # Build Go binary
 mise run run:binary            # Run locally
 mise run build:image           # Build Docker image
 mise run run:container         # Run in Docker
-mise run lint:go               # go vet
+mise run lint:go               # golangci-lint
 ```
 
 ## Design Principles

@@ -46,7 +46,7 @@ func (s *Scraper) Scrape(targetURL string) (*Result, error) {
 	if err != nil {
 		return &Result{OK: false}, fmt.Errorf("jina scrape of %s: %w", targetURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
