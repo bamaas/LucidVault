@@ -112,9 +112,12 @@ func (v *Vault) UpdateIndex(slug, title string, tags []string) error {
 
 	content := string(data)
 
-	// Check if entry already exists
-	if strings.Contains(content, "[["+slug+"]]") {
-		return nil
+	// Check if entry already exists by matching the index line format
+	entryPrefix := "- [[" + slug + "]]"
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, entryPrefix) {
+			return nil
+		}
 	}
 
 	tagStr := ""
@@ -124,6 +127,39 @@ func (v *Vault) UpdateIndex(slug, title string, tags []string) error {
 
 	entry := fmt.Sprintf("- [[%s]] — %s%s\n", slug, title, tagStr)
 	content += entry
+
+	// Update the "Last updated" line
+	content = updateLastUpdated(content)
+
+	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("writing index.md: %w", err)
+	}
+	return nil
+}
+
+func (v *Vault) RemoveFromIndex(slug string) error {
+	indexPath := filepath.Join(v.BasePath, "index.md")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		return fmt.Errorf("reading index.md: %w", err)
+	}
+
+	content := string(data)
+	target := "[[" + slug + "]]"
+
+	// If slug not present, no-op
+	if !strings.Contains(content, target) {
+		return nil
+	}
+
+	lines := strings.Split(content, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if !strings.Contains(line, target) {
+			filtered = append(filtered, line)
+		}
+	}
+	content = strings.Join(filtered, "\n")
 
 	// Update the "Last updated" line
 	content = updateLastUpdated(content)

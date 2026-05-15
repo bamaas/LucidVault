@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -430,5 +431,284 @@ func TestRunPollCycle_ReconcilesEmptyWikiFile(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Error("expected wiki file to have content after reconciliation")
+	}
+}
+
+// errorSource is a mock source.Client that always returns an error.
+type errorSource struct{}
+
+func (e *errorSource) FetchBookmarks() ([]source.Bookmark, error) {
+	return nil, fmt.Errorf("api error")
+}
+
+func TestProcessNotes_IndexesNewNote(t *testing.T) {
+	tmpDir, db, v, _, _ := setupTestEnv(t)
+
+	noteContent := `---
+tags:
+  - golang
+  - testing
+---
+
+# My Test Note
+
+Some content here.
+`
+	notePath := filepath.Join(tmpDir, "notes", "test-note.md")
+	if err := os.WriteFile(notePath, []byte(noteContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ctx := context.Background()
+	processNotes(ctx, db, v)
+
+	// Verify DB has the note record
+	hash, err := db.GetNoteHash("notes/test-note.md")
+	if err != nil {
+		t.Fatalf("GetNoteHash: %v", err)
+	}
+	if hash == "" {
+		t.Error("expected DB to have a hash for the note")
+	}
+
+	// Verify index.md contains the note link and tags
+	indexPath := filepath.Join(tmpDir, "index.md")
+	content := readFile(t, indexPath)
+	assertContains(t, content, "[[notes/test-note]]")
+	assertContains(t, content, "golang")
+	assertContains(t, content, "testing")
+}
+
+func TestProcessNotes_SkipsUnchanged(t *testing.T) {
+	tmpDir, db, v, _, _ := setupTestEnv(t)
+
+	noteContent := `---
+tags:
+  - golang
+---
+
+# Unchanged Note
+
+Content here.
+`
+	notePath := filepath.Join(tmpDir, "notes", "unchanged-note.md")
+	if err := os.WriteFile(notePath, []byte(noteContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// First run
+	processNotes(ctx, db, v)
+
+	hashAfterFirst, err := db.GetNoteHash("notes/unchanged-note.md")
+	if err != nil {
+		t.Fatalf("GetNoteHash after first run: %v", err)
+	}
+
+	// Capture index content before second run
+	indexPath := filepath.Join(tmpDir, "index.md")
+	contentBefore := readFile(t, indexPath)
+
+	// Second run
+	processNotes(ctx, db, v)
+
+	// Index content should be identical (no duplicate entries)
+	contentAfter := readFile(t, indexPath)
+	if contentBefore != contentAfter {
+		t.Errorf("expected index.md to be unchanged on second run\nbefore: %q\nafter: %q", contentBefore, contentAfter)
+	}
+
+	// DB hash should be the same
+	hashAfterSecond, err := db.GetNoteHash("notes/unchanged-note.md")
+	if err != nil {
+		t.Fatalf("GetNoteHash after second run: %v", err)
+	}
+	if hashAfterFirst != hashAfterSecond {
+		t.Errorf("expected DB hash to be unchanged: got %q then %q", hashAfterFirst, hashAfterSecond)
+	}
+}
+
+func TestProcessNotes_UpdatesChangedNote(t *testing.T) {
+	tmpDir, db, v, _, _ := setupTestEnv(t)
+
+	noteV1 := `---
+tags:
+  - golang
+---
+
+# My Note
+
+Version one.
+`
+	notePath := filepath.Join(tmpDir, "notes", "changing-note.md")
+	if err := os.WriteFile(notePath, []byte(noteV1), 0o644); err != nil {
+		t.Fatalf("WriteFile v1: %v", err)
+	}
+
+	ctx := context.Background()
+	processNotes(ctx, db, v)
+
+	hashV1, err := db.GetNoteHash("notes/changing-note.md")
+	if err != nil {
+		t.Fatalf("GetNoteHash after v1: %v", err)
+	}
+
+	// Modify note: replace tag golang with rust
+	noteV2 := `---
+tags:
+  - rust
+---
+
+# My Note
+
+Version two.
+`
+	if err := os.WriteFile(notePath, []byte(noteV2), 0o644); err != nil {
+		t.Fatalf("WriteFile v2: %v", err)
+	}
+
+	processNotes(ctx, db, v)
+
+	// Verify index has rust but not golang
+	indexPath := filepath.Join(tmpDir, "index.md")
+	content := readFile(t, indexPath)
+	assertContains(t, content, "rust")
+	assertNotContains(t, content, "golang")
+
+	// Verify DB hash changed
+	hashV2, err := db.GetNoteHash("notes/changing-note.md")
+	if err != nil {
+		t.Fatalf("GetNoteHash after v2: %v", err)
+	}
+	if hashV1 == hashV2 {
+		t.Error("expected DB hash to change after note update")
+	}
+}
+
+func TestProcessNotes_ReconcilesDeletedNote(t *testing.T) {
+	tmpDir, db, v, _, _ := setupTestEnv(t)
+
+	noteContent := `---
+tags:
+  - golang
+---
+
+# To Be Deleted
+
+Some content.
+`
+	notePath := filepath.Join(tmpDir, "notes", "deleted-note.md")
+	if err := os.WriteFile(notePath, []byte(noteContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ctx := context.Background()
+	processNotes(ctx, db, v)
+
+	// Verify note is indexed
+	indexPath := filepath.Join(tmpDir, "index.md")
+	assertContains(t, readFile(t, indexPath), "[[notes/deleted-note]]")
+
+	// Delete the file
+	if err := os.Remove(notePath); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	processNotes(ctx, db, v)
+
+	// Verify index no longer contains the note
+	assertNotContains(t, readFile(t, indexPath), "[[notes/deleted-note]]")
+
+	// Verify DB has no record
+	hash, err := db.GetNoteHash("notes/deleted-note.md")
+	if err != nil {
+		t.Fatalf("GetNoteHash after delete: %v", err)
+	}
+	if hash != "" {
+		t.Errorf("expected DB hash to be empty after deletion, got %q", hash)
+	}
+}
+
+func TestProcessNotes_RecursiveSubdirectories(t *testing.T) {
+	tmpDir, db, v, _, _ := setupTestEnv(t)
+
+	subDir := filepath.Join(tmpDir, "notes", "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	noteContent := `---
+tags:
+  - deep
+---
+
+# Deep Note
+
+Nested content.
+`
+	notePath := filepath.Join(subDir, "deep-note.md")
+	if err := os.WriteFile(notePath, []byte(noteContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ctx := context.Background()
+	processNotes(ctx, db, v)
+
+	indexPath := filepath.Join(tmpDir, "index.md")
+	assertContains(t, readFile(t, indexPath), "[[notes/sub/deep-note]]")
+
+	// Verify DB has the note
+	hash, err := db.GetNoteHash("notes/sub/deep-note.md")
+	if err != nil {
+		t.Fatalf("GetNoteHash: %v", err)
+	}
+	if hash == "" {
+		t.Error("expected DB to have a hash for the nested note")
+	}
+}
+
+func TestProcessNotes_BookmarkFailureDoesNotBlockNotes(t *testing.T) {
+	tmpDir, db, v, _, _ := setupTestEnv(t)
+
+	noteContent := `---
+tags:
+  - independent
+---
+
+# Independent Note
+
+Not affected by bookmark failures.
+`
+	notePath := filepath.Join(tmpDir, "notes", "independent-note.md")
+	if err := os.WriteFile(notePath, []byte(noteContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg := &config{
+		enrichDelayMs: 0,
+		enrichRetries: 0,
+	}
+
+	// Use errorSource so bookmark phase always fails
+	es := &errorSource{}
+
+	// We need a scraper and enrich client — reuse stubs that won't be called
+	sc := scraper.New()
+	en := enrich.NewClient("test-key", "test-model", 0, 0)
+
+	ctx := context.Background()
+	runPollCycle(ctx, cfg, es, sc, en, db, v)
+
+	// Notes should still be indexed despite bookmark failure
+	indexPath := filepath.Join(tmpDir, "index.md")
+	assertContains(t, readFile(t, indexPath), "[[notes/independent-note]]")
+
+	hash, err := db.GetNoteHash("notes/independent-note.md")
+	if err != nil {
+		t.Fatalf("GetNoteHash: %v", err)
+	}
+	if hash == "" {
+		t.Error("expected note to be indexed despite bookmark source error")
 	}
 }
