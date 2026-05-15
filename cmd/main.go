@@ -57,16 +57,22 @@ func main() {
 		}
 	}
 
+	// Resolve the actual path inside the container (may differ from VAULT_PATH on Docker Desktop/macOS)
+	vaultPath := resolveContainerPath(cfg.vaultPath)
+	if vaultPath != cfg.vaultPath {
+		slog.Info("resolved vault mount point", "host_path", cfg.vaultPath, "container_path", vaultPath)
+	}
+
 	// Initialize vault
-	v := vault.New(cfg.vaultPath)
+	v := vault.New(vaultPath)
 	if err := v.Init(); err != nil {
 		slog.Error("failed to initialize vault", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("vault initialized", "path", cfg.vaultPath)
+	slog.Info("vault initialized", "path", vaultPath)
 
 	// Initialize SQLite store
-	dbPath := filepath.Join(cfg.vaultPath, ".lucidvault.db")
+	dbPath := filepath.Join(vaultPath, ".lucidvault.db")
 	db, err := store.New(dbPath)
 	if err != nil {
 		slog.Error("failed to initialize database", "error", err)
@@ -160,7 +166,7 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 	}
 
 	// Advance sync state to the Created time of the newest bookmark in this batch.
-	// bookmarks is oldest-first (sort=created), so the last entry is the newest.
+	// bookmarks is oldest-first after reversal, so the last entry is the newest.
 	// This ensures the next poll starts just after the newest item we saw, rather
 	// than time.Now(), which would skip any unprocessed older bookmarks.
 	newestCreated := bookmarks[len(bookmarks)-1].Created
@@ -390,7 +396,7 @@ func loadConfig() (*config, error) {
 		pollInterval = d
 	}
 
-	batchSize := 10
+	batchSize := 0
 	if v := os.Getenv("BATCH_SIZE"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -428,6 +434,31 @@ func loadConfig() (*config, error) {
 		enrichDelayMs: enrichDelayMs,
 		enrichRetries: enrichRetries,
 	}, nil
+}
+
+// resolveContainerPath finds the actual mount point for a given host path by
+// scanning /proc/self/mountinfo. On Docker Desktop for macOS, VAULT_PATH may
+// be a host path like /Users/bas/git/.../test-vault while the volume is mounted
+// at /vault — the mountinfo root field will be a suffix of the host path.
+// Returns the host path unchanged if /proc/self/mountinfo is unavailable or no
+// matching mount is found.
+func resolveContainerPath(hostPath string) string {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return hostPath
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		// mountinfo: mountID parentID major:minor root mountPoint ...
+		if len(fields) < 5 {
+			continue
+		}
+		root, mountPoint := fields[3], fields[4]
+		if root != "/" && strings.HasSuffix(hostPath, root) {
+			return mountPoint
+		}
+	}
+	return hostPath
 }
 
 const (

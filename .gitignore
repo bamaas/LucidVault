@@ -3,4 +3,8 @@ bin/
 access-tokens.md
 soul.md
 skills-lock.json
+.ignore.dual-graph/
+.dual-graph/
+test-vault/
+.mise/config.local.toml
 .ignore

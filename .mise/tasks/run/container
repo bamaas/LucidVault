@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #MISE description="Run the container"
 docker run -d \
-  --name lucid \
+  --name lucidvault \
   -e RAINDROP_ACCESS_TOKEN="${RAINDROP_ACCESS_TOKEN}" \
   -e OLLAMA_API_KEY="${OLLAMA_API_KEY}" \
-  -v "${VAULT_PATH:-~/obsidian-vault}":/vault \
-  lucid:latest
+  -e VAULT_PATH="${PWD}/test-vault" \
+  -v "${PWD}/test-vault":/vault \
+  lucidvault:latest
