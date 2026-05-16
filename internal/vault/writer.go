@@ -40,7 +40,7 @@ func (v *Vault) Init() error {
 	noteTemplatePath := filepath.Join(v.BasePath, "templates", "note.md")
 	if _, err := os.Stat(noteTemplatePath); os.IsNotExist(err) {
 		content := `---
-date: {{date}}
+date: "{{date}}"
 tags: []
 ---
 
