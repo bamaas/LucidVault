@@ -1,4 +1,4 @@
-package main
+package claudemd
 
 import (
 	"os"
@@ -7,22 +7,22 @@ import (
 	"testing"
 )
 
-func TestUpsertClaudeMD_CreatesNewFile(t *testing.T) {
+func TestUpsert_CreatesNewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 
-	if err := upsertClaudeMD(path, "/data/vault"); err != nil {
-		t.Fatalf("upsertClaudeMD: %v", err)
+	if err := Upsert(path, "/data/vault"); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	content := readFile(t, path)
-	assertContains(t, content, claudeMDStartMarker)
-	assertContains(t, content, claudeMDEndMarker)
+	assertContains(t, content, StartMarker)
+	assertContains(t, content, EndMarker)
 	assertContains(t, content, "/data/vault")
 	assertContains(t, content, "## LucidVault Knowledge Base")
 }
 
-func TestUpsertClaudeMD_AppendsToExisting(t *testing.T) {
+func TestUpsert_AppendsToExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 
@@ -30,28 +30,28 @@ func TestUpsertClaudeMD_AppendsToExisting(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if err := upsertClaudeMD(path, "/vault"); err != nil {
-		t.Fatalf("upsertClaudeMD: %v", err)
+	if err := Upsert(path, "/vault"); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	content := readFile(t, path)
 	assertContains(t, content, "# My Config")
 	assertContains(t, content, "Some existing content.")
-	assertContains(t, content, claudeMDStartMarker)
-	assertContains(t, content, claudeMDEndMarker)
+	assertContains(t, content, StartMarker)
+	assertContains(t, content, EndMarker)
 }
 
-func TestUpsertClaudeMD_ReplacesExisting(t *testing.T) {
+func TestUpsert_ReplacesExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 
-	old := "# Config\n\n" + claudeMDStartMarker + "\nold content\n" + claudeMDEndMarker + "\n\n# Footer\n"
+	old := "# Config\n\n" + StartMarker + "\nold content\n" + EndMarker + "\n\n# Footer\n"
 	if err := os.WriteFile(path, []byte(old), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if err := upsertClaudeMD(path, "/new/vault"); err != nil {
-		t.Fatalf("upsertClaudeMD: %v", err)
+	if err := Upsert(path, "/new/vault"); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	content := readFile(t, path)
@@ -61,18 +61,18 @@ func TestUpsertClaudeMD_ReplacesExisting(t *testing.T) {
 	assertNotContains(t, content, "old content")
 }
 
-func TestUpsertClaudeMD_Idempotent(t *testing.T) {
+func TestUpsert_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 
 	for range 3 {
-		if err := upsertClaudeMD(path, "/vault"); err != nil {
-			t.Fatalf("upsertClaudeMD: %v", err)
+		if err := Upsert(path, "/vault"); err != nil {
+			t.Fatalf("Upsert: %v", err)
 		}
 	}
 
 	content := readFile(t, path)
-	count := strings.Count(content, claudeMDStartMarker)
+	count := strings.Count(content, StartMarker)
 	if count != 1 {
 		t.Errorf("expected 1 start marker, got %d", count)
 	}

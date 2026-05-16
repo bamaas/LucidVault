@@ -1,5 +1,7 @@
 # LucidVault
 
+### Transform saved links into connected insights.
+
 You save dozens of articles, blog posts, and links every week. Most of them disappear into a bookmark graveyard — never read, never searchable, never connected to anything. LucidVault fixes that.
 
 LucidVault turns saved bookmarks into a structured, searchable knowledge base inside your Obsidian vault. It scrapes the full content, summarizes it with an LLM, extracts key takeaways, and links it to your existing notes — automatically. Your personal notes live alongside enriched pages, and a `soul.md` file personalizes everything to your background and interests.
@@ -118,7 +120,6 @@ All configuration is via environment variables:
 | `SOURCE_NAME` | No | `raindrop` | Bookmark source to use |
 | `OLLAMA_MODEL` | No | `qwen3.5` | LLM model for enrichment |
 | `POLL_INTERVAL` | No | `5m` | How often to check for new bookmarks |
-| `BATCH_SIZE` | No | `10` | Max bookmarks per poll cycle |
 | `ENRICH_DELAY_MS` | No | `500` | Delay between API calls (rate limiting) |
 | `ENRICH_MAX_RETRIES` | No | `3` | Max retries on API failure |
 | `SUPADATA_API_KEY` | No | — | [Supadata](https://supadata.ai) API key for YouTube transcript extraction. When set, YouTube URLs are routed to Supadata instead of Jina. |
