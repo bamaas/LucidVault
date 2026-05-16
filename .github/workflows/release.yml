@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["Bump version"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    name: Publish release
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CIBOTBM_APP_ID }}
+          private-key: ${{ secrets.CIBOTBM_PRIVATE_KEY }}
+
+      - name: Download bump metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: bump-metadata
+          path: /tmp/bump
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Read metadata
+        id: meta
+        run: |
+          echo "ci_run_id=$(cat /tmp/bump/ci_run_id.txt)" >> "$GITHUB_OUTPUT"
+          echo "version=$(cat /tmp/bump/version.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+          run-id: ${{ steps.meta.outputs.ci_run_id }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+          run-id: ${{ steps.meta.outputs.ci_run_id }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh release create "v${{ steps.meta.outputs.version }}" \
+            dist/* \
+            --repo "${{ github.repository }}" \
+            --title "v${{ steps.meta.outputs.version }}" \
+            --notes-file /tmp/bump/changelog.md
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image to GHCR
+        run: |
+          docker load -i /tmp/image.tar
+          repo="${GITHUB_REPOSITORY,,}"
+          version="${{ steps.meta.outputs.version }}"
+          docker tag lucidvault:ci "ghcr.io/${repo}:${version}"
+          docker tag lucidvault:ci "ghcr.io/${repo}:latest"
+          docker push "ghcr.io/${repo}:${version}"
+          docker push "ghcr.io/${repo}:latest"

@@ -36,8 +36,8 @@ jobs:
 
       - run: go test ./...
 
-  build:
-    name: Build binary
+  build-binary:
+    name: Build binaries
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +47,20 @@ jobs:
           install: true
           cache: true
 
-      - run: mise run build:binary
+      - name: Build all platforms
+        if: github.event_name == 'push'
+        run: mise run build:binary:all
+
+      - name: Build native platform
+        if: github.event_name == 'pull_request'
+        run: mise run build:binary
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: binaries
+          path: dist/
+          retention-days: 1
 
   build-image:
     name: Build image
@@ -67,9 +80,11 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Save image
+        if: github.event_name == 'push'
         run: docker save lucidvault:ci -o /tmp/image.tar
 
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
         with:
           name: docker-image
           path: /tmp/image.tar
