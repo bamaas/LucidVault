@@ -1,3 +1,9 @@
+## v0.4.2 (2026-05-16)
+
+### Refactor
+
+- separate workflows into CI, Bump, and Release (#26)
+
 ## v0.4.1 (2026-05-16)
 
 ### Fix
