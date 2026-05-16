@@ -55,12 +55,6 @@ jobs:
           git push
           git push --tags
 
-      - name: Set up Go
-        if: steps.bump.outputs.bumped == 'true'
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
       - name: Build binaries
         if: steps.bump.outputs.bumped == 'true'
         run: |
@@ -80,7 +74,7 @@ jobs:
               output="${output}.exe"
             fi
             echo "Building ${output}..."
-            GOOS="${GOOS}" GOARCH="${GOARCH}" CGO_ENABLED=0 go build -o "dist/${output}" ./cmd/main.go
+            GOOS="${GOOS}" GOARCH="${GOARCH}" CGO_ENABLED=0 mise exec -- go build -o "dist/${output}" ./cmd/main.go
           done
 
       - name: Create GitHub release
