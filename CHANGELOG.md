@@ -1,3 +1,9 @@
+## v0.2.0 (2026-05-16)
+
+### Feat
+
+- add release workflow and parallelize CI jobs (#22)
+
 ## v0.1.1 (2026-05-16)
 
 ### Fix
