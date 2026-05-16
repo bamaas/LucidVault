@@ -1,3 +1,9 @@
+## v0.4.1 (2026-05-16)
+
+### Fix
+
+- use mise for Go builds in bump workflow (#25)
+
 ## v0.4.0 (2026-05-16)
 
 ### Feat
