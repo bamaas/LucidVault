@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Lint Markdown files"
+rumdl check -c .lint/.rumdl.toml .

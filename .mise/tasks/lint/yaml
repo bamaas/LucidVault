@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Lint YAML files"
+yamllint -c .lint/.yamllint.yml .
