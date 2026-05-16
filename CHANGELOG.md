@@ -1,3 +1,9 @@
+## v0.5.2 (2026-05-16)
+
+### Refactor
+
+- harden codebase with context propagation, security, and tests (#31)
+
 ## v0.5.1 (2026-05-16)
 
 ### Refactor
