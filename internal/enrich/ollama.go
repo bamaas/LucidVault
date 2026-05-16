@@ -98,6 +98,11 @@ func (c *Client) Enrich(ctx context.Context, input *EnrichInput) (string, error)
 			return cleaned, nil
 		}
 
+		// Always propagate context cancellation immediately.
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+
 		if statusCode == 429 {
 			wait := time.Second * time.Duration(1<<attempt)
 			slog.Warn("rate limited, backing off", "attempt", attempt+1, "wait", wait)
