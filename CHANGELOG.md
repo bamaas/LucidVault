@@ -1,3 +1,9 @@
+## v0.4.0 (2026-05-16)
+
+### Feat
+
+- reuse CI build artifacts instead of rebuilding on release (#24)
+
 ## v0.3.0 (2026-05-16)
 
 ### Feat
