@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ type mockSource struct {
 	bookmarks []source.Bookmark
 }
 
-func (m *mockSource) FetchBookmarks() ([]source.Bookmark, error) {
+func (m *mockSource) FetchBookmarks(_ context.Context) ([]source.Bookmark, error) {
 	return m.bookmarks, nil
 }
 
@@ -205,7 +206,7 @@ func TestRunPollCycle_ShutdownStopsProcessing(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	// Cancel context from the Jina handler after serving the first scrape.
+	// Cancel context from the Ollama handler after enriching the first bookmark.
 	// This means bookmark 1 processes fully, but the ctx.Err() check
 	// before bookmark 2 triggers the break.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -214,16 +215,22 @@ func TestRunPollCycle_ShutdownStopsProcessing(t *testing.T) {
 		if _, err := w.Write([]byte("# Scraped Content\n\nSome content.")); err != nil {
 			t.Errorf("w.Write: %v", err)
 		}
-		// Cancel after first bookmark is fully scraped; the context check
-		// at the top of the next loop iteration will catch this.
-		cancel()
 	}))
 	t.Cleanup(jinaServer.Close)
 
 	sc := scraper.New()
 	sc.SetBaseURL(jinaServer.URL + "/")
 
+	var ollamaCalls atomic.Int32
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := ollamaCalls.Add(1)
+		if n > 1 {
+			// Cancel on the second bookmark's enrichment so the first
+			// bookmark completes fully (scrape + enrich + write).
+			cancel()
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		resp := struct {
 			Message struct {
 				Content string `json:"content"`
@@ -437,7 +444,7 @@ func TestRunPollCycle_ReconcilesEmptyWikiFile(t *testing.T) {
 // errorSource is a mock source.Client that always returns an error.
 type errorSource struct{}
 
-func (e *errorSource) FetchBookmarks() ([]source.Bookmark, error) {
+func (e *errorSource) FetchBookmarks(_ context.Context) ([]source.Bookmark, error) {
 	return nil, fmt.Errorf("api error")
 }
 

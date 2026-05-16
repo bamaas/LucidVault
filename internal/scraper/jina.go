@@ -14,6 +14,9 @@ type Scraper struct {
 	youtube    *YouTubeClient
 }
 
+// maxResponseBytes limits the size of scrape responses to prevent OOM (10 MB).
+const maxResponseBytes = 10 * 1024 * 1024
+
 type Result struct {
 	Content string
 	OK      bool
@@ -58,7 +61,7 @@ func (s *Scraper) Scrape(ctx context.Context, targetURL string) (*Result, error)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return &Result{OK: false}, fmt.Errorf("reading jina response: %w", err)
 	}

@@ -1,6 +1,7 @@
 package raindrop
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,12 +58,12 @@ func NewClient(token string) *Client {
 // all results and returns them in chronological order (oldest first via
 // sort=created). Deduplication against already-processed bookmarks is handled
 // by the caller via the database.
-func (c *Client) FetchBookmarks() ([]source.Bookmark, error) {
+func (c *Client) FetchBookmarks(ctx context.Context) ([]source.Bookmark, error) {
 	var allBookmarks []source.Bookmark
 
 	for page := 0; ; page++ {
 		url := fmt.Sprintf("%s/raindrops/0?sort=created&page=%d&perpage=25", baseURL, page)
-		req, err := http.NewRequest("GET", url, nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			return nil, fmt.Errorf("creating request: %w", err)
 		}
@@ -73,7 +74,7 @@ func (c *Client) FetchBookmarks() ([]source.Bookmark, error) {
 			return nil, fmt.Errorf("fetching raindrops page %d: %w", page, err)
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 		_ = resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("reading response body: %w", err)

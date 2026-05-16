@@ -64,6 +64,7 @@ func (s *Store) migrate() error {
 			content_hash TEXT NOT NULL,
 			last_processed TEXT NOT NULL
 		);
+		CREATE INDEX IF NOT EXISTS idx_bookmarks_url_normalized ON bookmarks(url_normalized);
 	`)
 	if err != nil {
 		return fmt.Errorf("executing migrations: %w", err)

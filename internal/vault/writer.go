@@ -125,7 +125,7 @@ func (v *Vault) UpdateIndex(slug, title string, tags []string) error {
 		tagStr = " [" + strings.Join(tags, ", ") + "]"
 	}
 
-	entry := fmt.Sprintf("- [[%s]] — %s%s\n", slug, title, tagStr)
+	entry := fmt.Sprintf("- [[%s]] — %s%s\n", slug, sanitizeMarkdown(title), tagStr)
 	content += entry
 
 	// Update the "Last updated" line
@@ -202,6 +202,19 @@ func GenerateSlug(title string) string {
 	}
 
 	return slug
+}
+
+// sanitizeMarkdown escapes characters that could break markdown link/list syntax.
+var mdReplacer = strings.NewReplacer(
+	"[", "\\[",
+	"]", "\\]",
+	"(", "\\(",
+	")", "\\)",
+	"|", "\\|",
+)
+
+func sanitizeMarkdown(s string) string {
+	return mdReplacer.Replace(s)
 }
 
 func GenerateRawFilename(dateSaved, slug string) string {
