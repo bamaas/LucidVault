@@ -51,11 +51,40 @@ jobs:
           git push
           git push --tags
 
+      - name: Set up Go
+        if: steps.bump.outputs.bumped == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        if: steps.bump.outputs.bumped == 'true'
+        run: |
+          platforms=(
+            "linux/amd64"
+            "linux/arm64"
+            "darwin/amd64"
+            "darwin/arm64"
+            "windows/amd64"
+            "windows/arm64"
+          )
+          for platform in "${platforms[@]}"; do
+            GOOS="${platform%/*}"
+            GOARCH="${platform#*/}"
+            output="lucidvault-${GOOS}-${GOARCH}"
+            if [ "${GOOS}" = "windows" ]; then
+              output="${output}.exe"
+            fi
+            echo "Building ${output}..."
+            GOOS="${GOOS}" GOARCH="${GOARCH}" CGO_ENABLED=0 go build -o "dist/${output}" ./cmd/main.go
+          done
+
       - name: Create GitHub release
         if: steps.bump.outputs.bumped == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           gh release create "v${{ steps.bump.outputs.version }}" \
+            dist/* \
             --title "v${{ steps.bump.outputs.version }}" \
             --notes-file /tmp/cz-changelog.md
