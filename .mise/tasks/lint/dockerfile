@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Lint Dockerfile with dockerfile-roast"
+droast Dockerfile

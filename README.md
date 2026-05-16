@@ -1,6 +1,6 @@
 # LucidVault
 
-### Transform saved links into connected insights.
+## Transform saved links into connected insights
 
 You save dozens of articles, blog posts, and links every week. Most of them disappear into a bookmark graveyard — never read, never searchable, never connected to anything. LucidVault fixes that.
 
@@ -28,8 +28,8 @@ LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.m
 
 ### 1. Get your API tokens
 
-- **Raindrop**: Go to https://app.raindrop.io/settings/integrations → create a test token. These don't expire for personal use.
-- **Ollama Cloud**: Go to https://ollama.com/settings/keys → create an API key.
+- **Raindrop**: Go to <https://app.raindrop.io/settings/integrations> → create a test token. These don't expire for personal use.
+- **Ollama Cloud**: Go to <https://ollama.com/settings/keys> → create an API key.
 
 ### 2. Prepare your vault directory
 
@@ -83,7 +83,7 @@ docker run -d \
 
 That's it. LucidVault will poll Raindrop every 5 minutes. On first run, it backfills all your existing bookmarks.
 
-**Optional: Claude Code integration**
+## Optional: Claude Code integration
 
 To let LucidVault inject a retrieval strategy into your Claude Code config, add the `CLAUDE.md` bind-mount:
 

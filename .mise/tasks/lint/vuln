@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Check Go dependencies for known vulnerabilities"
+govulncheck ./...
