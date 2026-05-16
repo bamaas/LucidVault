@@ -47,9 +47,9 @@ jobs:
           install: true
           cache: true
 
-      - name: Build all platforms
+      - name: Package all platforms
         if: github.event_name == 'push'
-        run: mise run build:binary:all
+        run: mise run package:binary:all
 
       - name: Build native platform
         if: github.event_name == 'pull_request'
@@ -59,7 +59,7 @@ jobs:
         if: github.event_name == 'push'
         with:
           name: binaries
-          path: dist/
+          path: release/
           retention-days: 1
 
   build-image:
