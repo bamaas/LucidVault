@@ -6,6 +6,7 @@ AI-powered personal knowledge base. Polls Raindrop.io, scrapes via Jina Reader, 
 
 ```text
 cmd/main.go              — Entry point, poll loop, graceful shutdown
+internal/claudemd/       — CLAUDE.md upsert logic for Claude Code integration
 internal/source/         — Bookmark source interface and factory
 internal/raindrop/       — Raindrop API client (implements source.Client)
 internal/scraper/        — Scraper (Jina Reader + Supadata YouTube transcripts)

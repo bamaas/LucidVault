@@ -2,6 +2,7 @@ package enrich
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,9 @@ import (
 	"strings"
 	"time"
 )
+
+// maxResponseBytes limits the size of API responses to prevent OOM (10 MB).
+const maxResponseBytes = 10 * 1024 * 1024
 
 type Client struct {
 	apiKey     string
@@ -69,14 +73,18 @@ func NewClient(apiKey, model string, maxRetries, delayMs int) *Client {
 // SetBaseURL overrides the Ollama API endpoint (used in tests).
 func (c *Client) SetBaseURL(url string) { c.baseURL = url }
 
-func (c *Client) Enrich(input *EnrichInput) (string, error) {
+func (c *Client) Enrich(ctx context.Context, input *EnrichInput) (string, error) {
 	prompt := buildPrompt(input)
 
-	// Proactive delay between calls
-	time.Sleep(time.Duration(c.delayMs) * time.Millisecond)
+	// Proactive delay between calls (context-aware)
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(time.Duration(c.delayMs) * time.Millisecond):
+	}
 
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
-		result, statusCode, err := c.callAPI(prompt)
+		result, statusCode, err := c.callAPI(ctx, prompt)
 		if err == nil {
 			cleaned := cleanResponse(result)
 			if err := validateResponse(cleaned); err != nil {
@@ -90,10 +98,19 @@ func (c *Client) Enrich(input *EnrichInput) (string, error) {
 			return cleaned, nil
 		}
 
+		// Always propagate context cancellation immediately.
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+
 		if statusCode == 429 {
 			wait := time.Second * time.Duration(1<<attempt)
 			slog.Warn("rate limited, backing off", "attempt", attempt+1, "wait", wait)
-			time.Sleep(wait)
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(wait):
+			}
 			continue
 		}
 
@@ -103,13 +120,17 @@ func (c *Client) Enrich(input *EnrichInput) (string, error) {
 		}
 
 		slog.Warn("enrichment call failed, retrying", "attempt", attempt+1, "error", err)
-		time.Sleep(time.Second * time.Duration(1<<attempt))
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(time.Second * time.Duration(1<<attempt)):
+		}
 	}
 
 	return buildMinimalPage(input), nil
 }
 
-func (c *Client) callAPI(prompt string) (string, int, error) {
+func (c *Client) callAPI(ctx context.Context, prompt string) (string, int, error) {
 	reqBody := chatRequest{
 		Model: c.model,
 		Messages: []chatMessage{
@@ -123,7 +144,7 @@ func (c *Client) callAPI(prompt string) (string, int, error) {
 		return "", 0, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.baseURL+"/api/chat", bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/chat", bytes.NewReader(jsonBody))
 	if err != nil {
 		return "", 0, fmt.Errorf("creating request: %w", err)
 	}
@@ -136,7 +157,7 @@ func (c *Client) callAPI(prompt string) (string, int, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return "", resp.StatusCode, fmt.Errorf("reading response: %w", err)
 	}

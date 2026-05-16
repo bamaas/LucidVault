@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -17,7 +18,7 @@ type Bookmark struct {
 
 // Client fetches bookmarks from an external source.
 type Client interface {
-	FetchBookmarks() ([]Bookmark, error)
+	FetchBookmarks(ctx context.Context) ([]Bookmark, error)
 }
 
 // Factory is a constructor that creates a Client from a token.

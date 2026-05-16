@@ -77,7 +77,7 @@ func (yt *YouTubeClient) FetchTranscript(ctx context.Context, videoURL string) (
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return &Result{OK: false}, fmt.Errorf("reading supadata response: %w", err)
 	}
@@ -129,7 +129,7 @@ func (yt *YouTubeClient) pollJob(ctx context.Context, jobID string) (*Result, er
 			return &Result{OK: false}, fmt.Errorf("polling supadata job %s: %w", jobID, err)
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 		_ = resp.Body.Close()
 		if err != nil {
 			return &Result{OK: false}, fmt.Errorf("reading poll response: %w", err)
