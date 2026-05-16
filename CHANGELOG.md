@@ -1,3 +1,9 @@
+## v0.3.0 (2026-05-16)
+
+### Feat
+
+- attach cross-compiled binaries to GitHub releases & fix Docker image tags (#23)
+
 ## v0.2.0 (2026-05-16)
 
 ### Feat
