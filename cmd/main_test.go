@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -220,7 +221,16 @@ func TestRunPollCycle_ShutdownStopsProcessing(t *testing.T) {
 	sc := scraper.New()
 	sc.SetBaseURL(jinaServer.URL + "/")
 
+	var ollamaCalls atomic.Int32
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := ollamaCalls.Add(1)
+		if n > 1 {
+			// Cancel on the second bookmark's enrichment so the first
+			// bookmark completes fully (scrape + enrich + write).
+			cancel()
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		resp := struct {
 			Message struct {
 				Content string `json:"content"`
@@ -231,9 +241,6 @@ func TestRunPollCycle_ShutdownStopsProcessing(t *testing.T) {
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			t.Errorf("json.Encode: %v", err)
 		}
-		// Cancel after first bookmark is fully enriched; the context check
-		// at the top of the next loop iteration will catch this.
-		cancel()
 	}))
 	t.Cleanup(ollamaServer.Close)
 
