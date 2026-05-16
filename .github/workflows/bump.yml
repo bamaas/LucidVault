@@ -6,6 +6,10 @@ on:
     types: [completed]
     branches: [main]
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   bump:
     name: Bump version and create release
@@ -88,3 +92,31 @@ jobs:
             dist/* \
             --title "v${{ steps.bump.outputs.version }}" \
             --notes-file /tmp/cz-changelog.md
+
+      - name: Download Docker image artifact
+        if: steps.bump.outputs.bumped == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Log in to GHCR
+        if: steps.bump.outputs.bumped == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image to GHCR
+        if: steps.bump.outputs.bumped == 'true'
+        run: |
+          docker load -i /tmp/image.tar
+          repo="${GITHUB_REPOSITORY,,}"
+          version="${{ steps.bump.outputs.version }}"
+          docker tag lucidvault:ci "ghcr.io/${repo}:${version}"
+          docker tag lucidvault:ci "ghcr.io/${repo}:latest"
+          docker push "ghcr.io/${repo}:${version}"
+          docker push "ghcr.io/${repo}:latest"
