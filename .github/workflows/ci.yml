@@ -37,7 +37,7 @@ jobs:
       - run: go test ./...
 
   build-binary:
-    name: Build binaries
+    name: Build binary
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,20 +47,7 @@ jobs:
           install: true
           cache: true
 
-      - name: Package all platforms
-        if: github.event_name == 'push'
-        run: mise run package:binary:all
-
-      - name: Build native platform
-        if: github.event_name == 'pull_request'
-        run: mise run build:binary
-
-      - uses: actions/upload-artifact@v4
-        if: github.event_name == 'push'
-        with:
-          name: binaries
-          path: release/
-          retention-days: 1
+      - run: mise run build:binary
 
   build-image:
     name: Build image

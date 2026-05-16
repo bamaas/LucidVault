@@ -37,14 +37,6 @@ jobs:
           echo "ci_run_id=$(cat /tmp/bump/ci_run_id.txt)" >> "$GITHUB_OUTPUT"
           echo "version=$(cat /tmp/bump/version.txt)" >> "$GITHUB_OUTPUT"
 
-      - name: Download binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: binaries
-          path: release
-          run-id: ${{ steps.meta.outputs.ci_run_id }}
-          github-token: ${{ steps.app-token.outputs.token }}
-
       - name: Download Docker image
         uses: actions/download-artifact@v4
         with:
@@ -58,7 +50,6 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           gh release create "v${{ steps.meta.outputs.version }}" \
-            release/* \
             --repo "${{ github.repository }}" \
             --title "v${{ steps.meta.outputs.version }}" \
             --notes-file /tmp/bump/changelog.md
