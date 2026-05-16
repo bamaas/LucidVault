@@ -76,7 +76,7 @@ docker run -d \
   -e SOURCE_TOKEN=<your-raindrop-token> \
   -e OLLAMA_API_KEY=<your-key> \
   -v ~/lucid-vault:/vault \
-  lucidvault:latest
+  ghcr.io/bamaas/lucidvault:latest
 ```
 
 That's it. LucidVault will poll Raindrop every 5 minutes. On first run, it backfills all your existing bookmarks.
@@ -95,7 +95,7 @@ docker run -d \
   -e OLLAMA_API_KEY=<your-key> \
   -v ~/lucid-vault:/vault \
   -v ~/.claude/CLAUDE.md:/CLAUDE.md \
-  lucidvault:latest
+  ghcr.io/bamaas/lucidvault:latest
 ```
 
 ### 5. Check it's working
