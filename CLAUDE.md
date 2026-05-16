@@ -101,6 +101,7 @@ Every architectural or design decision **must** have an ADR in `docs/adr/`. Keep
 
 - For non-trivial changes, spawn a subagent to review the diff before creating a PR
 - Before creating a PR, always merge the latest `origin/main` into the feature branch (`git fetch origin main && git merge origin/main`) to ensure the PR includes all recent changes
+- After merging main, re-run linters and tests (`mise run lint` and `mise run test`) — the merge can introduce new violations
 - Create the PR with auto-merge enabled (`--auto --squash --delete-branch`) so it merges when CI passes and the branch is deleted
 - Skip the review agent for docs-only or config-only changes
 
