@@ -1,3 +1,9 @@
+## v0.5.0 (2026-05-16)
+
+### Feat
+
+- add package:binary:all task for compressed release archives (#27)
+
 ## v0.4.2 (2026-05-16)
 
 ### Refactor
