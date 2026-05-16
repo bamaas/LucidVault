@@ -1,0 +1,7 @@
+*
+!.mise/config.toml
+!.mise/tasks/build/binary
+!go.mod
+!go.sum
+!cmd/
+!internal/

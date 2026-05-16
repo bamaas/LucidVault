@@ -36,19 +36,6 @@ jobs:
 
       - run: go test ./...
 
-  build-binary:
-    name: Build binary
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: jdx/mise-action@v3
-        with:
-          install: true
-          cache: true
-
-      - run: mise run build:binary
-
   build-image:
     name: Build image
     runs-on: ubuntu-latest
