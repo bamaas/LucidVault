@@ -1,6 +1,6 @@
 # LucidVault
 
-### Transform saved links into connected insights.
+## Transform saved links into connected insights
 
 You save dozens of articles, blog posts, and links every week. Most of them disappear into a bookmark graveyard — never read, never searchable, never connected to anything. LucidVault fixes that.
 
