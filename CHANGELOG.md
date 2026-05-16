@@ -1,3 +1,9 @@
+## v0.5.1 (2026-05-16)
+
+### Refactor
+
+- simplify to Docker-only distribution (#28)
+
 ## v0.5.0 (2026-05-16)
 
 ### Feat
