@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#MISE description="Package all release binaries into archives"
+#MISE depends=["build:binary:all"]
+
+shopt -s nullglob
+mkdir -p release
+for file in dist/lucidvault-*; do
+  name="$(basename "${file}")"
+  base="${name%.*}"
+
+  if [[ "${name}" == *.exe ]]; then
+    echo "Packaging ${base}.zip..."
+    (cd dist && zip -q "../release/${base}.zip" "${name}")
+  else
+    echo "Packaging ${base}.tar.gz..."
+    tar -czf "release/${base}.tar.gz" -C dist "${name}"
+  fi
+done

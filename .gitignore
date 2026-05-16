@@ -1,5 +1,7 @@
 .specstory/*
 bin/
+dist/
+release/
 access-tokens.md
 soul.md
 skills-lock.json
