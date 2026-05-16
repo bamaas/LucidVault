@@ -10,6 +10,7 @@ internal/source/         — Bookmark source interface and factory
 internal/raindrop/       — Raindrop API client (implements source.Client)
 internal/scraper/        — Scraper (Jina Reader + Supadata YouTube transcripts)
 internal/enrich/         — Ollama Cloud enrichment
+internal/notes/          — Notes scanner, frontmatter parser
 internal/store/          — SQLite state (modernc.org/sqlite, pure Go)
 internal/vault/          — Vault file writer, slug/URL helpers
 ```
@@ -91,6 +92,7 @@ Every architectural or design decision **must** have an ADR in `docs/adr/`. Keep
 
 ### 7. Review Before Merge
 - For non-trivial changes, spawn a subagent to review the diff before creating a PR
+- Before creating a PR, always merge the latest `origin/main` into the feature branch (`git fetch origin main && git merge origin/main`) to ensure the PR includes all recent changes
 - Create the PR with auto-merge enabled (`--auto --squash --delete-branch`) so it merges when CI passes and the branch is deleted
 - Skip the review agent for docs-only or config-only changes
 

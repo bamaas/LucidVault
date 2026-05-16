@@ -1,4 +1,4 @@
-# ADR-011: Local notes indexing without LLM enrichment
+# ADR-012: Local notes indexing without LLM enrichment
 
 ## Status
 

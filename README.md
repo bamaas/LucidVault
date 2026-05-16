@@ -13,6 +13,7 @@ LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.m
 - **Enrich** — LLM generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** — Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **Resilient** — Falls back to basic metadata when scraping fails (paywalled sites, blocked content)
+- **Notes indexing** — Personal notes in `notes/` are automatically scanned, tagged from frontmatter, and added to `index.md` so they connect to the knowledge graph
 - **Backfill** — Processes all your existing bookmarks on first run
 
 ## Getting started
@@ -168,6 +169,4 @@ It will never scan entire directories, and will not search the web unprompted.
 
 ## To do
 
-### Personal notes indexing
-- [ ] Scan `notes/` for new/changed markdown files and add them to `index.md`
-- [ ] Extract tags and wiki-links from personal notes so they connect to the knowledge graph
+_No pending items._
