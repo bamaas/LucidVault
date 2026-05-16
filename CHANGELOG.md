@@ -1,3 +1,9 @@
+## v0.6.0 (2026-05-16)
+
+### Feat
+
+- add dockerfile-roast, actionlint, govulncheck, yamllint, and rumdl linters (#32)
+
 ## v0.5.2 (2026-05-16)
 
 ### Refactor
