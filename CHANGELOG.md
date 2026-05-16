@@ -1,3 +1,9 @@
+## v0.6.1 (2026-05-16)
+
+### Fix
+
+- quote {{date}} in note template to prevent YAML parsing as mapping (#34)
+
 ## v0.6.0 (2026-05-16)
 
 ### Feat
