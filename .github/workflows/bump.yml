@@ -8,11 +8,10 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   bump:
-    name: Bump version and create release
+    name: Bump version
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_commit.author.name != 'cibotbm[bot]'
@@ -42,11 +41,12 @@ jobs:
       - name: Bump version
         id: bump
         run: |
-          if cz bump --yes --changelog --changelog-to-stdout > /tmp/cz-changelog.md 2>&1; then
+          if cz bump --yes --changelog --changelog-to-stdout > /tmp/changelog.md 2>/tmp/cz-stderr.txt; then
             echo "bumped=true" >> "$GITHUB_OUTPUT"
             echo "version=$(cz version --project)" >> "$GITHUB_OUTPUT"
           else
             echo "bumped=false" >> "$GITHUB_OUTPUT"
+            cat /tmp/cz-stderr.txt
           fi
 
       - name: Push changes
@@ -55,62 +55,18 @@ jobs:
           git push
           git push --tags
 
-      - name: Build binaries
+      - name: Save bump metadata
         if: steps.bump.outputs.bumped == 'true'
         run: |
-          platforms=(
-            "linux/amd64"
-            "linux/arm64"
-            "darwin/amd64"
-            "darwin/arm64"
-            "windows/amd64"
-            "windows/arm64"
-          )
-          for platform in "${platforms[@]}"; do
-            GOOS="${platform%/*}"
-            GOARCH="${platform#*/}"
-            output="lucidvault-${GOOS}-${GOARCH}"
-            if [ "${GOOS}" = "windows" ]; then
-              output="${output}.exe"
-            fi
-            echo "Building ${output}..."
-            GOOS="${GOOS}" GOARCH="${GOARCH}" CGO_ENABLED=0 mise exec -- go build -o "dist/${output}" ./cmd/main.go
-          done
+          echo "${{ github.event.workflow_run.id }}" > /tmp/ci_run_id.txt
+          echo "${{ steps.bump.outputs.version }}" > /tmp/version.txt
 
-      - name: Create GitHub release
+      - uses: actions/upload-artifact@v4
         if: steps.bump.outputs.bumped == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          gh release create "v${{ steps.bump.outputs.version }}" \
-            dist/* \
-            --title "v${{ steps.bump.outputs.version }}" \
-            --notes-file /tmp/cz-changelog.md
-
-      - name: Download Docker image artifact
-        if: steps.bump.outputs.bumped == 'true'
-        uses: actions/download-artifact@v4
         with:
-          name: docker-image
-          path: /tmp
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ steps.app-token.outputs.token }}
-
-      - name: Log in to GHCR
-        if: steps.bump.outputs.bumped == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Push Docker image to GHCR
-        if: steps.bump.outputs.bumped == 'true'
-        run: |
-          docker load -i /tmp/image.tar
-          repo="${GITHUB_REPOSITORY,,}"
-          version="${{ steps.bump.outputs.version }}"
-          docker tag lucidvault:ci "ghcr.io/${repo}:${version}"
-          docker tag lucidvault:ci "ghcr.io/${repo}:latest"
-          docker push "ghcr.io/${repo}:${version}"
-          docker push "ghcr.io/${repo}:latest"
+          name: bump-metadata
+          path: |
+            /tmp/ci_run_id.txt
+            /tmp/version.txt
+            /tmp/changelog.md
+          retention-days: 1
