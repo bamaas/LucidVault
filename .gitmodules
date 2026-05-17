@@ -1,3 +1,6 @@
 [submodule ".claude/skills/cc-skills-golang"]
 	path = .claude/skills/cc-skills-golang
 	url = https://github.com/samber/cc-skills-golang
+[submodule ".claude/cc-skills-golang"]
+	path = .claude/cc-skills-golang
+	url = https://github.com/samber/cc-skills-golang
