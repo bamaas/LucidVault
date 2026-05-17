@@ -1,3 +1,9 @@
+## v0.8.1 (2026-05-17)
+
+### Fix
+
+- skip release workflow when bump produces no version change (#41)
+
 ## v0.8.0 (2026-05-17)
 
 ### Feat
