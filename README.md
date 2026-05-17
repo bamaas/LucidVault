@@ -17,6 +17,7 @@ LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.m
 - **Resilient** — Falls back to basic metadata when scraping fails (paywalled sites, blocked content)
 - **Notes indexing** — Personal notes in `notes/` are automatically scanned, tagged from frontmatter, and added to `index.md` so they connect to the knowledge graph
 - **Deletion sync** — Bookmarks deleted from the source are automatically cleaned up: wiki page, raw file, index entry, and DB record are all removed
+- **Re-enrich** — Changed your enrichment prompt or model? Run with `--re-enrich` to re-process all bookmarks using existing raw content
 - **Backfill** — Processes all your existing bookmarks on first run
 
 ## Getting started
@@ -111,7 +112,9 @@ You should see bookmarks being fetched, scraped, and enriched. Files appear in y
 
 ## Configuration
 
-All configuration is via environment variables:
+Environment variables configure the service. CLI flags control one-off operations.
+
+### Environment variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -125,6 +128,24 @@ All configuration is via environment variables:
 | `ENRICH_MAX_RETRIES` | No | `3` | Max retries on API failure |
 | `SUPADATA_API_KEY` | No | — | [Supadata](https://supadata.ai) API key for YouTube transcript extraction. When set, YouTube URLs are routed to Supadata instead of Jina. |
 | `CLAUDE_MD_PATH` | No | `/CLAUDE.md` | Path to CLAUDE.md for Claude Code integration (override only if needed) |
+
+### CLI flags
+
+| Flag | Description |
+|------|-------------|
+| `--re-enrich` | Re-enrich all bookmarks returned by the source using existing raw content, then exit. Useful after changing the enrichment prompt or model. |
+
+```bash
+# Binary
+lucidvault --re-enrich
+
+# Docker
+docker run --rm \
+  -e SOURCE_TOKEN=<your-raindrop-token> \
+  -e OLLAMA_API_KEY=<your-key> \
+  -v ~/lucid-vault:/vault \
+  ghcr.io/bamaas/lucidvault:latest --re-enrich
+```
 
 ## Vault structure
 

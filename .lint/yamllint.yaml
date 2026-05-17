@@ -1,6 +1,9 @@
 ---
 extends: default
 
+ignore:
+  - ".claude/skills/"
+
 rules:
   document-start: disable
   line-length:
