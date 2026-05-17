@@ -1,3 +1,9 @@
+## v0.7.0 (2026-05-17)
+
+### Feat
+
+- add --re-enrich CLI flag to re-process bookmarks with updated prompt (#37)
+
 ## v0.6.2 (2026-05-17)
 
 ### Fix
