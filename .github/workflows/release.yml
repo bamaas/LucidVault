@@ -1,10 +1,17 @@
 name: Release
 
 on:
-  workflow_run:
-    workflows: ["Bump version"]
-    types: [completed]
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release (without v prefix)
+        required: true
+      ci-run-id:
+        description: CI workflow run ID (for Docker image artifact)
+        required: true
+      bump-run-id:
+        description: Bump workflow run ID (for changelog artifact)
+        required: true
 
 permissions:
   contents: write
@@ -13,7 +20,6 @@ permissions:
 jobs:
   release:
     name: Publish release
-    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Create GitHub App token
@@ -23,35 +29,29 @@ jobs:
           app-id: ${{ secrets.CIBOTBM_APP_ID }}
           private-key: ${{ secrets.CIBOTBM_PRIVATE_KEY }}
 
-      - name: Download bump metadata
+      - name: Download changelog
         uses: actions/download-artifact@v4
         with:
-          name: bump-metadata
+          name: changelog
           path: /tmp/bump
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ inputs.bump-run-id }}
           github-token: ${{ steps.app-token.outputs.token }}
-
-      - name: Read metadata
-        id: meta
-        run: |
-          echo "ci_run_id=$(cat /tmp/bump/ci_run_id.txt)" >> "$GITHUB_OUTPUT"
-          echo "version=$(cat /tmp/bump/version.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Download Docker image
         uses: actions/download-artifact@v4
         with:
           name: docker-image
           path: /tmp
-          run-id: ${{ steps.meta.outputs.ci_run_id }}
+          run-id: ${{ inputs.ci-run-id }}
           github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh release create "v${{ steps.meta.outputs.version }}" \
+          gh release create "v${{ inputs.version }}" \
             --repo "${{ github.repository }}" \
-            --title "v${{ steps.meta.outputs.version }}" \
+            --title "v${{ inputs.version }}" \
             --notes-file /tmp/bump/changelog.md
 
       - name: Log in to GHCR
@@ -65,7 +65,7 @@ jobs:
         run: |
           docker load -i /tmp/image.tar
           repo="${GITHUB_REPOSITORY,,}"
-          version="${{ steps.meta.outputs.version }}"
+          version="${{ inputs.version }}"
           docker tag lucidvault:ci "ghcr.io/${repo}:${version}"
           docker tag lucidvault:ci "ghcr.io/${repo}:latest"
           docker push "ghcr.io/${repo}:${version}"
