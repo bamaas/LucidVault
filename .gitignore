@@ -8,3 +8,4 @@ skills-lock.json
 test-vault/
 .mise/config.local.toml
 .ignore
+tasks/
