@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -34,12 +35,16 @@ type config struct {
 	enrichDelayMs  int
 	enrichRetries  int
 	supadataAPIKey string
+	forceReEnrich  bool
 }
 
 func main() {
+	reEnrich := flag.Bool("re-enrich", false, "re-enrich bookmarks returned by source using updated prompt, then exit")
+	flag.Parse()
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	cfg, err := loadConfig()
+	cfg, err := loadConfig(*reEnrich)
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
@@ -97,6 +102,7 @@ func main() {
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -105,10 +111,15 @@ func main() {
 		cancel()
 	}()
 
-	slog.Info("starting lucidvault", "poll_interval", cfg.pollInterval, "model", cfg.ollamaModel)
+	slog.Info("starting lucidvault", "poll_interval", cfg.pollInterval, "model", cfg.ollamaModel, "force_re_enrich", cfg.forceReEnrich)
 
 	// Run immediately on startup, then on ticker
 	runPollCycle(ctx, cfg, rd, sc, en, db, v)
+
+	if cfg.forceReEnrich {
+		slog.Info("re-enrichment complete, exiting")
+		return
+	}
 
 	ticker := time.NewTicker(cfg.pollInterval)
 	defer ticker.Stop()
@@ -291,6 +302,9 @@ func processBookmark(ctx context.Context, cfg *config, bm source.Bookmark, sc *s
 		return fmt.Errorf("checking source_id: %w", err)
 	}
 	if rec != nil {
+		if cfg.forceReEnrich {
+			return reEnrichBookmark(ctx, bm, rec, en, db, v)
+		}
 		if v.FileExists(rec.WikiPath) {
 			slog.Debug("skipping already processed bookmark", "source_id", bm.ID)
 			return errSkipped
@@ -403,6 +417,92 @@ func processBookmark(ctx context.Context, cfg *config, bm source.Bookmark, sc *s
 	return nil
 }
 
+func reEnrichBookmark(ctx context.Context, bm source.Bookmark, rec *store.BookmarkRecord, en *enrich.Client, db *store.Store, v *vault.Vault) error {
+	slog.Info("re-enriching bookmark", "title", bm.Title, "url", bm.Link)
+
+	if rec.RawPath == "" {
+		return fmt.Errorf("no raw content stored for bookmark %d, cannot re-enrich", rec.SourceID)
+	}
+	if rec.WikiPath == "" {
+		return fmt.Errorf("no wiki path stored for bookmark %d, cannot re-enrich", rec.SourceID)
+	}
+
+	rawContent, err := v.ReadFile(rec.RawPath)
+	if err != nil {
+		return fmt.Errorf("reading raw file for re-enrichment: %w", err)
+	}
+
+	index, err := v.ReadIndex()
+	if err != nil {
+		slog.Warn("failed to read index.md", "error", err)
+	}
+	profile, err := v.ReadSoul()
+	if err != nil {
+		slog.Warn("failed to read soul.md", "error", err)
+	}
+
+	slug := vault.GenerateSlug(bm.Title)
+	dateSaved := bm.Created.Format("2006-01-02")
+
+	enrichInput := &enrich.EnrichInput{
+		Content:     rawContent,
+		Index:       index,
+		UserTags:    bm.Tags,
+		RawFilename: filepath.Base(rec.RawPath),
+		Title:       bm.Title,
+		URL:         bm.Link,
+		DateSaved:   dateSaved,
+		Profile:     profile,
+	}
+
+	wikiContent, err := en.Enrich(ctx, enrichInput)
+	if err != nil {
+		return fmt.Errorf("re-enriching: %w", err)
+	}
+
+	// Handle slug change: remove old index entry and delete old wiki file
+	wikiFilename := slug + ".md"
+	oldSlug := strings.TrimSuffix(filepath.Base(rec.WikiPath), ".md")
+	if oldSlug != slug {
+		if err := v.RemoveFromIndex(oldSlug); err != nil {
+			return fmt.Errorf("removing old index entry: %w", err)
+		}
+		if err := v.DeleteFile(rec.WikiPath); err != nil {
+			slog.Warn("failed to delete old wiki file", "path", rec.WikiPath, "error", err)
+		}
+	} else {
+		if err := v.RemoveFromIndex(slug); err != nil {
+			return fmt.Errorf("removing old index entry: %w", err)
+		}
+	}
+
+	wikiPath, err := v.WriteWiki(wikiFilename, wikiContent)
+	if err != nil {
+		return fmt.Errorf("writing wiki file: %w", err)
+	}
+
+	// Update index entry
+	tags := notes.ParseFrontmatter(wikiContent)
+	if len(tags) == 0 {
+		tags = bm.Tags
+	}
+	title := bm.Title
+	if enrichedTitle := notes.ParseTitle(wikiContent); enrichedTitle != "" {
+		title = enrichedTitle
+	}
+	if err := v.UpdateIndex(slug, title, tags); err != nil {
+		return fmt.Errorf("updating index: %w", err)
+	}
+
+	// Update the DB record with the new wiki path
+	if err := db.UpdateBookmarkWikiPath(rec.SourceID, wikiPath); err != nil {
+		return fmt.Errorf("updating bookmark record: %w", err)
+	}
+
+	slog.Info("bookmark re-enriched", "title", bm.Title, "wiki", wikiPath)
+	return nil
+}
+
 func buildFallbackContent(bm source.Bookmark) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", bm.Title)
@@ -416,7 +516,7 @@ func buildFallbackContent(bm source.Bookmark) string {
 	return b.String()
 }
 
-func loadConfig() (*config, error) {
+func loadConfig(forceReEnrich bool) (*config, error) {
 	sourceName := os.Getenv("SOURCE_NAME")
 	if sourceName == "" {
 		sourceName = "raindrop"
@@ -485,6 +585,7 @@ func loadConfig() (*config, error) {
 		enrichDelayMs:  enrichDelayMs,
 		enrichRetries:  enrichRetries,
 		supadataAPIKey: supadataAPIKey,
+		forceReEnrich:  forceReEnrich,
 	}, nil
 }
 

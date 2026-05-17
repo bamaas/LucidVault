@@ -63,6 +63,23 @@ func (v *Vault) FileExists(relPath string) bool {
 	return len(strings.TrimSpace(string(data))) > 0
 }
 
+func (v *Vault) ReadFile(relPath string) (string, error) {
+	absPath := filepath.Join(v.BasePath, relPath)
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return "", fmt.Errorf("reading file %s: %w", relPath, err)
+	}
+	return string(data), nil
+}
+
+func (v *Vault) DeleteFile(relPath string) error {
+	absPath := filepath.Join(v.BasePath, relPath)
+	if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("deleting file %s: %w", relPath, err)
+	}
+	return nil
+}
+
 func (v *Vault) WriteRaw(filename, content string) (string, error) {
 	relPath := filepath.Join("raw", filename)
 	absPath := filepath.Join(v.BasePath, relPath)

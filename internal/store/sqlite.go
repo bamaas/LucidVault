@@ -127,6 +127,17 @@ func (s *Store) GetBookmarkBySourceID(sourceID int) (*BookmarkRecord, error) {
 	return &rec, nil
 }
 
+func (s *Store) UpdateBookmarkWikiPath(sourceID int, wikiPath string) error {
+	_, err := s.db.Exec(
+		`UPDATE bookmarks SET wiki_path = ?, processed_at = ? WHERE source_id = ?`,
+		wikiPath, time.Now().UTC().Format(time.RFC3339), sourceID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating bookmark %d wiki_path: %w", sourceID, err)
+	}
+	return nil
+}
+
 func (s *Store) DeleteBySourceID(sourceID int) error {
 	_, err := s.db.Exec("DELETE FROM bookmarks WHERE source_id = ?", sourceID)
 	if err != nil {
