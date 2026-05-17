@@ -1,3 +1,9 @@
+## v0.9.0 (2026-05-17)
+
+### Feat
+
+- auto-tag notes and create wiki copies for all notes (#43)
+
 ## v0.8.2 (2026-05-17)
 
 ### Fix
