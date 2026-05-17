@@ -158,6 +158,62 @@ func TestDeleteNote(t *testing.T) {
 	}
 }
 
+func TestListBookmarks(t *testing.T) {
+	s := newTestStore(t)
+
+	// Save two bookmarks with distinct paths
+	err := s.SaveBookmark(&BookmarkRecord{
+		SourceID:      100,
+		WikiPath:      "wiki/alpha.md",
+		RawPath:       "raw/2024-01-01-alpha.md",
+		Title:         "Alpha",
+		URL:           "http://example.com/alpha",
+		URLNormalized: "http://example.com/alpha",
+		ProcessedAt:   time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("SaveBookmark alpha: %v", err)
+	}
+
+	err = s.SaveBookmark(&BookmarkRecord{
+		SourceID:      200,
+		WikiPath:      "wiki/beta.md",
+		RawPath:       "raw/2024-01-02-beta.md",
+		Title:         "Beta",
+		URL:           "http://example.com/beta",
+		URLNormalized: "http://example.com/beta",
+		ProcessedAt:   time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("SaveBookmark beta: %v", err)
+	}
+
+	records, err := s.ListBookmarks()
+	if err != nil {
+		t.Fatalf("ListBookmarks: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("len(records) = %d, want 2", len(records))
+	}
+
+	byID := make(map[int]BookmarkRecord, len(records))
+	for _, r := range records {
+		byID[r.SourceID] = r
+	}
+
+	if r, ok := byID[100]; !ok {
+		t.Error("missing source_id 100 in ListBookmarks result")
+	} else if r.WikiPath != "wiki/alpha.md" {
+		t.Errorf("alpha WikiPath = %q, want %q", r.WikiPath, "wiki/alpha.md")
+	}
+
+	if r, ok := byID[200]; !ok {
+		t.Error("missing source_id 200 in ListBookmarks result")
+	} else if r.WikiPath != "wiki/beta.md" {
+		t.Errorf("beta WikiPath = %q, want %q", r.WikiPath, "wiki/beta.md")
+	}
+}
+
 func TestListNotes(t *testing.T) {
 	s := newTestStore(t)
 

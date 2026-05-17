@@ -72,6 +72,7 @@ func (v *Vault) ReadFile(relPath string) (string, error) {
 	return string(data), nil
 }
 
+
 func (v *Vault) DeleteFile(relPath string) error {
 	absPath := filepath.Join(v.BasePath, relPath)
 	if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {

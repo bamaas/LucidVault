@@ -177,6 +177,32 @@ func (s *Store) DeleteNote(path string) error {
 	return nil
 }
 
+func (s *Store) ListBookmarks() ([]BookmarkRecord, error) {
+	rows, err := s.db.Query("SELECT source_id, wiki_path, raw_path, title, url, url_normalized, processed_at FROM bookmarks")
+	if err != nil {
+		return nil, fmt.Errorf("listing bookmarks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var records []BookmarkRecord
+	for rows.Next() {
+		var rec BookmarkRecord
+		var processedAt string
+		if err := rows.Scan(&rec.SourceID, &rec.WikiPath, &rec.RawPath, &rec.Title, &rec.URL, &rec.URLNormalized, &processedAt); err != nil {
+			return nil, fmt.Errorf("scanning bookmark row: %w", err)
+		}
+		rec.ProcessedAt, err = time.Parse(time.RFC3339, processedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parsing processed_at for bookmark %d: %w", rec.SourceID, err)
+		}
+		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating bookmark rows: %w", err)
+	}
+	return records, nil
+}
+
 func (s *Store) ListNotes() ([]NoteRecord, error) {
 	rows, err := s.db.Query("SELECT path, content_hash, last_processed FROM notes")
 	if err != nil {
