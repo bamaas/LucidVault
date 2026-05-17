@@ -16,6 +16,7 @@ LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.m
 - **Retrieve** — Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **Resilient** — Falls back to basic metadata when scraping fails (paywalled sites, blocked content)
 - **Notes indexing** — Personal notes in `notes/` are automatically scanned, tagged from frontmatter, and added to `index.md` so they connect to the knowledge graph
+- **Deletion sync** — Bookmarks deleted from the source are automatically cleaned up: wiki page, raw file, index entry, and DB record are all removed
 - **Backfill** — Processes all your existing bookmarks on first run
 
 ## Getting started

@@ -145,12 +145,13 @@ func processBookmarks(ctx context.Context, cfg *config, rd source.Client, sc *sc
 		return
 	}
 
-	if len(bookmarks) == 0 {
-		slog.Info("no bookmarks found")
-		return
-	}
-
 	slog.Info("fetched bookmarks", "count", len(bookmarks))
+
+	// Build set of fetched source IDs upfront for deletion detection.
+	fetchedIDs := make(map[int]struct{}, len(bookmarks))
+	for _, bm := range bookmarks {
+		fetchedIDs[bm.ID] = struct{}{}
+	}
 
 	var processed, failed, skipped int
 
@@ -174,6 +175,61 @@ func processBookmarks(ctx context.Context, cfg *config, rd source.Client, sc *sc
 
 	if failed > 0 {
 		slog.Warn("some bookmarks failed — will be retried next cycle", "failed", failed)
+	}
+
+	// Reconcile deletions: remove vault files and DB records for bookmarks
+	// no longer present in the source. Unlike processNotes (which scans the
+	// local filesystem), this depends on an external API — an empty response
+	// could be an API glitch, so we skip reconciliation when the source
+	// returned zero bookmarks to avoid wiping the vault.
+	if ctx.Err() != nil {
+		return
+	}
+	if len(fetchedIDs) == 0 {
+		slog.Warn("skipping deletion reconciliation — source returned zero bookmarks")
+	} else {
+		dbBookmarks, err := db.ListBookmarks()
+		if err != nil {
+			slog.Error("failed to list bookmarks from db", "error", err)
+		} else {
+			var deleted int
+			for _, rec := range dbBookmarks {
+				if ctx.Err() != nil {
+					slog.Info("shutdown requested, stopping deletion reconciliation")
+					break
+				}
+				if _, exists := fetchedIDs[rec.SourceID]; exists {
+					continue
+				}
+				// Derive slug from wiki_path: "wiki/my-article.md" → "my-article"
+				slug := strings.TrimSuffix(strings.TrimPrefix(rec.WikiPath, "wiki/"), ".md")
+				if err := v.RemoveFromIndex(slug); err != nil {
+					slog.Error("failed to remove bookmark from index", "source_id", rec.SourceID, "error", err)
+					continue
+				}
+				cleanupOK := true
+				if err := v.DeleteFile(rec.WikiPath); err != nil {
+					slog.Error("failed to delete wiki file", "path", rec.WikiPath, "error", err)
+					cleanupOK = false
+				}
+				if err := v.DeleteFile(rec.RawPath); err != nil {
+					slog.Error("failed to delete raw file", "path", rec.RawPath, "error", err)
+					cleanupOK = false
+				}
+				if !cleanupOK {
+					continue // keep DB record for retry next cycle
+				}
+				if err := db.DeleteBySourceID(rec.SourceID); err != nil {
+					slog.Error("failed to delete bookmark record", "source_id", rec.SourceID, "error", err)
+				} else {
+					slog.Info("bookmark deleted from vault", "source_id", rec.SourceID, "title", rec.Title)
+					deleted++
+				}
+			}
+			if deleted > 0 {
+				slog.Info("reconciled deleted bookmarks", "count", deleted)
+			}
+		}
 	}
 
 	slog.Info("bookmarks cycle complete", "processed", processed, "failed", failed, "skipped", skipped)

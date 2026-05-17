@@ -108,6 +108,38 @@ func TestUpdateIndex_WithNotesPrefix(t *testing.T) {
 	}
 }
 
+func TestDeleteFile(t *testing.T) {
+	dir := t.TempDir()
+	v := New(dir)
+
+	// Create a file to delete
+	relPath := filepath.Join("wiki", "doomed.md")
+	if err := os.MkdirAll(filepath.Join(dir, "wiki"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, relPath), []byte("# Goodbye"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := v.DeleteFile(relPath); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, relPath)); !os.IsNotExist(err) {
+		t.Error("expected file to be deleted")
+	}
+}
+
+func TestDeleteFile_NonExistent(t *testing.T) {
+	dir := t.TempDir()
+	v := New(dir)
+
+	// Should not error for missing file
+	if err := v.DeleteFile("wiki/nonexistent.md"); err != nil {
+		t.Fatalf("DeleteFile on missing file: %v", err)
+	}
+}
+
 func TestFileExists_Present(t *testing.T) {
 	dir := t.TempDir()
 	v := New(dir)
