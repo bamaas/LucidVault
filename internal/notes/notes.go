@@ -62,11 +62,16 @@ func Scan(vaultPath string) ([]NoteFile, error) {
 			return err
 		}
 
+		title := ParseH1(string(data))
+		if title == "" {
+			title = TitleFromFilename(relPath)
+		}
+
 		files = append(files, NoteFile{
 			Path:        relPath,
 			ContentHash: hash,
 			Tags:        ParseFrontmatter(string(data)),
-			Title:       TitleFromFilename(relPath),
+			Title:       title,
 		})
 		return nil
 	})
@@ -167,6 +172,18 @@ func ParseTitle(content string) string {
 		title = strings.TrimSpace(title)
 		title = strings.Trim(title, `"'`)
 		return title
+	}
+	return ""
+}
+
+// ParseH1 extracts the first top-level heading (# ...) from markdown content.
+// Returns empty string if no H1 is found.
+func ParseH1(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "# "))
+		}
 	}
 	return ""
 }

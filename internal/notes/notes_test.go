@@ -99,8 +99,8 @@ func TestScan_SkipsEmpty(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("expected 1 file, got %d: %v", len(files), files)
 	}
-	if files[0].Title != "real" {
-		t.Errorf("expected title 'real', got %q", files[0].Title)
+	if files[0].Title != "Content" {
+		t.Errorf("expected title 'Content', got %q", files[0].Title)
 	}
 }
 
