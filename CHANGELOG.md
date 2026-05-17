@@ -1,3 +1,9 @@
+## v0.6.2 (2026-05-17)
+
+### Fix
+
+- derive note title from first H1 heading instead of filename slug (#35)
+
 ## v0.6.1 (2026-05-16)
 
 ### Fix
