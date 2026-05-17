@@ -1,3 +1,9 @@
+## v0.8.0 (2026-05-17)
+
+### Feat
+
+- sync bookmark deletions from source to vault (#39)
+
 ## v0.7.0 (2026-05-17)
 
 ### Feat
