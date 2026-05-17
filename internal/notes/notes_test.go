@@ -234,6 +234,54 @@ func TestParseTitle(t *testing.T) {
 	}
 }
 
+// TestStripFrontmatter verifies removal of YAML frontmatter from content.
+func TestStripFrontmatter(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "with frontmatter",
+			content: "---\ntitle: Test\ntags:\n  - foo\n---\n# Body\n\nContent here.",
+			want:    "# Body\n\nContent here.",
+		},
+		{
+			name:    "no frontmatter",
+			content: "# Just content\n\nNo frontmatter.",
+			want:    "# Just content\n\nNo frontmatter.",
+		},
+		{
+			name:    "empty frontmatter",
+			content: "---\n---\n# Body",
+			want:    "# Body",
+		},
+		{
+			name:    "crlf",
+			content: "---\r\ntitle: Test\r\n---\r\n# Body",
+			want:    "# Body",
+		},
+		{
+			name:    "frontmatter only",
+			content: "---\ntitle: Test\n---\n",
+			want:    "",
+		},
+		{
+			name:    "empty content",
+			content: "",
+			want:    "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := StripFrontmatter(tc.content)
+			if got != tc.want {
+				t.Errorf("StripFrontmatter() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestTitleFromFilename verifies various path inputs produce the correct base name.
 func TestTitleFromFilename(t *testing.T) {
 	cases := []struct {

@@ -24,6 +24,13 @@ type Client struct {
 	delayMs    int
 }
 
+type TagInput struct {
+	Content string
+	Title   string
+	Index   string
+	Profile string
+}
+
 type EnrichInput struct {
 	Content     string
 	Index       string
@@ -128,6 +135,116 @@ func (c *Client) Enrich(ctx context.Context, input *EnrichInput) (string, error)
 	}
 
 	return buildMinimalPage(input), nil
+}
+
+// SuggestTags generates tags for a note using a lightweight LLM prompt.
+// Returns a fallback ["untagged"] on persistent failure instead of an error,
+// unless the context is cancelled.
+func (c *Client) SuggestTags(ctx context.Context, input *TagInput) ([]string, error) {
+	prompt := buildTagPrompt(input)
+
+	// Proactive delay between calls (context-aware)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(time.Duration(c.delayMs) * time.Millisecond):
+	}
+
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		result, statusCode, err := c.callAPI(ctx, prompt)
+		if err == nil {
+			tags := parseTags(cleanResponse(result))
+			if len(tags) > 0 {
+				return tags, nil
+			}
+			if attempt < c.maxRetries {
+				slog.Warn("SuggestTags: empty tags from LLM, retrying", "attempt", attempt+1)
+				continue
+			}
+			slog.Warn("SuggestTags: empty tags after retries, using fallback")
+			return []string{"untagged"}, nil
+		}
+
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		if statusCode == 429 {
+			wait := time.Second * time.Duration(1<<attempt)
+			slog.Warn("SuggestTags: rate limited, backing off", "attempt", attempt+1, "wait", wait)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+			continue
+		}
+
+		if attempt == c.maxRetries {
+			slog.Warn("SuggestTags: failed after retries, using fallback", "error", err)
+			return []string{"untagged"}, nil
+		}
+
+		slog.Warn("SuggestTags: call failed, retrying", "attempt", attempt+1, "error", err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Second * time.Duration(1<<attempt)):
+		}
+	}
+
+	return []string{"untagged"}, nil
+}
+
+// parseTags extracts tags from an LLM response. Handles comma-separated,
+// newline-separated, and bullet-list formats.
+func parseTags(response string) []string {
+	response = strings.TrimSpace(response)
+	if response == "" {
+		return nil
+	}
+
+	var raw []string
+	if strings.Contains(response, ",") {
+		raw = strings.Split(response, ",")
+	} else {
+		raw = strings.Split(response, "\n")
+	}
+
+	var tags []string
+	for _, t := range raw {
+		t = strings.TrimSpace(t)
+		t = strings.TrimPrefix(t, "-")
+		t = strings.TrimPrefix(t, "*")
+		t = strings.TrimSpace(t)
+		t = strings.Trim(t, "`\"'")
+		if t != "" {
+			tags = append(tags, t)
+		}
+	}
+	return tags
+}
+
+func buildTagPrompt(input *TagInput) string {
+	var b strings.Builder
+	b.WriteString("You are a tagging assistant for a personal knowledge base.\n")
+	b.WriteString("Given the note below, suggest 3-5 tags that would help find it later.\n\n")
+	b.WriteString("Rules:\n")
+	b.WriteString("- Use lowercase, hyphen-separated tags (e.g. distributed-systems, go-lang)\n")
+	b.WriteString("- Include domain tags (programming, infrastructure, ai, productivity)\n")
+	b.WriteString("- Be specific enough to be useful, not so generic they match everything\n")
+	b.WriteString("- Output ONLY the tags as a comma-separated list, nothing else\n\n")
+
+	if input.Profile != "" {
+		fmt.Fprintf(&b, "## User Profile\n\n%s\n\n", input.Profile)
+	}
+	if input.Index != "" {
+		fmt.Fprintf(&b, "## Existing Index\n\n%s\n\n", input.Index)
+	}
+
+	fmt.Fprintf(&b, "## Note Title\n\n%s\n\n", input.Title)
+	fmt.Fprintf(&b, "## Note Content\n\n%s", input.Content)
+	return b.String()
 }
 
 func (c *Client) callAPI(ctx context.Context, prompt string) (string, int, error) {

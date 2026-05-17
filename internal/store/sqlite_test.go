@@ -93,7 +93,7 @@ func TestDeleteBySourceID_Idempotent(t *testing.T) {
 func TestUpsertNote_New(t *testing.T) {
 	s := newTestStore(t)
 
-	if err := s.UpsertNote("notes/foo.md", "abc123"); err != nil {
+	if err := s.UpsertNote("notes/foo.md", "abc123", "wiki/foo.md"); err != nil {
 		t.Fatalf("UpsertNote: %v", err)
 	}
 
@@ -109,11 +109,11 @@ func TestUpsertNote_New(t *testing.T) {
 func TestUpsertNote_Update(t *testing.T) {
 	s := newTestStore(t)
 
-	if err := s.UpsertNote("notes/foo.md", "abc123"); err != nil {
+	if err := s.UpsertNote("notes/foo.md", "abc123", "wiki/foo.md"); err != nil {
 		t.Fatalf("UpsertNote (initial): %v", err)
 	}
 
-	if err := s.UpsertNote("notes/foo.md", "def456"); err != nil {
+	if err := s.UpsertNote("notes/foo.md", "def456", "wiki/foo.md"); err != nil {
 		t.Fatalf("UpsertNote (update): %v", err)
 	}
 
@@ -123,6 +123,25 @@ func TestUpsertNote_Update(t *testing.T) {
 	}
 	if hash != "def456" {
 		t.Errorf("hash = %q, want %q after update", hash, "def456")
+	}
+}
+
+func TestUpsertNote_WikiPath(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/bar.md", "hash1", "wiki/bar.md"); err != nil {
+		t.Fatalf("UpsertNote: %v", err)
+	}
+
+	records, err := s.ListNotes()
+	if err != nil {
+		t.Fatalf("ListNotes: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].WikiPath != "wiki/bar.md" {
+		t.Errorf("WikiPath = %q, want %q", records[0].WikiPath, "wiki/bar.md")
 	}
 }
 
@@ -141,7 +160,7 @@ func TestGetNoteHash_NotFound(t *testing.T) {
 func TestDeleteNote(t *testing.T) {
 	s := newTestStore(t)
 
-	if err := s.UpsertNote("notes/foo.md", "abc123"); err != nil {
+	if err := s.UpsertNote("notes/foo.md", "abc123", "wiki/foo.md"); err != nil {
 		t.Fatalf("UpsertNote: %v", err)
 	}
 
@@ -217,10 +236,10 @@ func TestListBookmarks(t *testing.T) {
 func TestListNotes(t *testing.T) {
 	s := newTestStore(t)
 
-	if err := s.UpsertNote("notes/alpha.md", "hash1"); err != nil {
+	if err := s.UpsertNote("notes/alpha.md", "hash1", "wiki/alpha.md"); err != nil {
 		t.Fatalf("UpsertNote alpha: %v", err)
 	}
-	if err := s.UpsertNote("notes/beta.md", "hash2"); err != nil {
+	if err := s.UpsertNote("notes/beta.md", "hash2", "wiki/beta.md"); err != nil {
 		t.Fatalf("UpsertNote beta: %v", err)
 	}
 

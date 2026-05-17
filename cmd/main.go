@@ -140,7 +140,7 @@ func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scrape
 		return
 	}
 	processBookmarks(ctx, cfg, rd, sc, en, db, v)
-	processNotes(ctx, db, v)
+	processNotes(ctx, en, db, v)
 }
 
 func processBookmarks(ctx context.Context, cfg *config, rd source.Client, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) {
@@ -246,7 +246,7 @@ func processBookmarks(ctx context.Context, cfg *config, rd source.Client, sc *sc
 	slog.Info("bookmarks cycle complete", "processed", processed, "failed", failed, "skipped", skipped)
 }
 
-func processNotes(ctx context.Context, db *store.Store, v *vault.Vault) {
+func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *vault.Vault) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -265,6 +265,16 @@ func processNotes(ctx context.Context, db *store.Store, v *vault.Vault) {
 	scannedPaths := make(map[string]struct{}, len(scanned))
 	for _, nf := range scanned {
 		scannedPaths[nf.Path] = struct{}{}
+	}
+
+	// Read index and soul for tag suggestion context
+	index, err := v.ReadIndex()
+	if err != nil {
+		slog.Warn("failed to read index.md for notes", "error", err)
+	}
+	profile, err := v.ReadSoul()
+	if err != nil {
+		slog.Warn("failed to read soul.md for notes", "error", err)
 	}
 
 	var indexed, updated, skipped int
@@ -286,37 +296,75 @@ func processNotes(ctx context.Context, db *store.Store, v *vault.Vault) {
 			continue
 		}
 
-		// Derive slug from path: "notes/sub/my-note.md" → "notes/sub/my-note"
-		slug := strings.TrimSuffix(nf.Path, ".md")
+		// Read note content for wiki copy
+		absPath := filepath.Join(v.BasePath, nf.Path)
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			slog.Error("failed to read note file", "path", nf.Path, "error", err)
+			continue
+		}
+		content := string(data)
 
-		// Remove existing entry first so tags/title get refreshed on updates
+		// Determine tags: use existing tags or auto-generate via LLM
+		tags := nf.Tags
+		if len(tags) == 0 {
+			slog.Info("auto-tagging note", "path", nf.Path)
+			tags, err = en.SuggestTags(ctx, &enrich.TagInput{
+				Content: content,
+				Title:   nf.Title,
+				Index:   index,
+				Profile: profile,
+			})
+			if err != nil {
+				slog.Error("failed to suggest tags for note", "path", nf.Path, "error", err)
+				continue
+			}
+		}
+
+		// Build wiki copy: frontmatter + original body (stripped of existing frontmatter)
+		body := notes.StripFrontmatter(content)
+		wikiContent := buildNoteWikiContent(nf.Title, tags, body)
+
+		// Wiki slug from filename: "notes/sub/my-note.md" → "my-note"
+		wikiSlug := notes.TitleFromFilename(nf.Path)
+		wikiFilename := wikiSlug + ".md"
+
+		// Remove old index entry (may be under old slug)
 		if existingHash != "" {
-			if err := v.RemoveFromIndex(slug); err != nil {
+			if err := v.RemoveFromIndex(wikiSlug); err != nil {
 				slog.Error("failed to remove old index entry for note", "path", nf.Path, "error", err)
 				continue
 			}
 		}
 
-		if err := v.UpdateIndex(slug, nf.Title, nf.Tags); err != nil {
+		// Write wiki copy
+		wikiPath, err := v.WriteWiki(wikiFilename, wikiContent)
+		if err != nil {
+			slog.Error("failed to write wiki copy for note", "path", nf.Path, "error", err)
+			continue
+		}
+
+		// Index the wiki slug (not the notes/ path)
+		if err := v.UpdateIndex(wikiSlug, nf.Title, tags); err != nil {
 			slog.Error("failed to update index for note", "path", nf.Path, "error", err)
 			continue
 		}
 
-		if err := db.UpsertNote(nf.Path, nf.ContentHash); err != nil {
+		if err := db.UpsertNote(nf.Path, nf.ContentHash, wikiPath); err != nil {
 			slog.Error("failed to upsert note record", "path", nf.Path, "error", err)
 			continue
 		}
 
 		if existingHash == "" {
-			slog.Info("note indexed", "path", nf.Path)
+			slog.Info("note indexed", "path", nf.Path, "wiki", wikiPath)
 			indexed++
 		} else {
-			slog.Info("note updated", "path", nf.Path)
+			slog.Info("note updated", "path", nf.Path, "wiki", wikiPath)
 			updated++
 		}
 	}
 
-	// Reconcile deletions: remove DB records for notes no longer on disk
+	// Reconcile deletions: remove DB records and wiki copies for notes no longer on disk
 	if ctx.Err() != nil {
 		return
 	}
@@ -329,10 +377,17 @@ func processNotes(ctx context.Context, db *store.Store, v *vault.Vault) {
 			if _, exists := scannedPaths[rec.Path]; exists {
 				continue
 			}
-			slug := strings.TrimSuffix(rec.Path, ".md")
-			if err := v.RemoveFromIndex(slug); err != nil {
+			// Remove index entry by wiki slug
+			wikiSlug := notes.TitleFromFilename(rec.Path)
+			if err := v.RemoveFromIndex(wikiSlug); err != nil {
 				slog.Error("failed to remove note from index", "path", rec.Path, "error", err)
 				continue
+			}
+			// Delete wiki copy if it exists
+			if rec.WikiPath != "" {
+				if err := v.DeleteFile(rec.WikiPath); err != nil {
+					slog.Error("failed to delete wiki copy for note", "path", rec.WikiPath, "error", err)
+				}
 			}
 			if err := db.DeleteNote(rec.Path); err != nil {
 				slog.Error("failed to delete note record", "path", rec.Path, "error", err)
@@ -347,6 +402,23 @@ func processNotes(ctx context.Context, db *store.Store, v *vault.Vault) {
 	}
 
 	slog.Info("notes cycle complete", "indexed", indexed, "updated", updated, "skipped", skipped)
+}
+
+func buildNoteWikiContent(title string, tags []string, body string) string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	fmt.Fprintf(&b, "title: %q\n", title)
+	b.WriteString("tags:\n")
+	for _, t := range tags {
+		fmt.Fprintf(&b, "  - %s\n", t)
+	}
+	b.WriteString("type: note\n")
+	b.WriteString("---\n\n")
+	if body != "" {
+		b.WriteString(body)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 var errSkipped = fmt.Errorf("skipped")

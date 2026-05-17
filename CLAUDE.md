@@ -16,7 +16,9 @@ Poll loop (configurable interval)
   │
   └─ processNotes:
        notes.Scan(vaultPath)              → detect new/changed notes
-       store.UpsertNote()                 → track content hashes
+       enrich.SuggestTags(content)        → auto-tag notes without tags (Ollama Cloud)
+       vault.WriteWiki() + vault.UpdateIndex()  → wiki copy with tags
+       store.UpsertNote()                 → track content hashes + wiki path
 ```
 
 ## Project Structure
@@ -37,7 +39,7 @@ internal/vault/          — Vault file writer, slug/URL helpers
 
 - **`source.Client`** — `FetchBookmarks(ctx) ([]Bookmark, error)`. Implementations register via `source.Register(name, factory)`. Create with `source.NewClient(name, token)`.
 - **`scraper.Scraper`** — `Scrape(ctx, url) (*Result, error)`. Uses Jina Reader; delegates YouTube URLs to `YouTubeClient` (Supadata).
-- **`enrich.Client`** — `Enrich(ctx, *EnrichInput) (string, error)`. Calls Ollama Cloud with retry logic. Returns wiki-formatted markdown.
+- **`enrich.Client`** — `Enrich(ctx, *EnrichInput) (string, error)`. Calls Ollama Cloud with retry logic. Returns wiki-formatted markdown. `SuggestTags(ctx, *TagInput) ([]string, error)` generates tags for notes.
 - **`vault.Vault`** — `WriteRaw()`, `WriteWiki()`, `UpdateIndex()`, `RemoveFromIndex()`. Manages file layout and `index.md`.
 - **`store.Store`** — SQLite-backed deduplication. Tracks processed bookmarks (by source ID and URL) and note content hashes.
 
