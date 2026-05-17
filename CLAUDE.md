@@ -2,6 +2,23 @@
 
 AI-powered personal knowledge base. Polls Raindrop.io, scrapes via Jina Reader, enriches via Ollama Cloud, writes to Obsidian vault.
 
+## Pipeline
+
+```text
+Poll loop (configurable interval)
+  │
+  ├─ processBookmarks:
+  │    source.Client.FetchBookmarks()     → []Bookmark
+  │    scraper.Scrape(url)                → markdown content (Jina Reader; YouTube via Supadata)
+  │    enrich.Enrich(content)             → wiki-style summary (Ollama Cloud)
+  │    vault.WriteRaw() + vault.WriteWiki() + vault.UpdateIndex()
+  │    store.SaveBookmark()               → mark processed in SQLite
+  │
+  └─ processNotes:
+       notes.Scan(vaultPath)              → detect new/changed notes
+       store.UpsertNote()                 → track content hashes
+```
+
 ## Project Structure
 
 ```text
@@ -16,14 +33,24 @@ internal/store/          — SQLite state (modernc.org/sqlite, pure Go)
 internal/vault/          — Vault file writer, slug/URL helpers
 ```
 
-## Build & Run
+## Key Interfaces
+
+- **`source.Client`** — `FetchBookmarks(ctx) ([]Bookmark, error)`. Implementations register via `source.Register(name, factory)`. Create with `source.NewClient(name, token)`.
+- **`scraper.Scraper`** — `Scrape(ctx, url) (*Result, error)`. Uses Jina Reader; delegates YouTube URLs to `YouTubeClient` (Supadata).
+- **`enrich.Client`** — `Enrich(ctx, *EnrichInput) (string, error)`. Calls Ollama Cloud with retry logic. Returns wiki-formatted markdown.
+- **`vault.Vault`** — `WriteRaw()`, `WriteWiki()`, `UpdateIndex()`, `RemoveFromIndex()`. Manages file layout and `index.md`.
+- **`store.Store`** — SQLite-backed deduplication. Tracks processed bookmarks (by source ID and URL) and note content hashes.
+
+## Build, Test & Lint
 
 ```bash
 mise run build:binary          # Build Go binary
-mise run run:binary            # Run locally
 mise run build:image           # Build Docker image
+mise run run:binary            # Run locally
 mise run run:container         # Run in Docker
-mise run lint:go               # golangci-lint
+mise run test                  # go test ./...
+mise run lint                  # All linters (go, dockerfile, actions, vuln, yaml, markdown)
+mise run lint:go               # golangci-lint only
 mise run lint:commits          # Check commit message (used by commit-msg hook)
 ```
 
@@ -34,6 +61,16 @@ mise run lint:commits          # Check commit message (used by commit-msg hook)
 - **Accept interfaces, return structs**
 - **Error wrapping** — Always `fmt.Errorf("context: %w", err)`
 - **Pure Go, no CGO** — `modernc.org/sqlite`, not `mattn/go-sqlite3`
+- **Simplicity first** — Make every change as simple as possible, impact minimal code
+- **Minimal impact** — Changes should only touch what's necessary
+
+## Common Gotchas
+
+- **Pure-Go SQLite** — Uses `modernc.org/sqlite` (no CGO). Don't import `mattn/go-sqlite3`. Build tags for CGO will break the build.
+- **Jina Reader rate limits** — Scraper makes HTTP calls to `r.jina.ai`. Respect rate limits; the poll interval naturally throttles.
+- **Ollama Cloud retries** — `enrich.Client` has built-in retry with configurable `maxRetries` and `delayMs`. Don't add external retry wrappers.
+- **Source registry** — New sources must call `source.Register()` in an `init()` function and be imported in `cmd/main.go`.
+- **Vault index.md** — `vault.UpdateIndex()` appends to `index.md`. `RemoveFromIndex()` removes. Both are idempotent by slug.
 
 ## Required Environment Variables
 
@@ -114,15 +151,9 @@ Every architectural or design decision **must** have an ADR in `docs/adr/`. Keep
 
 ## Task Management
 
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
+1. **Plan First**: Write plan to `tasks/todo.md` with checkable items (created on-demand, gitignored)
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
 5. **Document Results**: Add review section to `tasks/todo.md`
-6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
-
-## Core Principles
-
-- **Simplicity First**: Make every change as simple as possible. Impact minimal code.
-- **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
-- **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
+6. **Capture Lessons**: Update `tasks/lessons.md` after corrections (created on-demand, gitignored)
