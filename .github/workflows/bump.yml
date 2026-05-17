@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   bump:
@@ -72,7 +73,7 @@ jobs:
       - name: Trigger release
         if: steps.bump.outputs.bumped == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh workflow run release.yml \
             -f version=${{ steps.bump.outputs.version }} \
