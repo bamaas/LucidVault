@@ -441,6 +441,154 @@ func TestRunPollCycle_ReconcilesEmptyWikiFile(t *testing.T) {
 	}
 }
 
+func TestProcessBookmarks_EmptyFetchPreservesBookmarks(t *testing.T) {
+	_, db, v, sc, en := setupTestEnv(t)
+
+	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	ms := &mockSource{
+		bookmarks: []source.Bookmark{
+			{ID: 80, Title: "Should Survive", Link: "http://example.com/survive", Created: t1},
+		},
+	}
+
+	cfg := &config{
+		enrichDelayMs: 0,
+		enrichRetries: 0,
+	}
+
+	ctx := context.Background()
+
+	// First run: process the bookmark
+	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+
+	exists, err := db.IsProcessedBySourceID(80)
+	if err != nil {
+		t.Fatalf("checking source_id 80: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected bookmark 80 to be processed after first run")
+	}
+
+	// Second run: source returns empty (simulating API glitch)
+	ms.bookmarks = nil
+	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+
+	// Bookmark must still exist — empty fetch must not wipe the vault
+	exists, err = db.IsProcessedBySourceID(80)
+	if err != nil {
+		t.Fatalf("checking source_id 80 after empty fetch: %v", err)
+	}
+	if !exists {
+		t.Error("expected bookmark 80 to survive an empty fetch — reconciliation should be skipped")
+	}
+}
+
+func TestProcessBookmarks_ReconcilesDeletedBookmark(t *testing.T) {
+	tmpDir, db, v, sc, en := setupTestEnv(t)
+
+	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
+
+	ms := &mockSource{
+		bookmarks: []source.Bookmark{
+			{ID: 70, Title: "Keep Me", Link: "http://example.com/keep", Created: t1},
+			{ID: 71, Title: "Delete Me", Link: "http://example.com/delete", Created: t2},
+		},
+	}
+
+	cfg := &config{
+		enrichDelayMs: 0,
+		enrichRetries: 0,
+	}
+
+	ctx := context.Background()
+
+	// First run: process both bookmarks
+	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+
+	// Verify both are processed
+	for _, id := range []int{70, 71} {
+		exists, err := db.IsProcessedBySourceID(id)
+		if err != nil {
+			t.Fatalf("checking source_id %d: %v", id, err)
+		}
+		if !exists {
+			t.Fatalf("expected bookmark %d to be processed after first run", id)
+		}
+	}
+
+	// Verify files exist
+	wikiKeep := filepath.Join(tmpDir, "wiki", "keep-me.md")
+	wikiDelete := filepath.Join(tmpDir, "wiki", "delete-me.md")
+	rawDelete := filepath.Join(tmpDir, "raw")
+
+	if _, err := os.Stat(wikiKeep); os.IsNotExist(err) {
+		t.Fatal("expected keep-me wiki file to exist")
+	}
+	if _, err := os.Stat(wikiDelete); os.IsNotExist(err) {
+		t.Fatal("expected delete-me wiki file to exist")
+	}
+
+	// Find the raw file for bookmark 71
+	rec, err := db.GetBookmarkBySourceID(71)
+	if err != nil {
+		t.Fatalf("GetBookmarkBySourceID: %v", err)
+	}
+	rawDeletePath := filepath.Join(tmpDir, rec.RawPath)
+	if _, err := os.Stat(rawDeletePath); os.IsNotExist(err) {
+		t.Fatal("expected delete-me raw file to exist")
+	}
+
+	// Verify index contains both
+	indexPath := filepath.Join(tmpDir, "index.md")
+	assertContains(t, readFile(t, indexPath), "[[keep-me]]")
+	assertContains(t, readFile(t, indexPath), "[[delete-me]]")
+
+	// Second run: remove bookmark 71 from source (simulating Raindrop deletion)
+	ms.bookmarks = []source.Bookmark{
+		{ID: 70, Title: "Keep Me", Link: "http://example.com/keep", Created: t1},
+	}
+	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+
+	// Verify bookmark 70 still exists
+	exists, err := db.IsProcessedBySourceID(70)
+	if err != nil {
+		t.Fatalf("checking source_id 70: %v", err)
+	}
+	if !exists {
+		t.Error("expected bookmark 70 to still exist")
+	}
+	if _, err := os.Stat(wikiKeep); os.IsNotExist(err) {
+		t.Error("expected keep-me wiki file to still exist")
+	}
+	assertContains(t, readFile(t, indexPath), "[[keep-me]]")
+
+	// Verify bookmark 71 is fully cleaned up
+	exists, err = db.IsProcessedBySourceID(71)
+	if err != nil {
+		t.Fatalf("checking source_id 71: %v", err)
+	}
+	if exists {
+		t.Error("expected bookmark 71 to be deleted from DB")
+	}
+	if _, err := os.Stat(wikiDelete); !os.IsNotExist(err) {
+		t.Error("expected delete-me wiki file to be removed")
+	}
+
+	// Check raw file is also deleted
+	rawFiles, err := filepath.Glob(filepath.Join(rawDelete, "*delete-me*"))
+	if err != nil {
+		t.Fatalf("Glob: %v", err)
+	}
+	if len(rawFiles) > 0 {
+		t.Errorf("expected delete-me raw file to be removed, found: %v", rawFiles)
+	}
+
+	// Verify index no longer contains deleted bookmark
+	assertNotContains(t, readFile(t, indexPath), "[[delete-me]]")
+}
+
 // errorSource is a mock source.Client that always returns an error.
 type errorSource struct{}
 
