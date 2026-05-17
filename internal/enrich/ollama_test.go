@@ -287,6 +287,99 @@ func TestValidateResponse(t *testing.T) {
 	}
 }
 
+func TestSuggestTags_Success(t *testing.T) {
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(chatJSON("golang, concurrency, channels"))
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 0, 0)
+	c.SetBaseURL(srv.URL)
+
+	tags, err := c.SuggestTags(context.Background(), &TagInput{
+		Content: "# Go Concurrency\n\nGoroutines and channels are great.",
+		Title:   "Go Concurrency",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tags) != 3 {
+		t.Fatalf("expected 3 tags, got %d: %v", len(tags), tags)
+	}
+	if tags[0] != "golang" || tags[1] != "concurrency" || tags[2] != "channels" {
+		t.Errorf("unexpected tags: %v", tags)
+	}
+}
+
+func TestSuggestTags_StripsWhitespaceAndBullets(t *testing.T) {
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(chatJSON("- golang\n- testing\n- tdd"))
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 0, 0)
+	c.SetBaseURL(srv.URL)
+
+	tags, err := c.SuggestTags(context.Background(), &TagInput{
+		Content: "# Testing\n\nTDD is great.",
+		Title:   "Testing",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tags) != 3 {
+		t.Fatalf("expected 3 tags, got %d: %v", len(tags), tags)
+	}
+	if tags[0] != "golang" || tags[1] != "testing" || tags[2] != "tdd" {
+		t.Errorf("unexpected tags: %v", tags)
+	}
+}
+
+func TestSuggestTags_FallbackOnError(t *testing.T) {
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("server error"))
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 0, 0)
+	c.SetBaseURL(srv.URL)
+
+	tags, err := c.SuggestTags(context.Background(), &TagInput{
+		Content: "# Test",
+		Title:   "Test",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tags) != 1 || tags[0] != "untagged" {
+		t.Errorf("expected fallback [untagged], got %v", tags)
+	}
+}
+
+func TestSuggestTags_ContextCancellation(t *testing.T) {
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 0, 0)
+	c.SetBaseURL(srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := c.SuggestTags(ctx, &TagInput{
+		Content: "# Test",
+		Title:   "Test",
+	})
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+}
+
 func TestBuildMinimalPage(t *testing.T) {
 	input := &EnrichInput{
 		Title:       "Test Title",
