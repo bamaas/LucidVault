@@ -96,10 +96,9 @@ mise run lint:commits          # Check commit message (used by commit-msg hook)
 - **Update docs on feature changes** — When adding features, changing env vars, or modifying the pipeline, update `README.md` (features, config table, tech stack, to-do) and `CLAUDE.md` (project structure, env vars) before committing.
 - **Test-Driven Development for features** — All feature requests must follow TDD:
   1. Pull latest changes from main (`git fetch origin main && git merge origin/main`) before starting
-  2. Write failing tests first that define the expected behavior
-  3. Get user confirmation that the tests capture the requirements correctly
-  4. Implement the minimum code to make the tests pass
-  5. Refactor if needed while keeping tests green
+  2. Write failing tests first that define the expected behavior (via subagent, spec-only — no implementation knowledge)
+  3. Implement the minimum code to make the tests pass
+  4. Refactor if needed while keeping tests green
 
 ## ADRs
 
