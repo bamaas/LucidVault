@@ -33,17 +33,29 @@ type config struct {
 	enrichRetries  int
 	supadataAPIKey string
 	forceReEnrich  bool
+	forceReFetch   bool
 }
 
 func main() {
 	reEnrich := flag.Bool("re-enrich", false, "re-enrich all bookmarks using updated prompt, then exit")
+	reFetch := flag.Bool("re-fetch", false, "re-fetch all bookmarks from external sources to inbox, then exit")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	cfg, err := loadConfig(*reEnrich)
+	if *reEnrich && *reFetch {
+		slog.Error("--re-enrich and --re-fetch are mutually exclusive")
+		os.Exit(1)
+	}
+
+	cfg, err := loadConfig(*reEnrich, *reFetch)
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
+
+	if cfg.forceReFetch && cfg.raindropToken == "" {
+		slog.Error("--re-fetch requires an external source (set RAINDROP_ACCESS_TOKEN)")
 		os.Exit(1)
 	}
 
@@ -115,6 +127,7 @@ func main() {
 		"model", cfg.ollamaModel,
 		"raindrop_enabled", rd != nil,
 		"force_re_enrich", cfg.forceReEnrich,
+		"force_re_fetch", cfg.forceReFetch,
 	)
 
 	// Run immediately on startup, then on ticker
@@ -122,6 +135,11 @@ func main() {
 
 	if cfg.forceReEnrich {
 		slog.Info("re-enrichment complete, exiting")
+		return
+	}
+
+	if cfg.forceReFetch {
+		slog.Info("re-fetch complete, exiting")
 		return
 	}
 
@@ -146,7 +164,7 @@ func runPollCycle(ctx context.Context, cfg *config, rd *raindrop.Client, sc *scr
 
 	// Step 1: Sync Raindrop bookmarks to inbox (optional)
 	if rd != nil {
-		syncRaindropToInbox(ctx, rd, db, v)
+		syncRaindropToInbox(ctx, rd, db, v, cfg.forceReFetch)
 	}
 
 	// Step 2: Process inbox
@@ -160,7 +178,7 @@ func runPollCycle(ctx context.Context, cfg *config, rd *raindrop.Client, sc *scr
 	processNotes(ctx, en, db, v)
 }
 
-func syncRaindropToInbox(ctx context.Context, rd *raindrop.Client, db *store.Store, v *vault.Vault) {
+func syncRaindropToInbox(ctx context.Context, rd *raindrop.Client, db *store.Store, v *vault.Vault, force bool) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -173,7 +191,7 @@ func syncRaindropToInbox(ctx context.Context, rd *raindrop.Client, db *store.Sto
 		return
 	}
 
-	created, err := raindrop.SyncToInbox(bookmarks, db, v.BasePath)
+	created, err := raindrop.SyncToInbox(bookmarks, db, v.BasePath, force)
 	if err != nil {
 		slog.Error("failed to sync bookmarks to inbox", "error", err)
 		return
@@ -635,7 +653,7 @@ func buildNoteWikiContent(title string, tags []string, body string) string {
 	return b.String()
 }
 
-func loadConfig(forceReEnrich bool) (*config, error) {
+func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 	raindropToken := os.Getenv("RAINDROP_ACCESS_TOKEN")
 
 	apiKey := os.Getenv("OLLAMA_API_KEY")
@@ -692,6 +710,7 @@ func loadConfig(forceReEnrich bool) (*config, error) {
 		enrichRetries:  enrichRetries,
 		supadataAPIKey: supadataAPIKey,
 		forceReEnrich:  forceReEnrich,
+		forceReFetch:   forceReFetch,
 	}, nil
 }
 
