@@ -1,3 +1,9 @@
+## v0.10.2 (2026-05-18)
+
+### Fix
+
+- process inbox items one at a time instead of loading all into memory (#46)
+
 ## v0.10.1 (2026-05-18)
 
 ### Fix
