@@ -43,7 +43,7 @@ func SyncToInbox(bookmarks []Bookmark, db *store.Store, vaultPath string) (int, 
 		// Write inbox file
 		content := formatInboxFile(bm)
 		if err := os.WriteFile(inboxFile, []byte(content), 0o644); err != nil {
-			return created, fmt.Errorf("writing inbox file %s: %w", slug, err)
+			return created, fmt.Errorf("writing inbox file %s: %w", inboxFile, err)
 		}
 
 		slog.Info("created inbox file from raindrop", "title", bm.Title, "slug", slug)
