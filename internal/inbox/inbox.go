@@ -34,45 +34,76 @@ func Scan(vaultPath string) ([]Item, error) {
 
 	var items []Item
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
+		item, ok := parseEntry(inboxDir, entry)
+		if ok {
+			items = append(items, item)
 		}
-
-		absPath := filepath.Join(inboxDir, entry.Name())
-		data, err := os.ReadFile(absPath)
-		if err != nil {
-			slog.Warn("skipping unreadable inbox file", "file", entry.Name(), "error", err)
-			continue
-		}
-
-		content := string(data)
-		if strings.TrimSpace(content) == "" {
-			slog.Warn("skipping empty inbox file", "file", entry.Name())
-			continue
-		}
-
-		url := extractURL(content)
-		if url == "" {
-			slog.Warn("skipping inbox file without URL", "file", entry.Name())
-			continue
-		}
-
-		title := notes.ParseTitle(content)
-		if title == "" {
-			title = notes.TitleFromFilename(entry.Name())
-		}
-
-		tags := notes.ParseFrontmatter(content)
-
-		items = append(items, Item{
-			Path:  absPath,
-			URL:   url,
-			Title: title,
-			Tags:  tags,
-		})
 	}
 
 	return items, nil
+}
+
+// ScanNext reads the inbox directory and returns the first valid item,
+// skipping any paths in the skip set. Returns nil if no items remain.
+func ScanNext(vaultPath string, skip map[string]bool) (*Item, error) {
+	inboxDir := filepath.Join(vaultPath, "inbox")
+
+	if _, err := os.Stat(inboxDir); os.IsNotExist(err) {
+		return nil, nil
+	}
+
+	entries, err := os.ReadDir(inboxDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading inbox directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		item, ok := parseEntry(inboxDir, entry)
+		if ok && !skip[item.Path] {
+			return &item, nil
+		}
+	}
+
+	return nil, nil
+}
+
+func parseEntry(inboxDir string, entry os.DirEntry) (Item, bool) {
+	if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+		return Item{}, false
+	}
+
+	absPath := filepath.Join(inboxDir, entry.Name())
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		slog.Warn("skipping unreadable inbox file", "file", entry.Name(), "error", err)
+		return Item{}, false
+	}
+
+	content := string(data)
+	if strings.TrimSpace(content) == "" {
+		slog.Warn("skipping empty inbox file", "file", entry.Name())
+		return Item{}, false
+	}
+
+	url := extractURL(content)
+	if url == "" {
+		slog.Warn("skipping inbox file without URL", "file", entry.Name())
+		return Item{}, false
+	}
+
+	title := notes.ParseTitle(content)
+	if title == "" {
+		title = notes.TitleFromFilename(entry.Name())
+	}
+
+	tags := notes.ParseFrontmatter(content)
+
+	return Item{
+		Path:  absPath,
+		URL:   url,
+		Title: title,
+		Tags:  tags,
+	}, true
 }
 
 // Delete removes a processed inbox file. Returns nil if the file doesn't exist.

@@ -189,27 +189,28 @@ func processInbox(ctx context.Context, sc *scraper.Scraper, en *enrich.Client, d
 
 	slog.Info("processing inbox")
 
-	items, err := inbox.Scan(v.BasePath)
-	if err != nil {
-		slog.Error("failed to scan inbox", "error", err)
-		return
-	}
-
-	if len(items) == 0 {
-		slog.Info("inbox empty, nothing to process")
-		return
-	}
-
 	var processed, failed int
+	failedPaths := make(map[string]bool)
 
-	for _, item := range items {
+	for {
 		if ctx.Err() != nil {
 			slog.Info("shutdown requested, stopping processing")
 			break
 		}
 
-		if err := processInboxItem(ctx, item, sc, en, db, v); err != nil {
+		item, err := inbox.ScanNext(v.BasePath, failedPaths)
+		if err != nil {
+			slog.Error("failed to scan inbox", "error", err)
+			break
+		}
+
+		if item == nil {
+			break
+		}
+
+		if err := processInboxItem(ctx, *item, sc, en, db, v); err != nil {
 			slog.Error("failed to process inbox item", "url", item.URL, "error", err)
+			failedPaths[item.Path] = true
 			failed++
 			continue
 		}
@@ -220,6 +221,11 @@ func processInbox(ctx context.Context, sc *scraper.Scraper, en *enrich.Client, d
 		}
 
 		processed++
+	}
+
+	if processed == 0 && failed == 0 {
+		slog.Info("inbox empty, nothing to process")
+		return
 	}
 
 	if failed > 0 {
