@@ -1,3 +1,9 @@
+## v0.10.0 (2026-05-18)
+
+### Feat
+
+- vault inbox as single processing entry point (#44)
+
 ## v0.9.0 (2026-05-17)
 
 ### Feat
