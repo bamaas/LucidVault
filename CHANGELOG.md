@@ -1,3 +1,9 @@
+## v0.12.0 (2026-05-18)
+
+### Feat
+
+- **cmd**: add composable TDD pipeline commands (#52)
+
 ## v0.11.1 (2026-05-18)
 
 ### Fix
