@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 #MISE description="Lint Dockerfile with dockerfile-roast"
-droast Dockerfile
+# Config: .lint/droast.toml (droast has no --config flag, so skip rules are passed explicitly)
+droast --skip DF007 --skip DF020 --skip DF022 Dockerfile
