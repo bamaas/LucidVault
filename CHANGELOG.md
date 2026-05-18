@@ -1,3 +1,9 @@
+## v0.10.1 (2026-05-18)
+
+### Fix
+
+- use nogroup instead of nobody group in Dockerfile (#45)
+
 ## v0.10.0 (2026-05-18)
 
 ### Feat
