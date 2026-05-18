@@ -9,3 +9,4 @@ test-vault/
 .mise/config.local.toml
 .ignore
 tasks/
+plan.md

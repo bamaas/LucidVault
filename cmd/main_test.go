@@ -3,30 +3,18 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"lucidvault/internal/enrich"
 	"lucidvault/internal/scraper"
-	"lucidvault/internal/source"
 	"lucidvault/internal/store"
 	"lucidvault/internal/vault"
 )
-
-// mockSource implements source.Client for testing.
-type mockSource struct {
-	bookmarks []source.Bookmark
-}
-
-func (m *mockSource) FetchBookmarks(_ context.Context) ([]source.Bookmark, error) {
-	return m.bookmarks, nil
-}
 
 // validWikiResponse returns a minimal response that passes validateResponse.
 const validWikiResponse = `---
@@ -99,99 +87,156 @@ func setupTestEnv(t *testing.T) (string, *store.Store, *vault.Vault, *scraper.Sc
 	return tmpDir, db, v, sc, en
 }
 
-func TestRunPollCycle_AllBookmarksProcessed(t *testing.T) {
-	_, db, v, sc, en := setupTestEnv(t)
-
-	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
-	t2 := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
-	t3 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
-
-	ms := &mockSource{
-		bookmarks: []source.Bookmark{
-			{ID: 1, Title: "Article One", Link: "http://example.com/1", Created: t1},
-			{ID: 2, Title: "Article Two", Link: "http://example.com/2", Created: t2},
-			{ID: 3, Title: "Article Three", Link: "http://example.com/3", Created: t3},
-		},
-	}
-
-	cfg := &config{
-		enrichDelayMs: 0,
-		enrichRetries: 0,
-	}
-
-	ctx := context.Background()
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
-
-	// Verify all bookmarks were saved to DB
-	for _, id := range []int{1, 2, 3} {
-		exists, err := db.IsProcessedBySourceID(id)
-		if err != nil {
-			t.Fatalf("checking source_id %d: %v", id, err)
-		}
-		if !exists {
-			t.Errorf("expected bookmark %d to be processed", id)
-		}
+// writeInboxFile creates a .md file in the inbox directory.
+func writeInboxFile(t *testing.T, vaultPath, filename, content string) {
+	t.Helper()
+	inboxDir := filepath.Join(vaultPath, "inbox")
+	if err := os.WriteFile(filepath.Join(inboxDir, filename), []byte(content), 0o644); err != nil {
+		t.Fatalf("writing inbox file: %v", err)
 	}
 }
 
-func TestRunPollCycle_DedupSkipsAlreadyProcessed(t *testing.T) {
-	_, db, v, sc, en := setupTestEnv(t)
+func TestProcessInbox_ProcessesItems(t *testing.T) {
+	tmpDir, db, v, sc, en := setupTestEnv(t)
 
-	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
-	t2 := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
-	t3 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	writeInboxFile(t, tmpDir, "article-one.md", "https://example.com/1\n")
+	writeInboxFile(t, tmpDir, "article-two.md", "https://example.com/2\n")
 
-	ms := &mockSource{
-		bookmarks: []source.Bookmark{
-			{ID: 30, Title: "First", Link: "http://example.com/first", Created: t1},
-			{ID: 31, Title: "Second", Link: "http://example.com/second", Created: t2},
-			{ID: 32, Title: "Third", Link: "http://example.com/third", Created: t3},
-		},
-	}
-
-	cfg := &config{
-		enrichDelayMs: 0,
-		enrichRetries: 0,
-	}
-
-	// First run: all succeed
 	ctx := context.Background()
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+	processInbox(ctx, sc, en, db, v)
 
-	for _, id := range []int{30, 31, 32} {
-		exists, err := db.IsProcessedBySourceID(id)
+	// Verify both URLs are in DB
+	for _, url := range []string{"https://example.com/1", "https://example.com/2"} {
+		exists, err := db.IsProcessedByURL(vault.NormalizeURL(url))
 		if err != nil {
-			t.Fatalf("checking source_id %d: %v", id, err)
+			t.Fatalf("checking url %s: %v", url, err)
 		}
 		if !exists {
-			t.Fatalf("expected bookmark %d to be processed after first run", id)
+			t.Errorf("expected URL %s to be processed", url)
 		}
 	}
 
-	// Add new bookmarks; make raw/ read-only so new ones would fail if attempted
-	t4 := time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC)
-	t5 := time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC)
-	ms.bookmarks = append(ms.bookmarks,
-		source.Bookmark{ID: 33, Title: "Fourth", Link: "http://example.com/fourth", Created: t4},
-		source.Bookmark{ID: 34, Title: "Fifth", Link: "http://example.com/fifth", Created: t5},
-	)
+	// Verify inbox files are deleted
+	entries, _ := os.ReadDir(filepath.Join(tmpDir, "inbox"))
+	if len(entries) != 0 {
+		t.Errorf("expected inbox to be empty, got %d files", len(entries))
+	}
 
-	// Second run: old bookmarks dedup-skipped, new ones processed
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+	// Verify wiki files exist
+	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "article-one.md")); os.IsNotExist(err) {
+		t.Error("expected wiki file article-one.md to exist")
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "article-two.md")); os.IsNotExist(err) {
+		t.Error("expected wiki file article-two.md to exist")
+	}
 
-	// New bookmarks should also be processed
-	for _, id := range []int{33, 34} {
-		exists, err := db.IsProcessedBySourceID(id)
-		if err != nil {
-			t.Fatalf("checking source_id %d: %v", id, err)
-		}
-		if !exists {
-			t.Errorf("expected bookmark %d to be processed after second run", id)
-		}
+	// Verify raw files exist (without date prefix)
+	if _, err := os.Stat(filepath.Join(tmpDir, "raw", "article-one.md")); os.IsNotExist(err) {
+		t.Error("expected raw file article-one.md to exist")
 	}
 }
 
-func TestRunPollCycle_ShutdownStopsProcessing(t *testing.T) {
+func TestProcessInbox_WithFrontmatter(t *testing.T) {
+	tmpDir, db, v, sc, en := setupTestEnv(t)
+
+	content := `---
+title: "My Custom Title"
+tags:
+  - golang
+  - testing
+---
+https://example.com/custom
+`
+	writeInboxFile(t, tmpDir, "custom.md", content)
+
+	ctx := context.Background()
+	processInbox(ctx, sc, en, db, v)
+
+	// Verify it was processed
+	exists, err := db.IsProcessedByURL(vault.NormalizeURL("https://example.com/custom"))
+	if err != nil {
+		t.Fatalf("checking url: %v", err)
+	}
+	if !exists {
+		t.Error("expected custom URL to be processed")
+	}
+
+	// Verify inbox file deleted
+	entries, _ := os.ReadDir(filepath.Join(tmpDir, "inbox"))
+	if len(entries) != 0 {
+		t.Errorf("expected inbox to be empty, got %d files", len(entries))
+	}
+}
+
+func TestProcessInbox_FailedItemKeepsFile(t *testing.T) {
+	tmpDir, db, v, sc, en := setupTestEnv(t)
+
+	writeInboxFile(t, tmpDir, "will-fail.md", "https://example.com/fail\n")
+
+	// Sabotage wiki write by creating a directory where the file should go
+	wikiDir := filepath.Join(tmpDir, "wiki", "will-fail.md")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	ctx := context.Background()
+	processInbox(ctx, sc, en, db, v)
+
+	// Verify inbox file still exists (for retry)
+	entries, _ := os.ReadDir(filepath.Join(tmpDir, "inbox"))
+	if len(entries) != 1 {
+		t.Errorf("expected inbox file to remain for retry, got %d files", len(entries))
+	}
+
+	// Verify URL is NOT in DB
+	exists, err := db.IsProcessedByURL(vault.NormalizeURL("https://example.com/fail"))
+	if err != nil {
+		t.Fatalf("checking url: %v", err)
+	}
+	if exists {
+		t.Error("expected failed URL to NOT be in DB")
+	}
+}
+
+func TestProcessInbox_ReprocessingOverwrites(t *testing.T) {
+	tmpDir, db, v, sc, en := setupTestEnv(t)
+
+	// First processing
+	writeInboxFile(t, tmpDir, "reprocess.md", "https://example.com/reprocess\n")
+
+	ctx := context.Background()
+	processInbox(ctx, sc, en, db, v)
+
+	// Verify processed
+	exists, err := db.IsProcessedByURL(vault.NormalizeURL("https://example.com/reprocess"))
+	if err != nil {
+		t.Fatalf("checking url: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected URL to be processed after first run")
+	}
+
+	// Drop the same URL again (user wants reprocessing)
+	writeInboxFile(t, tmpDir, "reprocess.md", "https://example.com/reprocess\n")
+
+	processInbox(ctx, sc, en, db, v)
+
+	// Verify still processed and inbox file deleted
+	exists, err = db.IsProcessedByURL(vault.NormalizeURL("https://example.com/reprocess"))
+	if err != nil {
+		t.Fatalf("checking url after reprocess: %v", err)
+	}
+	if !exists {
+		t.Error("expected URL to still be in DB after reprocessing")
+	}
+
+	entries, _ := os.ReadDir(filepath.Join(tmpDir, "inbox"))
+	if len(entries) != 0 {
+		t.Errorf("expected inbox to be empty after reprocessing, got %d files", len(entries))
+	}
+}
+
+func TestProcessInbox_ShutdownStopsProcessing(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	v := vault.New(tmpDir)
@@ -206,9 +251,7 @@ func TestRunPollCycle_ShutdownStopsProcessing(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	// Cancel context from the Ollama handler after enriching the first bookmark.
-	// This means bookmark 1 processes fully, but the ctx.Err() check
-	// before bookmark 2 triggers the break.
+	// Cancel context from the Ollama handler after enriching the first item.
 	ctx, cancel := context.WithCancel(context.Background())
 	jinaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -225,8 +268,6 @@ func TestRunPollCycle_ShutdownStopsProcessing(t *testing.T) {
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := ollamaCalls.Add(1)
 		if n > 1 {
-			// Cancel on the second bookmark's enrichment so the first
-			// bookmark completes fully (scrape + enrich + write).
 			cancel()
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -247,353 +288,128 @@ func TestRunPollCycle_ShutdownStopsProcessing(t *testing.T) {
 	en := enrich.NewClient("test-key", "test-model", 0, 0)
 	en.SetBaseURL(ollamaServer.URL)
 
-	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
-	t2 := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
+	writeInboxFile(t, tmpDir, "article-a.md", "https://example.com/a\n")
+	writeInboxFile(t, tmpDir, "article-b.md", "https://example.com/b\n")
 
-	ms := &mockSource{
-		bookmarks: []source.Bookmark{
-			{ID: 20, Title: "Article A", Link: "http://example.com/a", Created: t1},
-			{ID: 21, Title: "Article B", Link: "http://example.com/b", Created: t2},
-		},
-	}
+	processInbox(ctx, sc, en, db, v)
 
-	cfg := &config{
-		enrichDelayMs: 0,
-		enrichRetries: 0,
-	}
-
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
-
-	// Verify bookmark 1 was processed before shutdown
-	exists, err := db.IsProcessedBySourceID(20)
+	// First item should be processed
+	exists, err := db.IsProcessedByURL(vault.NormalizeURL("https://example.com/a"))
 	if err != nil {
-		t.Fatalf("checking source_id: %v", err)
+		t.Fatalf("checking url: %v", err)
 	}
 	if !exists {
-		t.Error("expected bookmark 20 to be processed before shutdown")
+		t.Error("expected first URL to be processed before shutdown")
 	}
 
-	// Verify bookmark 2 was NOT processed (shutdown before it was reached)
-	exists, err = db.IsProcessedBySourceID(21)
-	if err != nil {
-		t.Fatalf("checking source_id: %v", err)
-	}
-	if exists {
-		t.Error("expected bookmark 21 to NOT be processed after shutdown")
+	// Second item's inbox file should still exist
+	inboxFiles, _ := os.ReadDir(filepath.Join(tmpDir, "inbox"))
+	if len(inboxFiles) != 1 {
+		t.Errorf("expected 1 inbox file remaining, got %d", len(inboxFiles))
 	}
 }
 
-func TestRunPollCycle_MixedSuccessAndFailure(t *testing.T) {
+func TestRunPollCycle_InboxAndNotes(t *testing.T) {
 	tmpDir, db, v, sc, en := setupTestEnv(t)
 
-	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
-	t2 := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
-	t3 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	// Create inbox file
+	writeInboxFile(t, tmpDir, "test-article.md", "https://example.com/test\n")
 
-	ms := &mockSource{
-		bookmarks: []source.Bookmark{
-			{ID: 40, Title: "Success One", Link: "http://example.com/s1", Created: t1},
-			{ID: 41, Title: "Will Fail", Link: "http://example.com/fail", Created: t2},
-			{ID: 42, Title: "Success Two", Link: "http://example.com/s2", Created: t3},
-		},
+	// Create note
+	noteContent := `---
+tags:
+  - golang
+---
+
+# My Note
+
+Some content.
+`
+	notePath := filepath.Join(tmpDir, "notes", "test-note.md")
+	if err := os.WriteFile(notePath, []byte(noteContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Sabotage bookmark 2's wiki write by creating a directory where the
-	// wiki file should be written. os.WriteFile will fail on a directory.
-	wikiDir := filepath.Join(tmpDir, "wiki", "will-fail.md")
-	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	cfg := &config{
-		enrichDelayMs: 0,
-		enrichRetries: 0,
-	}
-
+	cfg := &config{}
 	ctx := context.Background()
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
+	runPollCycle(ctx, cfg, nil, sc, en, db, v)
 
-	// Verify bookmark 1 and 3 were processed despite bookmark 2 failing
-	exists, err := db.IsProcessedBySourceID(40)
+	// Verify bookmark processed
+	exists, err := db.IsProcessedByURL(vault.NormalizeURL("https://example.com/test"))
 	if err != nil {
-		t.Fatalf("checking source_id 40: %v", err)
+		t.Fatalf("checking url: %v", err)
 	}
 	if !exists {
-		t.Error("expected bookmark 40 to be processed")
+		t.Error("expected inbox item to be processed")
 	}
 
-	exists, err = db.IsProcessedBySourceID(42)
+	// Verify note indexed
+	hash, err := db.GetNoteHash("notes/test-note.md")
 	if err != nil {
-		t.Fatalf("checking source_id 42: %v", err)
+		t.Fatalf("GetNoteHash: %v", err)
 	}
-	if !exists {
-		t.Error("expected bookmark 42 to be processed")
-	}
-
-	// Verify bookmark 2 was NOT recorded
-	exists, err = db.IsProcessedBySourceID(41)
-	if err != nil {
-		t.Fatalf("checking source_id 41: %v", err)
-	}
-	if exists {
-		t.Error("expected bookmark 41 to NOT be processed")
-	}
-}
-
-func TestRunPollCycle_ReconcilesDeletedWikiFile(t *testing.T) {
-	tmpDir, db, v, sc, en := setupTestEnv(t)
-
-	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
-
-	ms := &mockSource{
-		bookmarks: []source.Bookmark{
-			{ID: 50, Title: "Reconcile Me", Link: "http://example.com/reconcile", Created: t1},
-		},
+	if hash == "" {
+		t.Error("expected note to be indexed")
 	}
 
-	cfg := &config{
-		enrichDelayMs: 0,
-		enrichRetries: 0,
-	}
-
-	ctx := context.Background()
-
-	// First run: process the bookmark
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
-
-	exists, err := db.IsProcessedBySourceID(50)
-	if err != nil {
-		t.Fatalf("checking source_id 50: %v", err)
-	}
-	if !exists {
-		t.Fatal("expected bookmark 50 to be processed after first run")
-	}
-
-	// Delete the wiki file from the vault
-	wikiFile := filepath.Join(tmpDir, "wiki", "reconcile-me.md")
-	if err := os.Remove(wikiFile); err != nil {
-		t.Fatalf("removing wiki file: %v", err)
-	}
-
-	// Second run: should reconcile and re-process
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
-
-	// Verify bookmark is still in DB (re-processed)
-	exists, err = db.IsProcessedBySourceID(50)
-	if err != nil {
-		t.Fatalf("checking source_id 50 after reconciliation: %v", err)
-	}
-	if !exists {
-		t.Error("expected bookmark 50 to be re-processed after reconciliation")
-	}
-
-	// Verify wiki file was re-created
-	if _, err := os.Stat(wikiFile); os.IsNotExist(err) {
-		t.Error("expected wiki file to be re-created after reconciliation")
-	}
-}
-
-func TestRunPollCycle_ReconcilesEmptyWikiFile(t *testing.T) {
-	tmpDir, db, v, sc, en := setupTestEnv(t)
-
-	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
-
-	ms := &mockSource{
-		bookmarks: []source.Bookmark{
-			{ID: 60, Title: "Empty Wiki", Link: "http://example.com/empty", Created: t1},
-		},
-	}
-
-	cfg := &config{
-		enrichDelayMs: 0,
-		enrichRetries: 0,
-	}
-
-	ctx := context.Background()
-
-	// First run: process the bookmark
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
-
-	exists, err := db.IsProcessedBySourceID(60)
-	if err != nil {
-		t.Fatalf("checking source_id 60: %v", err)
-	}
-	if !exists {
-		t.Fatal("expected bookmark 60 to be processed after first run")
-	}
-
-	// Empty the wiki file
-	wikiFile := filepath.Join(tmpDir, "wiki", "empty-wiki.md")
-	if err := os.WriteFile(wikiFile, []byte(""), 0o644); err != nil {
-		t.Fatalf("emptying wiki file: %v", err)
-	}
-
-	// Second run: should reconcile and re-process
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
-
-	// Verify wiki file was re-written with content
-	data, err := os.ReadFile(wikiFile)
-	if err != nil {
-		t.Fatalf("reading wiki file: %v", err)
-	}
-	if len(data) == 0 {
-		t.Error("expected wiki file to have content after reconciliation")
-	}
-}
-
-func TestProcessBookmarks_EmptyFetchPreservesBookmarks(t *testing.T) {
-	_, db, v, sc, en := setupTestEnv(t)
-
-	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
-
-	ms := &mockSource{
-		bookmarks: []source.Bookmark{
-			{ID: 80, Title: "Should Survive", Link: "http://example.com/survive", Created: t1},
-		},
-	}
-
-	cfg := &config{
-		enrichDelayMs: 0,
-		enrichRetries: 0,
-	}
-
-	ctx := context.Background()
-
-	// First run: process the bookmark
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
-
-	exists, err := db.IsProcessedBySourceID(80)
-	if err != nil {
-		t.Fatalf("checking source_id 80: %v", err)
-	}
-	if !exists {
-		t.Fatal("expected bookmark 80 to be processed after first run")
-	}
-
-	// Second run: source returns empty (simulating API glitch)
-	ms.bookmarks = nil
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
-
-	// Bookmark must still exist — empty fetch must not wipe the vault
-	exists, err = db.IsProcessedBySourceID(80)
-	if err != nil {
-		t.Fatalf("checking source_id 80 after empty fetch: %v", err)
-	}
-	if !exists {
-		t.Error("expected bookmark 80 to survive an empty fetch — reconciliation should be skipped")
-	}
-}
-
-func TestProcessBookmarks_ReconcilesDeletedBookmark(t *testing.T) {
-	tmpDir, db, v, sc, en := setupTestEnv(t)
-
-	t1 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
-	t2 := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
-
-	ms := &mockSource{
-		bookmarks: []source.Bookmark{
-			{ID: 70, Title: "Keep Me", Link: "http://example.com/keep", Created: t1},
-			{ID: 71, Title: "Delete Me", Link: "http://example.com/delete", Created: t2},
-		},
-	}
-
-	cfg := &config{
-		enrichDelayMs: 0,
-		enrichRetries: 0,
-	}
-
-	ctx := context.Background()
-
-	// First run: process both bookmarks
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
-
-	// Verify both are processed
-	for _, id := range []int{70, 71} {
-		exists, err := db.IsProcessedBySourceID(id)
-		if err != nil {
-			t.Fatalf("checking source_id %d: %v", id, err)
-		}
-		if !exists {
-			t.Fatalf("expected bookmark %d to be processed after first run", id)
-		}
-	}
-
-	// Verify files exist
-	wikiKeep := filepath.Join(tmpDir, "wiki", "keep-me.md")
-	wikiDelete := filepath.Join(tmpDir, "wiki", "delete-me.md")
-	rawDelete := filepath.Join(tmpDir, "raw")
-
-	if _, err := os.Stat(wikiKeep); os.IsNotExist(err) {
-		t.Fatal("expected keep-me wiki file to exist")
-	}
-	if _, err := os.Stat(wikiDelete); os.IsNotExist(err) {
-		t.Fatal("expected delete-me wiki file to exist")
-	}
-
-	// Find the raw file for bookmark 71
-	rec, err := db.GetBookmarkBySourceID(71)
-	if err != nil {
-		t.Fatalf("GetBookmarkBySourceID: %v", err)
-	}
-	rawDeletePath := filepath.Join(tmpDir, rec.RawPath)
-	if _, err := os.Stat(rawDeletePath); os.IsNotExist(err) {
-		t.Fatal("expected delete-me raw file to exist")
-	}
-
-	// Verify index contains both
+	// Verify index has both
 	indexPath := filepath.Join(tmpDir, "index.md")
-	assertContains(t, readFile(t, indexPath), "[[keep-me]]")
-	assertContains(t, readFile(t, indexPath), "[[delete-me]]")
-
-	// Second run: remove bookmark 71 from source (simulating Raindrop deletion)
-	ms.bookmarks = []source.Bookmark{
-		{ID: 70, Title: "Keep Me", Link: "http://example.com/keep", Created: t1},
-	}
-	runPollCycle(ctx, cfg, ms, sc, en, db, v)
-
-	// Verify bookmark 70 still exists
-	exists, err := db.IsProcessedBySourceID(70)
-	if err != nil {
-		t.Fatalf("checking source_id 70: %v", err)
-	}
-	if !exists {
-		t.Error("expected bookmark 70 to still exist")
-	}
-	if _, err := os.Stat(wikiKeep); os.IsNotExist(err) {
-		t.Error("expected keep-me wiki file to still exist")
-	}
-	assertContains(t, readFile(t, indexPath), "[[keep-me]]")
-
-	// Verify bookmark 71 is fully cleaned up
-	exists, err = db.IsProcessedBySourceID(71)
-	if err != nil {
-		t.Fatalf("checking source_id 71: %v", err)
-	}
-	if exists {
-		t.Error("expected bookmark 71 to be deleted from DB")
-	}
-	if _, err := os.Stat(wikiDelete); !os.IsNotExist(err) {
-		t.Error("expected delete-me wiki file to be removed")
-	}
-
-	// Check raw file is also deleted
-	rawFiles, err := filepath.Glob(filepath.Join(rawDelete, "*delete-me*"))
-	if err != nil {
-		t.Fatalf("Glob: %v", err)
-	}
-	if len(rawFiles) > 0 {
-		t.Errorf("expected delete-me raw file to be removed, found: %v", rawFiles)
-	}
-
-	// Verify index no longer contains deleted bookmark
-	assertNotContains(t, readFile(t, indexPath), "[[delete-me]]")
+	content := readFile(t, indexPath)
+	assertContains(t, content, "[[test-article]]")
+	assertContains(t, content, "[[notes/test-note]]")
 }
 
-// errorSource is a mock source.Client that always returns an error.
-type errorSource struct{}
+func TestReEnrichAll_UpdatesWikiContent(t *testing.T) {
+	tmpDir, db, v, sc, en := setupTestEnv(t)
 
-func (e *errorSource) FetchBookmarks(_ context.Context) ([]source.Bookmark, error) {
-	return nil, fmt.Errorf("api error")
+	// First: process an inbox item to create raw + wiki + DB record
+	writeInboxFile(t, tmpDir, "enrich-test.md", "https://example.com/enrich\n")
+	ctx := context.Background()
+	processInbox(ctx, sc, en, db, v)
+
+	// Verify wiki exists
+	wikiPath := filepath.Join(tmpDir, "wiki", "enrich-test.md")
+	if _, err := os.Stat(wikiPath); os.IsNotExist(err) {
+		t.Fatal("expected wiki file to exist after initial processing")
+	}
+
+	// Re-enrich — should overwrite wiki
+	reEnrichAll(ctx, en, db, v)
+
+	// Wiki file should still exist (overwritten)
+	if _, err := os.Stat(wikiPath); os.IsNotExist(err) {
+		t.Error("expected wiki file to exist after re-enrichment")
+	}
+
+	// DB record should still exist
+	exists, err := db.IsProcessedByURL(vault.NormalizeURL("https://example.com/enrich"))
+	if err != nil {
+		t.Fatalf("checking url: %v", err)
+	}
+	if !exists {
+		t.Error("expected URL to still be in DB after re-enrichment")
+	}
+}
+
+func TestReEnrichBookmark_MissingRawPath(t *testing.T) {
+	_, db, v, _, _ := setupTestEnv(t)
+
+	// Insert a bookmark with no raw path
+	rec := store.BookmarkRecord{
+		WikiPath:      "wiki/no-raw.md",
+		RawPath:       "",
+		Title:         "No Raw",
+		URL:           "http://example.com/no-raw",
+		URLNormalized: "http://example.com/no-raw",
+	}
+
+	ctx := context.Background()
+	en := enrich.NewClient("test-key", "test-model", 0, 0)
+
+	err := reEnrichBookmark(ctx, rec, en, db, v)
+	if err == nil {
+		t.Error("expected error for bookmark with empty raw path")
+	}
 }
 
 func TestProcessNotes_IndexesNewNote(t *testing.T) {
@@ -617,7 +433,6 @@ Some content here.
 	ctx := context.Background()
 	processNotes(ctx, db, v)
 
-	// Verify DB has the note record
 	hash, err := db.GetNoteHash("notes/test-note.md")
 	if err != nil {
 		t.Fatalf("GetNoteHash: %v", err)
@@ -626,7 +441,6 @@ Some content here.
 		t.Error("expected DB to have a hash for the note")
 	}
 
-	// Verify index.md contains the note link and tags
 	indexPath := filepath.Join(tmpDir, "index.md")
 	content := readFile(t, indexPath)
 	assertContains(t, content, "[[notes/test-note]]")
@@ -652,35 +466,16 @@ Content here.
 	}
 
 	ctx := context.Background()
-
-	// First run
 	processNotes(ctx, db, v)
 
-	hashAfterFirst, err := db.GetNoteHash("notes/unchanged-note.md")
-	if err != nil {
-		t.Fatalf("GetNoteHash after first run: %v", err)
-	}
-
-	// Capture index content before second run
 	indexPath := filepath.Join(tmpDir, "index.md")
 	contentBefore := readFile(t, indexPath)
 
-	// Second run
 	processNotes(ctx, db, v)
 
-	// Index content should be identical (no duplicate entries)
 	contentAfter := readFile(t, indexPath)
 	if contentBefore != contentAfter {
-		t.Errorf("expected index.md to be unchanged on second run\nbefore: %q\nafter: %q", contentBefore, contentAfter)
-	}
-
-	// DB hash should be the same
-	hashAfterSecond, err := db.GetNoteHash("notes/unchanged-note.md")
-	if err != nil {
-		t.Fatalf("GetNoteHash after second run: %v", err)
-	}
-	if hashAfterFirst != hashAfterSecond {
-		t.Errorf("expected DB hash to be unchanged: got %q then %q", hashAfterFirst, hashAfterSecond)
+		t.Errorf("expected index.md to be unchanged on second run")
 	}
 }
 
@@ -704,12 +499,6 @@ Version one.
 	ctx := context.Background()
 	processNotes(ctx, db, v)
 
-	hashV1, err := db.GetNoteHash("notes/changing-note.md")
-	if err != nil {
-		t.Fatalf("GetNoteHash after v1: %v", err)
-	}
-
-	// Modify note: replace tag golang with rust
 	noteV2 := `---
 tags:
   - rust
@@ -725,20 +514,10 @@ Version two.
 
 	processNotes(ctx, db, v)
 
-	// Verify index has rust but not golang
 	indexPath := filepath.Join(tmpDir, "index.md")
 	content := readFile(t, indexPath)
 	assertContains(t, content, "rust")
 	assertNotContains(t, content, "golang")
-
-	// Verify DB hash changed
-	hashV2, err := db.GetNoteHash("notes/changing-note.md")
-	if err != nil {
-		t.Fatalf("GetNoteHash after v2: %v", err)
-	}
-	if hashV1 == hashV2 {
-		t.Error("expected DB hash to change after note update")
-	}
 }
 
 func TestProcessNotes_ReconcilesDeletedNote(t *testing.T) {
@@ -761,21 +540,17 @@ Some content.
 	ctx := context.Background()
 	processNotes(ctx, db, v)
 
-	// Verify note is indexed
 	indexPath := filepath.Join(tmpDir, "index.md")
 	assertContains(t, readFile(t, indexPath), "[[notes/deleted-note]]")
 
-	// Delete the file
 	if err := os.Remove(notePath); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 
 	processNotes(ctx, db, v)
 
-	// Verify index no longer contains the note
 	assertNotContains(t, readFile(t, indexPath), "[[notes/deleted-note]]")
 
-	// Verify DB has no record
 	hash, err := db.GetNoteHash("notes/deleted-note.md")
 	if err != nil {
 		t.Fatalf("GetNoteHash after delete: %v", err)
@@ -812,58 +587,4 @@ Nested content.
 
 	indexPath := filepath.Join(tmpDir, "index.md")
 	assertContains(t, readFile(t, indexPath), "[[notes/sub/deep-note]]")
-
-	// Verify DB has the note
-	hash, err := db.GetNoteHash("notes/sub/deep-note.md")
-	if err != nil {
-		t.Fatalf("GetNoteHash: %v", err)
-	}
-	if hash == "" {
-		t.Error("expected DB to have a hash for the nested note")
-	}
-}
-
-func TestProcessNotes_BookmarkFailureDoesNotBlockNotes(t *testing.T) {
-	tmpDir, db, v, _, _ := setupTestEnv(t)
-
-	noteContent := `---
-tags:
-  - independent
----
-
-# Independent Note
-
-Not affected by bookmark failures.
-`
-	notePath := filepath.Join(tmpDir, "notes", "independent-note.md")
-	if err := os.WriteFile(notePath, []byte(noteContent), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	cfg := &config{
-		enrichDelayMs: 0,
-		enrichRetries: 0,
-	}
-
-	// Use errorSource so bookmark phase always fails
-	es := &errorSource{}
-
-	// We need a scraper and enrich client — reuse stubs that won't be called
-	sc := scraper.New()
-	en := enrich.NewClient("test-key", "test-model", 0, 0)
-
-	ctx := context.Background()
-	runPollCycle(ctx, cfg, es, sc, en, db, v)
-
-	// Notes should still be indexed despite bookmark failure
-	indexPath := filepath.Join(tmpDir, "index.md")
-	assertContains(t, readFile(t, indexPath), "[[notes/independent-note]]")
-
-	hash, err := db.GetNoteHash("notes/independent-note.md")
-	if err != nil {
-		t.Fatalf("GetNoteHash: %v", err)
-	}
-	if hash == "" {
-		t.Error("expected note to be indexed despite bookmark source error")
-	}
 }

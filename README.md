@@ -4,34 +4,34 @@
 
 You save dozens of articles, blog posts, and links every week. Most of them disappear into a bookmark graveyard — never read, never searchable, never connected to anything. LucidVault fixes that.
 
-LucidVault turns saved bookmarks into a structured, searchable knowledge base inside your Obsidian vault. It scrapes the full content, summarizes it with an LLM, extracts key takeaways, and links it to your existing notes — automatically. Your personal notes live alongside enriched pages, and a `soul.md` file personalizes everything to your background and interests.
+LucidVault turns URLs into a structured, searchable knowledge base inside your Obsidian vault. Drop a URL into the inbox folder — or let Raindrop.io feed it automatically — and LucidVault scrapes the full content, summarizes it with an LLM, extracts key takeaways, and links it to your existing notes. Your personal notes live alongside enriched pages, and a `soul.md` file personalizes everything to your background and interests.
 
 LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.md`, so Claude Code knows how to query your knowledge base efficiently, making it a daily companion for development work.
 
 ## Features
 
-- **Capture** — Save a bookmark on your phone, it appears in your vault within minutes: scraped, summarized, tagged, and linked
+- **Inbox** — Drop a `.md` file with a URL into `inbox/` and it gets scraped, enriched, and added to your vault. Works standalone — no external service required
+- **Raindrop.io integration** — Optionally connect Raindrop.io to auto-feed bookmarks into the inbox. Backfills all existing bookmarks on first run
 - **YouTube transcripts** — YouTube URLs are automatically detected and their transcripts fetched via the [Supadata](https://supadata.ai) API, then enriched like any other page
-- **Enrich** — LLM generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
+- **Enrich** — LLM (Ollama Cloud, free) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** — Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **Resilient** — Falls back to basic metadata when scraping fails (paywalled sites, blocked content)
 - **Notes indexing** — Personal notes in `notes/` are automatically scanned, tagged from frontmatter, and added to `index.md` so they connect to the knowledge graph
-- **Deletion sync** — Bookmarks deleted from the source are automatically cleaned up: wiki page, raw file, index entry, and DB record are all removed
 - **Re-enrich** — Changed your enrichment prompt or model? Run with `--re-enrich` to re-process all bookmarks using existing raw content
-- **Backfill** — Processes all your existing bookmarks on first run
+- **Reprocess** — Want to re-scrape and re-enrich a URL? Drop it in `inbox/` again — it always gets processed
 
 ## Getting started
 
 ### Prerequisites
 
 - Docker
-- A [Raindrop.io](https://raindrop.io) account (free)
-- An [Ollama Cloud](https://ollama.com) account
+- An [Ollama Cloud](https://ollama.com) account (free)
+- (Optional) A [Raindrop.io](https://raindrop.io) account (free) — for automatic bookmark syncing
 
 ### 1. Get your API tokens
 
-- **Raindrop**: Go to <https://app.raindrop.io/settings/integrations> → create a test token. These don't expire for personal use.
 - **Ollama Cloud**: Go to <https://ollama.com/settings/keys> → create an API key.
+- **Raindrop** (optional): Go to <https://app.raindrop.io/settings/integrations> → create a test token. These don't expire for personal use.
 
 ### 2. Prepare your vault directory
 
@@ -73,17 +73,30 @@ Edit this to reflect your background and interests. If you skip this step, every
 
 ### 4. Run the container
 
+**Inbox-only mode** (no Raindrop):
+
 ```bash
 docker run -d \
   --name lucidvault \
   --restart unless-stopped \
-  -e SOURCE_TOKEN=<your-raindrop-token> \
   -e OLLAMA_API_KEY=<your-key> \
   -v ~/lucid-vault:/vault \
   ghcr.io/bamaas/lucidvault:latest
 ```
 
-That's it. LucidVault will poll Raindrop every 5 minutes. On first run, it backfills all your existing bookmarks.
+**With Raindrop.io** (auto-feeds bookmarks into inbox):
+
+```bash
+docker run -d \
+  --name lucidvault \
+  --restart unless-stopped \
+  -e OLLAMA_API_KEY=<your-key> \
+  -e RAINDROP_ACCESS_TOKEN=<your-raindrop-token> \
+  -v ~/lucid-vault:/vault \
+  ghcr.io/bamaas/lucidvault:latest
+```
+
+LucidVault polls every 5 minutes. Drop `.md` files containing URLs into `inbox/` to process them. With Raindrop enabled, bookmarks are automatically synced to the inbox.
 
 ## Optional: Claude Code integration
 
@@ -95,7 +108,6 @@ touch ~/.claude/CLAUDE.md  # ensure the file exists before mounting
 docker run -d \
   --name lucidvault \
   --restart unless-stopped \
-  -e SOURCE_TOKEN=<your-raindrop-token> \
   -e OLLAMA_API_KEY=<your-key> \
   -v ~/lucid-vault:/vault \
   -v ~/.claude/CLAUDE.md:/CLAUDE.md \
@@ -118,12 +130,11 @@ Environment variables configure the service. CLI flags control one-off operation
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SOURCE_TOKEN` | Yes | — | Access token for the bookmark source (falls back to `RAINDROP_ACCESS_TOKEN`) |
-| `OLLAMA_API_KEY` | Yes | — | Ollama Cloud API key |
+| `OLLAMA_API_KEY` | Yes | — | Ollama Cloud API key (free) |
 | `VAULT_PATH` | Yes | `/vault` (Docker) | Path to vault |
-| `SOURCE_NAME` | No | `raindrop` | Bookmark source to use |
+| `RAINDROP_ACCESS_TOKEN` | No | — | Enables Raindrop.io as an inbox feeder. When set, bookmarks are synced to `inbox/` automatically. |
 | `OLLAMA_MODEL` | No | `qwen3.5` | LLM model for enrichment |
-| `POLL_INTERVAL` | No | `5m` | How often to check for new bookmarks |
+| `POLL_INTERVAL` | No | `5m` | How often to check for new inbox items |
 | `ENRICH_DELAY_MS` | No | `500` | Delay between API calls (rate limiting) |
 | `ENRICH_MAX_RETRIES` | No | `3` | Max retries on API failure |
 | `SUPADATA_API_KEY` | No | — | [Supadata](https://supadata.ai) API key for YouTube transcript extraction. When set, YouTube URLs are routed to Supadata instead of Jina. |
@@ -133,7 +144,7 @@ Environment variables configure the service. CLI flags control one-off operation
 
 | Flag | Description |
 |------|-------------|
-| `--re-enrich` | Re-enrich all bookmarks returned by the source using existing raw content, then exit. Useful after changing the enrichment prompt or model. |
+| `--re-enrich` | Re-enrich all bookmarks using existing raw content, then exit. Useful after changing the enrichment prompt or model. Does not re-scrape. |
 
 ```bash
 # Binary
@@ -141,7 +152,6 @@ lucidvault --re-enrich
 
 # Docker
 docker run --rm \
-  -e SOURCE_TOKEN=<your-raindrop-token> \
   -e OLLAMA_API_KEY=<your-key> \
   -v ~/lucid-vault:/vault \
   ghcr.io/bamaas/lucidvault:latest --re-enrich
@@ -153,6 +163,7 @@ LucidVault creates and manages these directories inside your vault:
 
 ```text
 vault/
+├── inbox/        # Drop .md files with URLs here to process them
 ├── raw/          # Immutable scraped content (don't edit)
 ├── wiki/         # LLM-generated wiki pages (don't edit — overwritten on re-enrichment)
 ├── notes/        # Your personal notes (yours to write freely)
@@ -188,7 +199,7 @@ It will never scan entire directories, and will not search the web unprompted.
 | State | SQLite (modernc.org/sqlite) |
 | Deployment | Docker / static binary |
 | Versioning | Commitizen (conventional commits, auto changelog) |
-| Bookmark source | Raindrop.io |
+| Bookmark source | Inbox folder (+ optional Raindrop.io) |
 
 ## To do
 

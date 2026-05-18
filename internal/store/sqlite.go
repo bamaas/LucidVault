@@ -51,7 +51,7 @@ func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS bookmarks (
 			id INTEGER PRIMARY KEY,
-			source_id INTEGER UNIQUE,
+			source_id INTEGER,
 			wiki_path TEXT,
 			raw_path TEXT,
 			title TEXT,
@@ -69,16 +69,28 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return fmt.Errorf("executing migrations: %w", err)
 	}
-	return nil
-}
 
-func (s *Store) IsProcessedBySourceID(sourceID int) (bool, error) {
-	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM bookmarks WHERE source_id = ?", sourceID).Scan(&count)
+	// Deduplicate url_normalized before creating unique index (keeps newest row).
+	// Exclude NULL values to avoid grouping unrelated rows.
+	_, err = s.db.Exec(`
+		DELETE FROM bookmarks WHERE url_normalized IS NOT NULL AND id NOT IN (
+			SELECT MAX(id) FROM bookmarks WHERE url_normalized IS NOT NULL GROUP BY url_normalized
+		)
+	`)
 	if err != nil {
-		return false, fmt.Errorf("checking source_id %d: %w", sourceID, err)
+		return fmt.Errorf("deduplicating bookmarks: %w", err)
 	}
-	return count > 0, nil
+
+	// Add unique index on url_normalized for upsert support.
+	// Drop the old non-unique index first, then create unique one.
+	_, err = s.db.Exec(`
+		DROP INDEX IF EXISTS idx_bookmarks_url_normalized;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_bookmarks_url_normalized ON bookmarks(url_normalized);
+	`)
+	if err != nil {
+		return fmt.Errorf("creating unique url index: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) IsProcessedByURL(normalizedURL string) (bool, error) {
@@ -90,23 +102,10 @@ func (s *Store) IsProcessedByURL(normalizedURL string) (bool, error) {
 	return count > 0, nil
 }
 
-func (s *Store) SaveBookmark(rec *BookmarkRecord) error {
-	_, err := s.db.Exec(
-		`INSERT INTO bookmarks (source_id, wiki_path, raw_path, title, url, url_normalized, processed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		rec.SourceID, rec.WikiPath, rec.RawPath, rec.Title, rec.URL, rec.URLNormalized,
-		rec.ProcessedAt.UTC().Format(time.RFC3339),
-	)
-	if err != nil {
-		return fmt.Errorf("saving bookmark %d: %w", rec.SourceID, err)
-	}
-	return nil
-}
-
-func (s *Store) GetBookmarkBySourceID(sourceID int) (*BookmarkRecord, error) {
+func (s *Store) GetBookmarkByURL(normalizedURL string) (*BookmarkRecord, error) {
 	row := s.db.QueryRow(
 		`SELECT source_id, wiki_path, raw_path, title, url, url_normalized, processed_at
-		 FROM bookmarks WHERE source_id = ? LIMIT 1`, sourceID,
+		 FROM bookmarks WHERE url_normalized = ? LIMIT 1`, normalizedURL,
 	)
 
 	var rec BookmarkRecord
@@ -116,32 +115,32 @@ func (s *Store) GetBookmarkBySourceID(sourceID int) (*BookmarkRecord, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("querying source_id %d: %w", sourceID, err)
+		return nil, fmt.Errorf("querying url %q: %w", normalizedURL, err)
 	}
 
 	rec.ProcessedAt, err = time.Parse(time.RFC3339, processedAt)
 	if err != nil {
-		return nil, fmt.Errorf("parsing processed_at for source_id %d: %w", sourceID, err)
+		return nil, fmt.Errorf("parsing processed_at for url %q: %w", normalizedURL, err)
 	}
 
 	return &rec, nil
 }
 
-func (s *Store) UpdateBookmarkWikiPath(sourceID int, wikiPath string) error {
+func (s *Store) UpsertBookmark(rec *BookmarkRecord) error {
 	_, err := s.db.Exec(
-		`UPDATE bookmarks SET wiki_path = ?, processed_at = ? WHERE source_id = ?`,
-		wikiPath, time.Now().UTC().Format(time.RFC3339), sourceID,
+		`INSERT INTO bookmarks (source_id, wiki_path, raw_path, title, url, url_normalized, processed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(url_normalized) DO UPDATE SET
+		   wiki_path = excluded.wiki_path,
+		   raw_path = excluded.raw_path,
+		   title = excluded.title,
+		   url = excluded.url,
+		   processed_at = excluded.processed_at`,
+		rec.SourceID, rec.WikiPath, rec.RawPath, rec.Title, rec.URL, rec.URLNormalized,
+		rec.ProcessedAt.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
-		return fmt.Errorf("updating bookmark %d wiki_path: %w", sourceID, err)
-	}
-	return nil
-}
-
-func (s *Store) DeleteBySourceID(sourceID int) error {
-	_, err := s.db.Exec("DELETE FROM bookmarks WHERE source_id = ?", sourceID)
-	if err != nil {
-		return fmt.Errorf("deleting source_id %d: %w", sourceID, err)
+		return fmt.Errorf("upserting bookmark %q: %w", rec.URLNormalized, err)
 	}
 	return nil
 }
