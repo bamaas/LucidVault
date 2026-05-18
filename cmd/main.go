@@ -383,9 +383,13 @@ func reEnrichBookmark(ctx context.Context, rec store.BookmarkRecord, en *enrich.
 	slug := vault.GenerateSlug(rec.Title)
 	dateSaved := rec.ProcessedAt.Format("2006-01-02")
 
+	// Recover user tags from the raw file frontmatter for enrichment context
+	userTags := notes.ParseFrontmatter(rawContent)
+
 	enrichInput := &enrich.EnrichInput{
 		Content:     rawContent,
 		Index:       index,
+		UserTags:    userTags,
 		RawFilename: filepath.Base(rec.RawPath),
 		Title:       rec.Title,
 		URL:         rec.URL,
