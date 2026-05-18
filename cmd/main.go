@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -16,18 +15,16 @@ import (
 
 	"lucidvault/internal/claudemd"
 	"lucidvault/internal/enrich"
+	"lucidvault/internal/inbox"
 	"lucidvault/internal/notes"
+	"lucidvault/internal/raindrop"
 	"lucidvault/internal/scraper"
-	"lucidvault/internal/source"
 	"lucidvault/internal/store"
 	"lucidvault/internal/vault"
-
-	_ "lucidvault/internal/raindrop" // register raindrop source
 )
 
 type config struct {
-	sourceName     string
-	sourceToken    string
+	raindropToken  string
 	ollamaAPIKey   string
 	ollamaModel    string
 	vaultPath      string
@@ -39,7 +36,7 @@ type config struct {
 }
 
 func main() {
-	reEnrich := flag.Bool("re-enrich", false, "re-enrich bookmarks returned by source using updated prompt, then exit")
+	reEnrich := flag.Bool("re-enrich", false, "re-enrich all bookmarks using updated prompt, then exit")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -87,12 +84,14 @@ func main() {
 	defer func() { _ = db.Close() }()
 	slog.Info("database initialized", "path", dbPath)
 
-	// Initialize clients
-	rd, err := source.NewClient(cfg.sourceName, cfg.sourceToken)
-	if err != nil {
-		slog.Error("failed to initialize source client", "error", err)
-		os.Exit(1)
+	// Initialize Raindrop client (optional)
+	var rd *raindrop.Client
+	if cfg.raindropToken != "" {
+		rd = raindrop.NewClient(cfg.raindropToken)
+		slog.Info("raindrop source enabled")
 	}
+
+	// Initialize scraper and enricher
 	sc := scraper.New()
 	if cfg.supadataAPIKey != "" {
 		sc.SetYouTubeClient(scraper.NewYouTubeClient(cfg.supadataAPIKey))
@@ -111,7 +110,12 @@ func main() {
 		cancel()
 	}()
 
-	slog.Info("starting lucidvault", "poll_interval", cfg.pollInterval, "model", cfg.ollamaModel, "force_re_enrich", cfg.forceReEnrich)
+	slog.Info("starting lucidvault",
+		"poll_interval", cfg.pollInterval,
+		"model", cfg.ollamaModel,
+		"raindrop_enabled", rd != nil,
+		"force_re_enrich", cfg.forceReEnrich,
+	)
 
 	// Run immediately on startup, then on ticker
 	runPollCycle(ctx, cfg, rd, sc, en, db, v)
@@ -135,115 +139,319 @@ func main() {
 	}
 }
 
-func runPollCycle(ctx context.Context, cfg *config, rd source.Client, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) {
+func runPollCycle(ctx context.Context, cfg *config, rd *raindrop.Client, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) {
 	if ctx.Err() != nil {
 		return
 	}
-	processBookmarks(ctx, cfg, rd, sc, en, db, v)
+
+	// Step 1: Sync Raindrop bookmarks to inbox (optional)
+	if rd != nil {
+		syncRaindropToInbox(ctx, rd, db, v)
+	}
+
+	// Step 2: Process inbox
+	if cfg.forceReEnrich {
+		reEnrichAll(ctx, en, db, v)
+	} else {
+		processInbox(ctx, sc, en, db, v)
+	}
+
+	// Step 3: Process notes
 	processNotes(ctx, en, db, v)
 }
 
-func processBookmarks(ctx context.Context, cfg *config, rd source.Client, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) {
+func syncRaindropToInbox(ctx context.Context, rd *raindrop.Client, db *store.Store, v *vault.Vault) {
 	if ctx.Err() != nil {
 		return
 	}
 
-	slog.Info("polling source")
+	slog.Info("syncing raindrop bookmarks to inbox")
 
 	bookmarks, err := rd.FetchBookmarks(ctx)
 	if err != nil {
-		slog.Error("failed to fetch bookmarks", "error", err)
+		slog.Error("failed to fetch raindrop bookmarks", "error", err)
 		return
 	}
 
-	slog.Info("fetched bookmarks", "count", len(bookmarks))
-
-	// Build set of fetched source IDs upfront for deletion detection.
-	fetchedIDs := make(map[int]struct{}, len(bookmarks))
-	for _, bm := range bookmarks {
-		fetchedIDs[bm.ID] = struct{}{}
+	created, err := raindrop.SyncToInbox(bookmarks, db, v.BasePath)
+	if err != nil {
+		slog.Error("failed to sync bookmarks to inbox", "error", err)
+		return
 	}
 
-	var processed, failed, skipped int
+	slog.Info("raindrop sync complete", "fetched", len(bookmarks), "new_inbox_files", created)
+}
 
-	for _, bm := range bookmarks {
+func processInbox(ctx context.Context, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	slog.Info("processing inbox")
+
+	items, err := inbox.Scan(v.BasePath)
+	if err != nil {
+		slog.Error("failed to scan inbox", "error", err)
+		return
+	}
+
+	if len(items) == 0 {
+		slog.Info("inbox empty, nothing to process")
+		return
+	}
+
+	var processed, failed int
+
+	for _, item := range items {
 		if ctx.Err() != nil {
 			slog.Info("shutdown requested, stopping processing")
 			break
 		}
 
-		if err := processBookmark(ctx, cfg, bm, sc, en, db, v); err != nil {
-			if errors.Is(err, errSkipped) {
-				skipped++
-			} else {
-				slog.Error("failed to process bookmark", "title", bm.Title, "url", bm.Link, "error", err)
-				failed++
-			}
+		if err := processInboxItem(ctx, item, sc, en, db, v); err != nil {
+			slog.Error("failed to process inbox item", "url", item.URL, "error", err)
+			failed++
+			continue
+		}
+
+		// Delete inbox file after successful processing
+		if err := inbox.Delete(item.Path); err != nil {
+			slog.Error("failed to delete inbox file", "path", item.Path, "error", err)
+		}
+
+		processed++
+	}
+
+	if failed > 0 {
+		slog.Warn("some inbox items failed — will be retried next cycle", "failed", failed)
+	}
+
+	slog.Info("inbox cycle complete", "processed", processed, "failed", failed)
+}
+
+func processInboxItem(ctx context.Context, item inbox.Item, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) error {
+	slug := vault.GenerateSlug(item.Title)
+	rawFilename := vault.GenerateRawFilename(slug)
+	dateSaved := time.Now().Format("2006-01-02")
+
+	slog.Info("processing inbox item", "title", item.Title, "url", item.URL)
+
+	// Scrape via Jina
+	scrapeResult, err := sc.Scrape(ctx, item.URL)
+	var rawContent string
+	if err != nil || scrapeResult == nil || !scrapeResult.OK {
+		slog.Warn("scrape failed, using fallback", "url", item.URL, "error", err)
+		rawContent = buildFallbackContent(item)
+	} else {
+		rawContent = scrapeResult.Content
+	}
+
+	// Write raw file
+	rawFormatted := vault.FormatRawContent(item.Title, item.URL, dateSaved, item.Tags, rawContent)
+	rawPath, err := v.WriteRaw(rawFilename, rawFormatted)
+	if err != nil {
+		return fmt.Errorf("writing raw file: %w", err)
+	}
+
+	// Read index and soul for enrichment context
+	index, err := v.ReadIndex()
+	if err != nil {
+		slog.Warn("failed to read index.md", "error", err)
+	}
+	profile, err := v.ReadSoul()
+	if err != nil {
+		slog.Warn("failed to read soul.md", "error", err)
+	}
+
+	// Enrich via Ollama
+	enrichInput := &enrich.EnrichInput{
+		Content:     rawContent,
+		Index:       index,
+		UserTags:    item.Tags,
+		RawFilename: rawFilename,
+		Title:       item.Title,
+		URL:         item.URL,
+		DateSaved:   dateSaved,
+		Profile:     profile,
+	}
+
+	wikiContent, err := en.Enrich(ctx, enrichInput)
+	if err != nil {
+		return fmt.Errorf("enriching: %w", err)
+	}
+
+	// Write wiki file
+	wikiFilename := slug + ".md"
+	wikiPath, err := v.WriteWiki(wikiFilename, wikiContent)
+	if err != nil {
+		return fmt.Errorf("writing wiki file: %w", err)
+	}
+
+	// Extract tags from enriched content for index
+	tags := notes.ParseFrontmatter(wikiContent)
+	if len(tags) == 0 {
+		tags = item.Tags
+	}
+
+	// Remove old index entry (for reprocessing case) and add new one
+	if err := v.RemoveFromIndex(slug); err != nil {
+		slog.Warn("failed to remove old index entry", "slug", slug, "error", err)
+	}
+
+	title := item.Title
+	if enrichedTitle := notes.ParseTitle(wikiContent); enrichedTitle != "" {
+		title = enrichedTitle
+	}
+	if err := v.UpdateIndex(slug, title, tags); err != nil {
+		return fmt.Errorf("updating index: %w", err)
+	}
+
+	// Upsert to database
+	normalizedURL := vault.NormalizeURL(item.URL)
+	record := &store.BookmarkRecord{
+		WikiPath:      wikiPath,
+		RawPath:       rawPath,
+		Title:         item.Title,
+		URL:           item.URL,
+		URLNormalized: normalizedURL,
+		ProcessedAt:   time.Now(),
+	}
+	if err := db.UpsertBookmark(record); err != nil {
+		return fmt.Errorf("upserting bookmark record: %w", err)
+	}
+
+	slog.Info("inbox item processed", "title", item.Title, "wiki", wikiPath, "raw", rawPath)
+	return nil
+}
+
+func reEnrichAll(ctx context.Context, en *enrich.Client, db *store.Store, v *vault.Vault) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	slog.Info("re-enriching all bookmarks")
+
+	records, err := db.ListBookmarks()
+	if err != nil {
+		slog.Error("failed to list bookmarks for re-enrichment", "error", err)
+		return
+	}
+
+	var processed, failed int
+
+	for _, rec := range records {
+		if ctx.Err() != nil {
+			slog.Info("shutdown requested, stopping re-enrichment")
+			break
+		}
+
+		if err := reEnrichBookmark(ctx, rec, en, db, v); err != nil {
+			slog.Error("failed to re-enrich bookmark", "title", rec.Title, "error", err)
+			failed++
 			continue
 		}
 		processed++
 	}
 
-	if failed > 0 {
-		slog.Warn("some bookmarks failed — will be retried next cycle", "failed", failed)
+	slog.Info("re-enrichment complete", "processed", processed, "failed", failed)
+}
+
+func reEnrichBookmark(ctx context.Context, rec store.BookmarkRecord, en *enrich.Client, db *store.Store, v *vault.Vault) error {
+	slog.Info("re-enriching bookmark", "title", rec.Title, "url", rec.URL)
+
+	if rec.RawPath == "" {
+		return fmt.Errorf("no raw path for bookmark %q, cannot re-enrich", rec.Title)
+	}
+	if rec.WikiPath == "" {
+		return fmt.Errorf("no wiki path for bookmark %q, cannot re-enrich", rec.Title)
 	}
 
-	// Reconcile deletions: remove vault files and DB records for bookmarks
-	// no longer present in the source. Unlike processNotes (which scans the
-	// local filesystem), this depends on an external API — an empty response
-	// could be an API glitch, so we skip reconciliation when the source
-	// returned zero bookmarks to avoid wiping the vault.
-	if ctx.Err() != nil {
-		return
+	rawContent, err := v.ReadFile(rec.RawPath)
+	if err != nil {
+		return fmt.Errorf("reading raw file for re-enrichment: %w", err)
 	}
-	if len(fetchedIDs) == 0 {
-		slog.Warn("skipping deletion reconciliation — source returned zero bookmarks")
+
+	index, err := v.ReadIndex()
+	if err != nil {
+		slog.Warn("failed to read index.md", "error", err)
+	}
+	profile, err := v.ReadSoul()
+	if err != nil {
+		slog.Warn("failed to read soul.md", "error", err)
+	}
+
+	slug := vault.GenerateSlug(rec.Title)
+	dateSaved := rec.ProcessedAt.Format("2006-01-02")
+
+	// Recover user tags from the raw file frontmatter for enrichment context
+	userTags := notes.ParseFrontmatter(rawContent)
+
+	enrichInput := &enrich.EnrichInput{
+		Content:     rawContent,
+		Index:       index,
+		UserTags:    userTags,
+		RawFilename: filepath.Base(rec.RawPath),
+		Title:       rec.Title,
+		URL:         rec.URL,
+		DateSaved:   dateSaved,
+		Profile:     profile,
+	}
+
+	wikiContent, err := en.Enrich(ctx, enrichInput)
+	if err != nil {
+		return fmt.Errorf("re-enriching: %w", err)
+	}
+
+	// Handle slug change: remove old index entry and delete old wiki file
+	wikiFilename := slug + ".md"
+	oldSlug := strings.TrimSuffix(filepath.Base(rec.WikiPath), ".md")
+	if oldSlug != slug {
+		if err := v.RemoveFromIndex(oldSlug); err != nil {
+			return fmt.Errorf("removing old index entry: %w", err)
+		}
+		if err := v.DeleteFile(rec.WikiPath); err != nil {
+			slog.Warn("failed to delete old wiki file", "path", rec.WikiPath, "error", err)
+		}
 	} else {
-		dbBookmarks, err := db.ListBookmarks()
-		if err != nil {
-			slog.Error("failed to list bookmarks from db", "error", err)
-		} else {
-			var deleted int
-			for _, rec := range dbBookmarks {
-				if ctx.Err() != nil {
-					slog.Info("shutdown requested, stopping deletion reconciliation")
-					break
-				}
-				if _, exists := fetchedIDs[rec.SourceID]; exists {
-					continue
-				}
-				// Derive slug from wiki_path: "wiki/my-article.md" → "my-article"
-				slug := strings.TrimSuffix(strings.TrimPrefix(rec.WikiPath, "wiki/"), ".md")
-				if err := v.RemoveFromIndex(slug); err != nil {
-					slog.Error("failed to remove bookmark from index", "source_id", rec.SourceID, "error", err)
-					continue
-				}
-				cleanupOK := true
-				if err := v.DeleteFile(rec.WikiPath); err != nil {
-					slog.Error("failed to delete wiki file", "path", rec.WikiPath, "error", err)
-					cleanupOK = false
-				}
-				if err := v.DeleteFile(rec.RawPath); err != nil {
-					slog.Error("failed to delete raw file", "path", rec.RawPath, "error", err)
-					cleanupOK = false
-				}
-				if !cleanupOK {
-					continue // keep DB record for retry next cycle
-				}
-				if err := db.DeleteBySourceID(rec.SourceID); err != nil {
-					slog.Error("failed to delete bookmark record", "source_id", rec.SourceID, "error", err)
-				} else {
-					slog.Info("bookmark deleted from vault", "source_id", rec.SourceID, "title", rec.Title)
-					deleted++
-				}
-			}
-			if deleted > 0 {
-				slog.Info("reconciled deleted bookmarks", "count", deleted)
-			}
+		if err := v.RemoveFromIndex(slug); err != nil {
+			return fmt.Errorf("removing old index entry: %w", err)
 		}
 	}
 
-	slog.Info("bookmarks cycle complete", "processed", processed, "failed", failed, "skipped", skipped)
+	wikiPath, err := v.WriteWiki(wikiFilename, wikiContent)
+	if err != nil {
+		return fmt.Errorf("writing wiki file: %w", err)
+	}
+
+	// Update index entry
+	tags := notes.ParseFrontmatter(wikiContent)
+	title := rec.Title
+	if enrichedTitle := notes.ParseTitle(wikiContent); enrichedTitle != "" {
+		title = enrichedTitle
+	}
+	if err := v.UpdateIndex(slug, title, tags); err != nil {
+		return fmt.Errorf("updating index: %w", err)
+	}
+
+	// Update the DB record
+	rec.WikiPath = wikiPath
+	rec.ProcessedAt = time.Now()
+	if err := db.UpsertBookmark(&rec); err != nil {
+		return fmt.Errorf("updating bookmark record: %w", err)
+	}
+
+	slog.Info("bookmark re-enriched", "title", rec.Title, "wiki", wikiPath)
+	return nil
+}
+
+func buildFallbackContent(item inbox.Item) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", item.Title)
+	fmt.Fprintf(&b, "URL: %s\n\n", item.URL)
+	if len(item.Tags) > 0 {
+		fmt.Fprintf(&b, "Tags: %s\n", strings.Join(item.Tags, ", "))
+	}
+	return b.String()
 }
 
 func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *vault.Vault) {
@@ -421,243 +629,8 @@ func buildNoteWikiContent(title string, tags []string, body string) string {
 	return b.String()
 }
 
-var errSkipped = fmt.Errorf("skipped")
-
-func processBookmark(ctx context.Context, cfg *config, bm source.Bookmark, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) error {
-	// Dedup by source ID, with vault file reconciliation
-	rec, err := db.GetBookmarkBySourceID(bm.ID)
-	if err != nil {
-		return fmt.Errorf("checking source_id: %w", err)
-	}
-	if rec != nil {
-		if cfg.forceReEnrich {
-			return reEnrichBookmark(ctx, bm, rec, en, db, v)
-		}
-		if v.FileExists(rec.WikiPath) {
-			slog.Debug("skipping already processed bookmark", "source_id", bm.ID)
-			return errSkipped
-		}
-		// Wiki file missing or empty — remove stale DB record and re-process
-		if err := db.DeleteBySourceID(bm.ID); err != nil {
-			return fmt.Errorf("deleting stale record: %w", err)
-		}
-		slog.Info("reconciled missing vault file, re-processing", "source_id", bm.ID, "wiki_path", rec.WikiPath)
-	}
-
-	// Dedup by normalized URL
-	normalizedURL := vault.NormalizeURL(bm.Link)
-	urlExists, err := db.IsProcessedByURL(normalizedURL)
-	if err != nil {
-		return fmt.Errorf("checking url: %w", err)
-	}
-	if urlExists {
-		slog.Debug("skipping duplicate URL", "url", bm.Link)
-		return errSkipped
-	}
-
-	slug := vault.GenerateSlug(bm.Title)
-	dateSaved := bm.Created.Format("2006-01-02")
-	rawFilename := vault.GenerateRawFilename(dateSaved, slug)
-
-	slog.Info("processing bookmark", "title", bm.Title, "url", bm.Link)
-
-	// Scrape via Jina
-	scrapeResult, err := sc.Scrape(ctx, bm.Link)
-	var rawContent string
-	if err != nil || !scrapeResult.OK {
-		slog.Warn("scrape failed, using fallback", "url", bm.Link, "error", err)
-		rawContent = buildFallbackContent(bm)
-	} else {
-		rawContent = scrapeResult.Content
-	}
-
-	// Write raw file
-	rawFormatted := vault.FormatRawContent(bm.Title, bm.Link, dateSaved, bm.Tags, rawContent)
-	rawPath, err := v.WriteRaw(rawFilename, rawFormatted)
-	if err != nil {
-		return fmt.Errorf("writing raw file: %w", err)
-	}
-
-	// Read index and soul for enrichment context
-	index, err := v.ReadIndex()
-	if err != nil {
-		slog.Warn("failed to read index.md", "error", err)
-	}
-	profile, err := v.ReadSoul()
-	if err != nil {
-		slog.Warn("failed to read soul.md", "error", err)
-	}
-
-	// Enrich via Ollama
-	enrichInput := &enrich.EnrichInput{
-		Content:     rawContent,
-		Index:       index,
-		UserTags:    bm.Tags,
-		RawFilename: rawFilename,
-		Title:       bm.Title,
-		URL:         bm.Link,
-		DateSaved:   dateSaved,
-		Profile:     profile,
-	}
-
-	wikiContent, err := en.Enrich(ctx, enrichInput)
-	if err != nil {
-		return fmt.Errorf("enriching: %w", err)
-	}
-
-	// Write wiki file
-	wikiFilename := slug + ".md"
-	wikiPath, err := v.WriteWiki(wikiFilename, wikiContent)
-	if err != nil {
-		return fmt.Errorf("writing wiki file: %w", err)
-	}
-
-	// Extract tags from the enriched content for index
-	tags := notes.ParseFrontmatter(wikiContent)
-	if len(tags) == 0 {
-		tags = bm.Tags
-	}
-
-	// Update index
-	title := bm.Title
-	if enrichedTitle := notes.ParseTitle(wikiContent); enrichedTitle != "" {
-		title = enrichedTitle
-	}
-	if err := v.UpdateIndex(slug, title, tags); err != nil {
-		return fmt.Errorf("updating index: %w", err)
-	}
-
-	// Save to database
-	record := &store.BookmarkRecord{
-		SourceID:      bm.ID,
-		WikiPath:      wikiPath,
-		RawPath:       rawPath,
-		Title:         bm.Title,
-		URL:           bm.Link,
-		URLNormalized: normalizedURL,
-		ProcessedAt:   time.Now(),
-	}
-	if err := db.SaveBookmark(record); err != nil {
-		return fmt.Errorf("saving bookmark record: %w", err)
-	}
-
-	slog.Info("bookmark processed", "title", bm.Title, "wiki", wikiPath, "raw", rawPath)
-	return nil
-}
-
-func reEnrichBookmark(ctx context.Context, bm source.Bookmark, rec *store.BookmarkRecord, en *enrich.Client, db *store.Store, v *vault.Vault) error {
-	slog.Info("re-enriching bookmark", "title", bm.Title, "url", bm.Link)
-
-	if rec.RawPath == "" {
-		return fmt.Errorf("no raw content stored for bookmark %d, cannot re-enrich", rec.SourceID)
-	}
-	if rec.WikiPath == "" {
-		return fmt.Errorf("no wiki path stored for bookmark %d, cannot re-enrich", rec.SourceID)
-	}
-
-	rawContent, err := v.ReadFile(rec.RawPath)
-	if err != nil {
-		return fmt.Errorf("reading raw file for re-enrichment: %w", err)
-	}
-
-	index, err := v.ReadIndex()
-	if err != nil {
-		slog.Warn("failed to read index.md", "error", err)
-	}
-	profile, err := v.ReadSoul()
-	if err != nil {
-		slog.Warn("failed to read soul.md", "error", err)
-	}
-
-	slug := vault.GenerateSlug(bm.Title)
-	dateSaved := bm.Created.Format("2006-01-02")
-
-	enrichInput := &enrich.EnrichInput{
-		Content:     rawContent,
-		Index:       index,
-		UserTags:    bm.Tags,
-		RawFilename: filepath.Base(rec.RawPath),
-		Title:       bm.Title,
-		URL:         bm.Link,
-		DateSaved:   dateSaved,
-		Profile:     profile,
-	}
-
-	wikiContent, err := en.Enrich(ctx, enrichInput)
-	if err != nil {
-		return fmt.Errorf("re-enriching: %w", err)
-	}
-
-	// Handle slug change: remove old index entry and delete old wiki file
-	wikiFilename := slug + ".md"
-	oldSlug := strings.TrimSuffix(filepath.Base(rec.WikiPath), ".md")
-	if oldSlug != slug {
-		if err := v.RemoveFromIndex(oldSlug); err != nil {
-			return fmt.Errorf("removing old index entry: %w", err)
-		}
-		if err := v.DeleteFile(rec.WikiPath); err != nil {
-			slog.Warn("failed to delete old wiki file", "path", rec.WikiPath, "error", err)
-		}
-	} else {
-		if err := v.RemoveFromIndex(slug); err != nil {
-			return fmt.Errorf("removing old index entry: %w", err)
-		}
-	}
-
-	wikiPath, err := v.WriteWiki(wikiFilename, wikiContent)
-	if err != nil {
-		return fmt.Errorf("writing wiki file: %w", err)
-	}
-
-	// Update index entry
-	tags := notes.ParseFrontmatter(wikiContent)
-	if len(tags) == 0 {
-		tags = bm.Tags
-	}
-	title := bm.Title
-	if enrichedTitle := notes.ParseTitle(wikiContent); enrichedTitle != "" {
-		title = enrichedTitle
-	}
-	if err := v.UpdateIndex(slug, title, tags); err != nil {
-		return fmt.Errorf("updating index: %w", err)
-	}
-
-	// Update the DB record with the new wiki path
-	if err := db.UpdateBookmarkWikiPath(rec.SourceID, wikiPath); err != nil {
-		return fmt.Errorf("updating bookmark record: %w", err)
-	}
-
-	slog.Info("bookmark re-enriched", "title", bm.Title, "wiki", wikiPath)
-	return nil
-}
-
-func buildFallbackContent(bm source.Bookmark) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "# %s\n\n", bm.Title)
-	fmt.Fprintf(&b, "URL: %s\n\n", bm.Link)
-	if bm.Excerpt != "" {
-		fmt.Fprintf(&b, "%s\n\n", bm.Excerpt)
-	}
-	if len(bm.Tags) > 0 {
-		fmt.Fprintf(&b, "Tags: %s\n", strings.Join(bm.Tags, ", "))
-	}
-	return b.String()
-}
-
 func loadConfig(forceReEnrich bool) (*config, error) {
-	sourceName := os.Getenv("SOURCE_NAME")
-	if sourceName == "" {
-		sourceName = "raindrop"
-	}
-
-	sourceToken := os.Getenv("SOURCE_TOKEN")
-	if sourceToken == "" {
-		// Fall back to legacy env var
-		sourceToken = os.Getenv("RAINDROP_ACCESS_TOKEN")
-	}
-	if sourceToken == "" {
-		return nil, fmt.Errorf("SOURCE_TOKEN is required")
-	}
+	raindropToken := os.Getenv("RAINDROP_ACCESS_TOKEN")
 
 	apiKey := os.Getenv("OLLAMA_API_KEY")
 	if apiKey == "" {
@@ -704,8 +677,7 @@ func loadConfig(forceReEnrich bool) (*config, error) {
 	supadataAPIKey := os.Getenv("SUPADATA_API_KEY")
 
 	return &config{
-		sourceName:     sourceName,
-		sourceToken:    sourceToken,
+		raindropToken:  raindropToken,
 		ollamaAPIKey:   apiKey,
 		ollamaModel:    model,
 		vaultPath:      vaultPath,
@@ -741,4 +713,3 @@ func resolveContainerPath(hostPath string) string {
 	}
 	return hostPath
 }
-

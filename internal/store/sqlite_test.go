@@ -17,76 +17,18 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
-func seedBookmark(t *testing.T, s *Store, sourceID int) {
+func seedBookmark(t *testing.T, s *Store) {
 	t.Helper()
-	err := s.SaveBookmark(&BookmarkRecord{
-		SourceID:      sourceID,
+	err := s.UpsertBookmark(&BookmarkRecord{
 		WikiPath:      "wiki/test-article.md",
-		RawPath:       "raw/2024-01-01-test-article.md",
+		RawPath:       "raw/test-article.md",
 		Title:         "Test Article",
 		URL:           "http://example.com/test",
 		URLNormalized: "http://example.com/test",
 		ProcessedAt:   time.Now(),
 	})
 	if err != nil {
-		t.Fatalf("SaveBookmark: %v", err)
-	}
-}
-
-func TestGetBookmarkBySourceID_Found(t *testing.T) {
-	s := newTestStore(t)
-	seedBookmark(t, s, 42)
-
-	rec, err := s.GetBookmarkBySourceID(42)
-	if err != nil {
-		t.Fatalf("GetBookmarkBySourceID: %v", err)
-	}
-	if rec == nil {
-		t.Fatal("expected record, got nil")
-	}
-	if rec.SourceID != 42 {
-		t.Errorf("SourceID = %d, want 42", rec.SourceID)
-	}
-	if rec.WikiPath != "wiki/test-article.md" {
-		t.Errorf("WikiPath = %q, want %q", rec.WikiPath, "wiki/test-article.md")
-	}
-}
-
-func TestGetBookmarkBySourceID_NotFound(t *testing.T) {
-	s := newTestStore(t)
-
-	rec, err := s.GetBookmarkBySourceID(999)
-	if err != nil {
-		t.Fatalf("GetBookmarkBySourceID: %v", err)
-	}
-	if rec != nil {
-		t.Errorf("expected nil, got %+v", rec)
-	}
-}
-
-func TestDeleteBySourceID(t *testing.T) {
-	s := newTestStore(t)
-	seedBookmark(t, s, 42)
-
-	if err := s.DeleteBySourceID(42); err != nil {
-		t.Fatalf("DeleteBySourceID: %v", err)
-	}
-
-	exists, err := s.IsProcessedBySourceID(42)
-	if err != nil {
-		t.Fatalf("IsProcessedBySourceID: %v", err)
-	}
-	if exists {
-		t.Error("expected record to be deleted")
-	}
-}
-
-func TestDeleteBySourceID_Idempotent(t *testing.T) {
-	s := newTestStore(t)
-
-	// Deleting a non-existent record should not error
-	if err := s.DeleteBySourceID(999); err != nil {
-		t.Fatalf("DeleteBySourceID on missing record: %v", err)
+		t.Fatalf("UpsertBookmark: %v", err)
 	}
 }
 
@@ -180,31 +122,28 @@ func TestDeleteNote(t *testing.T) {
 func TestListBookmarks(t *testing.T) {
 	s := newTestStore(t)
 
-	// Save two bookmarks with distinct paths
-	err := s.SaveBookmark(&BookmarkRecord{
-		SourceID:      100,
+	err := s.UpsertBookmark(&BookmarkRecord{
 		WikiPath:      "wiki/alpha.md",
-		RawPath:       "raw/2024-01-01-alpha.md",
+		RawPath:       "raw/alpha.md",
 		Title:         "Alpha",
 		URL:           "http://example.com/alpha",
 		URLNormalized: "http://example.com/alpha",
 		ProcessedAt:   time.Now(),
 	})
 	if err != nil {
-		t.Fatalf("SaveBookmark alpha: %v", err)
+		t.Fatalf("UpsertBookmark alpha: %v", err)
 	}
 
-	err = s.SaveBookmark(&BookmarkRecord{
-		SourceID:      200,
+	err = s.UpsertBookmark(&BookmarkRecord{
 		WikiPath:      "wiki/beta.md",
-		RawPath:       "raw/2024-01-02-beta.md",
+		RawPath:       "raw/beta.md",
 		Title:         "Beta",
 		URL:           "http://example.com/beta",
 		URLNormalized: "http://example.com/beta",
 		ProcessedAt:   time.Now(),
 	})
 	if err != nil {
-		t.Fatalf("SaveBookmark beta: %v", err)
+		t.Fatalf("UpsertBookmark beta: %v", err)
 	}
 
 	records, err := s.ListBookmarks()
@@ -215,21 +154,124 @@ func TestListBookmarks(t *testing.T) {
 		t.Fatalf("len(records) = %d, want 2", len(records))
 	}
 
-	byID := make(map[int]BookmarkRecord, len(records))
+	byURL := make(map[string]BookmarkRecord, len(records))
 	for _, r := range records {
-		byID[r.SourceID] = r
+		byURL[r.URLNormalized] = r
 	}
 
-	if r, ok := byID[100]; !ok {
-		t.Error("missing source_id 100 in ListBookmarks result")
+	if r, ok := byURL["http://example.com/alpha"]; !ok {
+		t.Error("missing alpha in ListBookmarks result")
 	} else if r.WikiPath != "wiki/alpha.md" {
 		t.Errorf("alpha WikiPath = %q, want %q", r.WikiPath, "wiki/alpha.md")
 	}
 
-	if r, ok := byID[200]; !ok {
-		t.Error("missing source_id 200 in ListBookmarks result")
+	if r, ok := byURL["http://example.com/beta"]; !ok {
+		t.Error("missing beta in ListBookmarks result")
 	} else if r.WikiPath != "wiki/beta.md" {
 		t.Errorf("beta WikiPath = %q, want %q", r.WikiPath, "wiki/beta.md")
+	}
+}
+
+func TestGetBookmarkByURL_Found(t *testing.T) {
+	s := newTestStore(t)
+	seedBookmark(t, s)
+
+	rec, err := s.GetBookmarkByURL("http://example.com/test")
+	if err != nil {
+		t.Fatalf("GetBookmarkByURL: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("expected record, got nil")
+	}
+	if rec.URLNormalized != "http://example.com/test" {
+		t.Errorf("URLNormalized = %q, want %q", rec.URLNormalized, "http://example.com/test")
+	}
+}
+
+func TestGetBookmarkByURL_NotFound(t *testing.T) {
+	s := newTestStore(t)
+
+	rec, err := s.GetBookmarkByURL("http://example.com/missing")
+	if err != nil {
+		t.Fatalf("GetBookmarkByURL: %v", err)
+	}
+	if rec != nil {
+		t.Errorf("expected nil, got %+v", rec)
+	}
+}
+
+func TestUpsertBookmark_Insert(t *testing.T) {
+	s := newTestStore(t)
+
+	rec := &BookmarkRecord{
+		WikiPath:      "wiki/new-article.md",
+		RawPath:       "raw/new-article.md",
+		Title:         "New Article",
+		URL:           "http://example.com/new",
+		URLNormalized: "http://example.com/new",
+		ProcessedAt:   time.Now(),
+	}
+	if err := s.UpsertBookmark(rec); err != nil {
+		t.Fatalf("UpsertBookmark: %v", err)
+	}
+
+	found, err := s.GetBookmarkByURL("http://example.com/new")
+	if err != nil {
+		t.Fatalf("GetBookmarkByURL: %v", err)
+	}
+	if found == nil {
+		t.Fatal("expected record after insert")
+	}
+	if found.Title != "New Article" {
+		t.Errorf("Title = %q, want %q", found.Title, "New Article")
+	}
+}
+
+func TestUpsertBookmark_Update(t *testing.T) {
+	s := newTestStore(t)
+
+	rec := &BookmarkRecord{
+		WikiPath:      "wiki/article.md",
+		RawPath:       "raw/article.md",
+		Title:         "Original Title",
+		URL:           "http://example.com/article",
+		URLNormalized: "http://example.com/article",
+		ProcessedAt:   time.Now(),
+	}
+	if err := s.UpsertBookmark(rec); err != nil {
+		t.Fatalf("UpsertBookmark (insert): %v", err)
+	}
+
+	rec.Title = "Updated Title"
+	rec.WikiPath = "wiki/article-v2.md"
+	if err := s.UpsertBookmark(rec); err != nil {
+		t.Fatalf("UpsertBookmark (update): %v", err)
+	}
+
+	found, err := s.GetBookmarkByURL("http://example.com/article")
+	if err != nil {
+		t.Fatalf("GetBookmarkByURL: %v", err)
+	}
+	if found.Title != "Updated Title" {
+		t.Errorf("Title = %q, want %q", found.Title, "Updated Title")
+	}
+	if found.WikiPath != "wiki/article-v2.md" {
+		t.Errorf("WikiPath = %q, want %q", found.WikiPath, "wiki/article-v2.md")
+	}
+
+	// Should still be only one record
+	records, err := s.ListBookmarks()
+	if err != nil {
+		t.Fatalf("ListBookmarks: %v", err)
+	}
+	count := 0
+	for _, r := range records {
+		if r.URLNormalized == "http://example.com/article" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected 1 record for URL, got %d", count)
 	}
 }
 

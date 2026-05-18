@@ -21,7 +21,7 @@ func New(basePath string) *Vault {
 }
 
 func (v *Vault) Init() error {
-	dirs := []string{"raw", "wiki", "notes", "templates"}
+	dirs := []string{"raw", "wiki", "notes", "templates", "inbox"}
 	for _, d := range dirs {
 		if err := os.MkdirAll(filepath.Join(v.BasePath, d), 0o755); err != nil {
 			return fmt.Errorf("creating directory %s: %w", d, err)
@@ -48,6 +48,21 @@ tags: []
 `
 		if err := os.WriteFile(noteTemplatePath, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("creating note template: %w", err)
+		}
+	}
+
+	// Create inbox template
+	inboxTemplatePath := filepath.Join(v.BasePath, "templates", "inbox.md")
+	if _, err := os.Stat(inboxTemplatePath); os.IsNotExist(err) {
+		content := `---
+title: ""
+tags: []
+---
+
+https://
+`
+		if err := os.WriteFile(inboxTemplatePath, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("creating inbox template: %w", err)
 		}
 	}
 
@@ -235,8 +250,8 @@ func sanitizeMarkdown(s string) string {
 	return mdReplacer.Replace(s)
 }
 
-func GenerateRawFilename(dateSaved, slug string) string {
-	return fmt.Sprintf("%s-%s.md", dateSaved, slug)
+func GenerateRawFilename(slug string) string {
+	return slug + ".md"
 }
 
 var utmParams = map[string]bool{

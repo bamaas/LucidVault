@@ -1,6 +1,6 @@
 # ADR-013: Bookmark Deletion Sync
 
-**Status:** Implemented
+**Status:** Superseded by [ADR-014](014-vault-inbox.md)
 
 ## Context
 

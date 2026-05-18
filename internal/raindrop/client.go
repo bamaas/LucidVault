@@ -8,19 +8,20 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
-
-	"lucidvault/internal/source"
 )
 
 const baseURL = "https://api.raindrop.io/rest/v1"
 
-// Compile-time check that Client implements source.Client.
-var _ source.Client = (*Client)(nil)
-
-func init() {
-	source.Register("raindrop", func(token string) source.Client {
-		return NewClient(token)
-	})
+// Bookmark represents a saved item fetched from the Raindrop API.
+// Currently only used within this package (FetchBookmarks → SyncToInbox).
+// If a second bookmark source is added, extract this to a shared package.
+type Bookmark struct {
+	ID      int
+	Title   string
+	Link    string
+	Excerpt string
+	Tags    []string
+	Created time.Time
 }
 
 type Client struct {
@@ -58,8 +59,8 @@ func NewClient(token string) *Client {
 // all results and returns them in chronological order (oldest first via
 // sort=created). Deduplication against already-processed bookmarks is handled
 // by the caller via the database.
-func (c *Client) FetchBookmarks(ctx context.Context) ([]source.Bookmark, error) {
-	var allBookmarks []source.Bookmark
+func (c *Client) FetchBookmarks(ctx context.Context) ([]Bookmark, error) {
+	var allBookmarks []Bookmark
 
 	for page := 0; ; page++ {
 		url := fmt.Sprintf("%s/raindrops/0?sort=created&page=%d&perpage=25", baseURL, page)
@@ -94,14 +95,7 @@ func (c *Client) FetchBookmarks(ctx context.Context) ([]source.Bookmark, error) 
 		}
 
 		for _, item := range result.Items {
-			allBookmarks = append(allBookmarks, source.Bookmark{
-				ID:      item.ID,
-				Title:   item.Title,
-				Link:    item.Link,
-				Excerpt: item.Excerpt,
-				Tags:    item.Tags,
-				Created: item.Created,
-			})
+			allBookmarks = append(allBookmarks, Bookmark(item))
 		}
 
 		slog.Info("fetched raindrop page", "page", page, "items", len(result.Items), "total", len(allBookmarks))

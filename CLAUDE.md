@@ -1,18 +1,23 @@
 # Claude instructions for LucidVault
 
-AI-powered personal knowledge base. Polls Raindrop.io, scrapes via Jina Reader, enriches via Ollama Cloud, writes to Obsidian vault.
+AI-powered personal knowledge base. Scrapes URLs, enriches via Ollama Cloud, writes to Obsidian vault. URLs enter through an inbox folder — either manually or via optional Raindrop.io integration.
 
 ## Pipeline
 
 ```text
 Poll loop (configurable interval)
   │
-  ├─ processBookmarks:
-  │    source.Client.FetchBookmarks()     → []Bookmark
+  ├─ syncRaindropToInbox (optional, when RAINDROP_ACCESS_TOKEN is set):
+  │    raindrop.FetchBookmarks()          → []Bookmark
+  │    raindrop.SyncToInbox()             → create inbox/*.md for new URLs (dedup via DB)
+  │
+  ├─ processInbox:
+  │    inbox.Scan(vaultPath)              → []Item (reads inbox/*.md)
   │    scraper.Scrape(url)                → markdown content (Jina Reader; YouTube via Supadata)
   │    enrich.Enrich(content)             → wiki-style summary (Ollama Cloud)
   │    vault.WriteRaw() + vault.WriteWiki() + vault.UpdateIndex()
-  │    store.SaveBookmark()               → mark processed in SQLite
+  │    store.UpsertBookmark()             → mark processed in SQLite
+  │    inbox.Delete()                     → remove processed inbox file
   │
   └─ processNotes:
        notes.Scan(vaultPath)              → detect new/changed notes
@@ -26,8 +31,8 @@ Poll loop (configurable interval)
 ```text
 cmd/main.go              — Entry point, poll loop, graceful shutdown
 internal/claudemd/       — CLAUDE.md upsert logic for Claude Code integration
-internal/source/         — Bookmark source interface and factory
-internal/raindrop/       — Raindrop API client (implements source.Client)
+internal/inbox/          — Inbox scanner and file management
+internal/raindrop/       — Raindrop API client and inbox sync (optional feeder)
 internal/scraper/        — Scraper (Jina Reader + Supadata YouTube transcripts)
 internal/enrich/         — Ollama Cloud enrichment
 internal/notes/          — Notes scanner, frontmatter parser
@@ -37,11 +42,14 @@ internal/vault/          — Vault file writer, slug/URL helpers
 
 ## Key Interfaces
 
-- **`source.Client`** — `FetchBookmarks(ctx) ([]Bookmark, error)`. Implementations register via `source.Register(name, factory)`. Create with `source.NewClient(name, token)`.
+- **`inbox.Scan`** — `Scan(vaultPath) ([]Item, error)`. Reads `inbox/*.md` files, parses optional YAML frontmatter (title, tags) and URL.
+- **`inbox.Delete`** — `Delete(path) error`. Removes processed inbox file.
+- **`raindrop.Client`** — `FetchBookmarks(ctx) ([]Bookmark, error)`. Fetches all bookmarks from Raindrop API.
+- **`raindrop.SyncToInbox`** — `SyncToInbox(bookmarks, db, vaultPath) (int, error)`. Creates inbox files for new URLs (dedup via DB).
 - **`scraper.Scraper`** — `Scrape(ctx, url) (*Result, error)`. Uses Jina Reader; delegates YouTube URLs to `YouTubeClient` (Supadata).
 - **`enrich.Client`** — `Enrich(ctx, *EnrichInput) (string, error)`. Calls Ollama Cloud with retry logic. Returns wiki-formatted markdown. `SuggestTags(ctx, *TagInput) ([]string, error)` generates tags for notes.
 - **`vault.Vault`** — `WriteRaw()`, `WriteWiki()`, `UpdateIndex()`, `RemoveFromIndex()`. Manages file layout and `index.md`.
-- **`store.Store`** — SQLite-backed deduplication. Tracks processed bookmarks (by source ID and URL) and note content hashes.
+- **`store.Store`** — SQLite-backed deduplication. Tracks processed bookmarks (by normalized URL) and note content hashes.
 
 ## Build, Test & Lint
 
@@ -71,15 +79,14 @@ mise run lint:commits          # Check commit message (used by commit-msg hook)
 - **Pure-Go SQLite** — Uses `modernc.org/sqlite` (no CGO). Don't import `mattn/go-sqlite3`. Build tags for CGO will break the build.
 - **Jina Reader rate limits** — Scraper makes HTTP calls to `r.jina.ai`. Respect rate limits; the poll interval naturally throttles.
 - **Ollama Cloud retries** — `enrich.Client` has built-in retry with configurable `maxRetries` and `delayMs`. Don't add external retry wrappers.
-- **Source registry** — New sources must call `source.Register()` in an `init()` function and be imported in `cmd/main.go`.
-- **Vault index.md** — `vault.UpdateIndex()` appends to `index.md`. `RemoveFromIndex()` removes. Both are idempotent by slug.
+- **Inbox is the single entry point** — All URLs flow through `inbox/`. Raindrop is an optional feeder that creates inbox files. No other entry path exists.
+- **Vault index.md** — `vault.UpdateIndex()` appends to `index.md`. Idempotent by slug.
 
-## Required Environment Variables
+## Environment Variables
 
-- `SOURCE_NAME` — Bookmark source to use (default: `raindrop`)
-- `SOURCE_TOKEN` — Access token for the bookmark source (falls back to `RAINDROP_ACCESS_TOKEN`)
-- `OLLAMA_API_KEY` — Ollama Cloud API key
-- `VAULT_PATH` — Path to Obsidian vault
+- `OLLAMA_API_KEY` — (required) Ollama Cloud API key
+- `VAULT_PATH` — (required) Path to Obsidian vault
+- `RAINDROP_ACCESS_TOKEN` — (optional) Enables Raindrop.io as an inbox feeder
 - `SUPADATA_API_KEY` — (optional) Supadata API key for YouTube transcript extraction
 
 ## Workflow
