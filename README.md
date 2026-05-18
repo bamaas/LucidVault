@@ -16,7 +16,7 @@ LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.m
 - **Enrich** — LLM (Ollama Cloud, free) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** — Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **Resilient** — Falls back to basic metadata when scraping fails (paywalled sites, blocked content)
-- **Notes indexing** — Personal notes in `notes/` are automatically scanned, tagged from frontmatter, and added to `index.md` so they connect to the knowledge graph
+- **Notes indexing** — Personal notes in `notes/` are automatically scanned and get a wiki copy in `wiki/` with tags. Notes without tags are auto-tagged via the LLM; notes with existing tags keep them as-is. The `index.md` points to the wiki copy for consistent retrieval
 - **Re-enrich** — Changed your enrichment prompt or model? Run with `--re-enrich` to re-process all bookmarks using existing raw content
 - **Reprocess** — Want to re-scrape and re-enrich a URL? Drop it in `inbox/` again — it always gets processed
 
@@ -165,8 +165,8 @@ LucidVault creates and manages these directories inside your vault:
 vault/
 ├── inbox/        # Drop .md files with URLs here to process them
 ├── raw/          # Immutable scraped content (don't edit)
-├── wiki/         # LLM-generated wiki pages (don't edit — overwritten on re-enrichment)
-├── notes/        # Your personal notes (yours to write freely)
+├── wiki/         # LLM-generated wiki pages (don't edit — overwritten on re-enrichment/note changes)
+├── notes/        # Your personal notes (yours to write freely; wiki copies are auto-generated)
 ├── templates/    # Obsidian templates
 ├── index.md      # Master catalog of all wiki pages
 ├── soul.md       # Your profile for LLM personalization (optional, you create this)

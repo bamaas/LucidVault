@@ -16,6 +16,7 @@ type Store struct {
 type NoteRecord struct {
 	Path          string
 	ContentHash   string
+	WikiPath      string
 	LastProcessed time.Time
 }
 
@@ -69,6 +70,9 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return fmt.Errorf("executing migrations: %w", err)
 	}
+
+	// Add wiki_path column to notes table (idempotent — ignores if already exists)
+	_, _ = s.db.Exec(`ALTER TABLE notes ADD COLUMN wiki_path TEXT NOT NULL DEFAULT ''`)
 
 	// Deduplicate url_normalized before creating unique index (keeps newest row).
 	// Exclude NULL values to avoid grouping unrelated rows.
@@ -157,10 +161,10 @@ func (s *Store) GetNoteHash(path string) (string, error) {
 	return hash, nil
 }
 
-func (s *Store) UpsertNote(path, contentHash string) error {
+func (s *Store) UpsertNote(path, contentHash, wikiPath string) error {
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO notes (path, content_hash, last_processed) VALUES (?, ?, ?)`,
-		path, contentHash, time.Now().UTC().Format(time.RFC3339),
+		`INSERT OR REPLACE INTO notes (path, content_hash, wiki_path, last_processed) VALUES (?, ?, ?, ?)`,
+		path, contentHash, wikiPath, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("upserting note %q: %w", path, err)
@@ -203,7 +207,7 @@ func (s *Store) ListBookmarks() ([]BookmarkRecord, error) {
 }
 
 func (s *Store) ListNotes() ([]NoteRecord, error) {
-	rows, err := s.db.Query("SELECT path, content_hash, last_processed FROM notes")
+	rows, err := s.db.Query("SELECT path, content_hash, wiki_path, last_processed FROM notes")
 	if err != nil {
 		return nil, fmt.Errorf("listing notes: %w", err)
 	}
@@ -213,7 +217,7 @@ func (s *Store) ListNotes() ([]NoteRecord, error) {
 	for rows.Next() {
 		var rec NoteRecord
 		var lastProcessed string
-		if err := rows.Scan(&rec.Path, &rec.ContentHash, &lastProcessed); err != nil {
+		if err := rows.Scan(&rec.Path, &rec.ContentHash, &rec.WikiPath, &lastProcessed); err != nil {
 			return nil, fmt.Errorf("scanning note row: %w", err)
 		}
 		rec.LastProcessed, err = time.Parse(time.RFC3339, lastProcessed)

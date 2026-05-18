@@ -1,3 +1,21 @@
+## v0.9.0 (2026-05-17)
+
+### Feat
+
+- auto-tag notes and create wiki copies for all notes (#43)
+
+## v0.8.2 (2026-05-17)
+
+### Fix
+
+- use GITHUB_TOKEN for workflow dispatch trigger (#42)
+
+## v0.8.1 (2026-05-17)
+
+### Fix
+
+- skip release workflow when bump produces no version change (#41)
+
 ## v0.8.0 (2026-05-17)
 
 ### Feat

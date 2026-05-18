@@ -356,7 +356,7 @@ Some content.
 	indexPath := filepath.Join(tmpDir, "index.md")
 	content := readFile(t, indexPath)
 	assertContains(t, content, "[[test-article]]")
-	assertContains(t, content, "[[notes/test-note]]")
+	assertContains(t, content, "[[test-note]]")
 }
 
 func TestReEnrichAll_UpdatesWikiContent(t *testing.T) {
@@ -413,7 +413,7 @@ func TestReEnrichBookmark_MissingRawPath(t *testing.T) {
 }
 
 func TestProcessNotes_IndexesNewNote(t *testing.T) {
-	tmpDir, db, v, _, _ := setupTestEnv(t)
+	tmpDir, db, v, _, en := setupTestEnv(t)
 
 	noteContent := `---
 tags:
@@ -431,7 +431,7 @@ Some content here.
 	}
 
 	ctx := context.Background()
-	processNotes(ctx, db, v)
+	processNotes(ctx, en, db, v)
 
 	hash, err := db.GetNoteHash("notes/test-note.md")
 	if err != nil {
@@ -441,15 +441,24 @@ Some content here.
 		t.Error("expected DB to have a hash for the note")
 	}
 
+	// Verify wiki copy was created
+	wikiFile := filepath.Join(tmpDir, "wiki", "test-note.md")
+	if _, err := os.Stat(wikiFile); os.IsNotExist(err) {
+		t.Error("expected wiki copy to be created for note")
+	}
+
+	// Verify index.md points to wiki slug (not notes/ slug) and has tags
 	indexPath := filepath.Join(tmpDir, "index.md")
 	content := readFile(t, indexPath)
-	assertContains(t, content, "[[notes/test-note]]")
+	assertContains(t, content, "[[test-note]]")
 	assertContains(t, content, "golang")
 	assertContains(t, content, "testing")
+	// Should NOT point to notes/ path
+	assertNotContains(t, content, "[[notes/test-note]]")
 }
 
 func TestProcessNotes_SkipsUnchanged(t *testing.T) {
-	tmpDir, db, v, _, _ := setupTestEnv(t)
+	tmpDir, db, v, _, en := setupTestEnv(t)
 
 	noteContent := `---
 tags:
@@ -466,12 +475,14 @@ Content here.
 	}
 
 	ctx := context.Background()
-	processNotes(ctx, db, v)
+	// First run
+	processNotes(ctx, en, db, v)
 
 	indexPath := filepath.Join(tmpDir, "index.md")
 	contentBefore := readFile(t, indexPath)
 
-	processNotes(ctx, db, v)
+	// Second run
+	processNotes(ctx, en, db, v)
 
 	contentAfter := readFile(t, indexPath)
 	if contentBefore != contentAfter {
@@ -480,7 +491,7 @@ Content here.
 }
 
 func TestProcessNotes_UpdatesChangedNote(t *testing.T) {
-	tmpDir, db, v, _, _ := setupTestEnv(t)
+	tmpDir, db, v, _, en := setupTestEnv(t)
 
 	noteV1 := `---
 tags:
@@ -497,7 +508,7 @@ Version one.
 	}
 
 	ctx := context.Background()
-	processNotes(ctx, db, v)
+	processNotes(ctx, en, db, v)
 
 	noteV2 := `---
 tags:
@@ -512,16 +523,21 @@ Version two.
 		t.Fatalf("WriteFile v2: %v", err)
 	}
 
-	processNotes(ctx, db, v)
+	processNotes(ctx, en, db, v)
 
 	indexPath := filepath.Join(tmpDir, "index.md")
 	content := readFile(t, indexPath)
 	assertContains(t, content, "rust")
 	assertNotContains(t, content, "golang")
+
+	// Verify wiki copy was updated
+	wikiFile := filepath.Join(tmpDir, "wiki", "changing-note.md")
+	wikiContent := readFile(t, wikiFile)
+	assertContains(t, wikiContent, "Version two")
 }
 
 func TestProcessNotes_ReconcilesDeletedNote(t *testing.T) {
-	tmpDir, db, v, _, _ := setupTestEnv(t)
+	tmpDir, db, v, _, en := setupTestEnv(t)
 
 	noteContent := `---
 tags:
@@ -538,18 +554,32 @@ Some content.
 	}
 
 	ctx := context.Background()
-	processNotes(ctx, db, v)
+	processNotes(ctx, en, db, v)
 
+	// Verify note is indexed via wiki slug
 	indexPath := filepath.Join(tmpDir, "index.md")
-	assertContains(t, readFile(t, indexPath), "[[notes/deleted-note]]")
+	assertContains(t, readFile(t, indexPath), "[[deleted-note]]")
 
+	// Verify wiki copy exists
+	wikiFile := filepath.Join(tmpDir, "wiki", "deleted-note.md")
+	if _, err := os.Stat(wikiFile); os.IsNotExist(err) {
+		t.Fatal("expected wiki copy to exist before deletion")
+	}
+
+	// Delete the note file
 	if err := os.Remove(notePath); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 
-	processNotes(ctx, db, v)
+	processNotes(ctx, en, db, v)
 
-	assertNotContains(t, readFile(t, indexPath), "[[notes/deleted-note]]")
+	// Verify index no longer contains the note
+	assertNotContains(t, readFile(t, indexPath), "[[deleted-note]]")
+
+	// Verify wiki copy was also deleted
+	if _, err := os.Stat(wikiFile); !os.IsNotExist(err) {
+		t.Error("expected wiki copy to be removed after note deletion")
+	}
 
 	hash, err := db.GetNoteHash("notes/deleted-note.md")
 	if err != nil {
@@ -561,7 +591,7 @@ Some content.
 }
 
 func TestProcessNotes_RecursiveSubdirectories(t *testing.T) {
-	tmpDir, db, v, _, _ := setupTestEnv(t)
+	tmpDir, db, v, _, en := setupTestEnv(t)
 
 	subDir := filepath.Join(tmpDir, "notes", "sub")
 	if err := os.MkdirAll(subDir, 0o755); err != nil {
@@ -583,8 +613,81 @@ Nested content.
 	}
 
 	ctx := context.Background()
-	processNotes(ctx, db, v)
+	processNotes(ctx, en, db, v)
 
+	// Wiki copy uses the base filename as slug
 	indexPath := filepath.Join(tmpDir, "index.md")
-	assertContains(t, readFile(t, indexPath), "[[notes/sub/deep-note]]")
+	assertContains(t, readFile(t, indexPath), "[[deep-note]]")
+
+	// Verify wiki copy exists
+	wikiFile := filepath.Join(tmpDir, "wiki", "deep-note.md")
+	if _, err := os.Stat(wikiFile); os.IsNotExist(err) {
+		t.Error("expected wiki copy for nested note")
+	}
+
+	// Verify DB has the note
+	hash, err := db.GetNoteHash("notes/sub/deep-note.md")
+	if err != nil {
+		t.Fatalf("GetNoteHash: %v", err)
+	}
+	if hash == "" {
+		t.Error("expected DB to have a hash for the nested note")
+	}
+}
+
+func TestProcessNotes_AutoTagsTaglessNote(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	v := vault.New(tmpDir)
+	if err := v.Init(); err != nil {
+		t.Fatalf("vault init: %v", err)
+	}
+
+	dbPath := filepath.Join(tmpDir, ".lucidvault.db")
+	db, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Mock Ollama server that returns tags for SuggestTags
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		}{}
+		resp.Message.Content = "golang, concurrency, goroutines"
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Errorf("json.Encode: %v", err)
+		}
+	}))
+	t.Cleanup(ollamaServer.Close)
+
+	en := enrich.NewClient("test-key", "test-model", 0, 0)
+	en.SetBaseURL(ollamaServer.URL)
+
+	// Note WITHOUT tags
+	noteContent := "# Go Concurrency\n\nGoroutines and channels are great."
+	notePath := filepath.Join(tmpDir, "notes", "go-concurrency.md")
+	if err := os.WriteFile(notePath, []byte(noteContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ctx := context.Background()
+	processNotes(ctx, en, db, v)
+
+	// Verify wiki copy was created with auto-tags in frontmatter
+	wikiFile := filepath.Join(tmpDir, "wiki", "go-concurrency.md")
+	wikiContent := readFile(t, wikiFile)
+	assertContains(t, wikiContent, "tags:")
+	assertContains(t, wikiContent, "golang")
+	assertContains(t, wikiContent, "type: note")
+
+	// Verify index has auto-tags
+	indexPath := filepath.Join(tmpDir, "index.md")
+	indexContent := readFile(t, indexPath)
+	assertContains(t, indexContent, "[[go-concurrency]]")
+	assertContains(t, indexContent, "golang")
 }

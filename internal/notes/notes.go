@@ -196,6 +196,26 @@ func TitleFromFilename(path string) string {
 	return strings.TrimSuffix(base, ext)
 }
 
+// StripFrontmatter removes YAML frontmatter (--- delimited) from content,
+// returning only the body. If no frontmatter is present, returns content as-is.
+func StripFrontmatter(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+
+	if !strings.HasPrefix(content, "---") {
+		return content
+	}
+
+	body := content[3:]
+	end := strings.Index(body, "\n---")
+	if end == -1 {
+		return content
+	}
+
+	// Skip past the closing "---\n"
+	rest := body[end+4:]
+	return strings.TrimSpace(rest)
+}
+
 // splitTrimmed splits s by sep and trims whitespace from each element,
 // omitting empty strings.
 func splitTrimmed(s, sep string) []string {

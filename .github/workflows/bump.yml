@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   bump:
@@ -41,9 +42,16 @@ jobs:
       - name: Bump version
         id: bump
         run: |
+          version_before="$(cz version --project)"
           if cz bump --yes --changelog --changelog-to-stdout > /tmp/changelog.md 2>/tmp/cz-stderr.txt; then
-            echo "bumped=true" >> "$GITHUB_OUTPUT"
-            echo "version=$(cz version --project)" >> "$GITHUB_OUTPUT"
+            version_after="$(cz version --project)"
+            if [ "$version_before" != "$version_after" ]; then
+              echo "bumped=true" >> "$GITHUB_OUTPUT"
+              echo "version=${version_after}" >> "$GITHUB_OUTPUT"
+            else
+              echo "bumped=false" >> "$GITHUB_OUTPUT"
+              echo "Version unchanged (${version_before}) — nothing to release."
+            fi
           else
             echo "bumped=false" >> "$GITHUB_OUTPUT"
             cat /tmp/cz-stderr.txt
@@ -55,18 +63,19 @@ jobs:
           git push
           git push --tags
 
-      - name: Save bump metadata
-        if: steps.bump.outputs.bumped == 'true'
-        run: |
-          echo "${{ github.event.workflow_run.id }}" > /tmp/ci_run_id.txt
-          echo "${{ steps.bump.outputs.version }}" > /tmp/version.txt
-
       - uses: actions/upload-artifact@v4
         if: steps.bump.outputs.bumped == 'true'
         with:
-          name: bump-metadata
-          path: |
-            /tmp/ci_run_id.txt
-            /tmp/version.txt
-            /tmp/changelog.md
+          name: changelog
+          path: /tmp/changelog.md
           retention-days: 1
+
+      - name: Trigger release
+        if: steps.bump.outputs.bumped == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run release.yml \
+            -f version=${{ steps.bump.outputs.version }} \
+            -f ci-run-id=${{ github.event.workflow_run.id }} \
+            -f bump-run-id=${{ github.run_id }}
