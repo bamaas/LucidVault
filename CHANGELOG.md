@@ -1,3 +1,9 @@
+## v0.11.0 (2026-05-18)
+
+### Feat
+
+- add --re-fetch flag to force re-syncing bookmarks from external sources (#48) (#50)
+
 ## v0.10.3 (2026-05-18)
 
 ### Fix
