@@ -30,20 +30,29 @@ func SyncToInbox(bookmarks []Bookmark, db *store.Store, vaultPath string) (int, 
 			continue
 		}
 
-		// Skip if inbox file already exists (may be a slug collision from a
-		// different URL with a similar title — will resolve next cycle after
-		// the existing file is processed and deleted).
+		// Atomically create inbox file (O_EXCL fails if file already exists,
+		// avoiding TOCTOU race between stat and write). An existing file may be
+		// a slug collision from a different URL — will resolve next cycle after
+		// the existing file is processed and deleted.
 		slug := vault.GenerateSlug(bm.Title)
 		inboxFile := filepath.Join(inboxDir, slug+".md")
-		if _, err := os.Stat(inboxFile); err == nil {
+		content := formatInboxFile(bm)
+
+		f, err := os.OpenFile(inboxFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if os.IsExist(err) {
 			slog.Warn("inbox file already exists, skipping", "slug", slug, "url", bm.Link)
 			continue
 		}
-
-		// Write inbox file
-		content := formatInboxFile(bm)
-		if err := os.WriteFile(inboxFile, []byte(content), 0o644); err != nil {
-			return created, fmt.Errorf("writing inbox file %s: %w", inboxFile, err)
+		if err != nil {
+			return created, fmt.Errorf("creating inbox file %s: %w", inboxFile, err)
+		}
+		_, writeErr := f.WriteString(content)
+		closeErr := f.Close()
+		if writeErr != nil {
+			return created, fmt.Errorf("writing inbox file %s: %w", inboxFile, writeErr)
+		}
+		if closeErr != nil {
+			return created, fmt.Errorf("closing inbox file %s: %w", inboxFile, closeErr)
 		}
 
 		slog.Info("created inbox file from raindrop", "title", bm.Title, "slug", slug)

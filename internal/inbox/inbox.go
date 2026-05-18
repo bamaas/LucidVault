@@ -90,9 +90,10 @@ func extractURL(content string) string {
 	body := content
 	if strings.HasPrefix(content, "---") {
 		rest := content[3:]
-		end := strings.Index(rest, "\n---")
+		const fmEnd = "\n---"
+		end := strings.Index(rest, fmEnd)
 		if end != -1 {
-			body = rest[end+4:]
+			body = rest[end+len(fmEnd):]
 		}
 	}
 
