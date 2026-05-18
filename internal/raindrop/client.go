@@ -13,6 +13,8 @@ import (
 const baseURL = "https://api.raindrop.io/rest/v1"
 
 // Bookmark represents a saved item fetched from the Raindrop API.
+// Currently only used within this package (FetchBookmarks → SyncToInbox).
+// If a second bookmark source is added, extract this to a shared package.
 type Bookmark struct {
 	ID      int
 	Title   string
