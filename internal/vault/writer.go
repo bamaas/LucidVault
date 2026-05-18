@@ -51,6 +51,21 @@ tags: []
 		}
 	}
 
+	// Create inbox template
+	inboxTemplatePath := filepath.Join(v.BasePath, "templates", "inbox.md")
+	if _, err := os.Stat(inboxTemplatePath); os.IsNotExist(err) {
+		content := `---
+title: ""
+tags: []
+---
+
+https://
+`
+		if err := os.WriteFile(inboxTemplatePath, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("creating inbox template: %w", err)
+		}
+	}
+
 	return nil
 }
 

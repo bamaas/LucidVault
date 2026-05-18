@@ -15,6 +15,21 @@ func initIndex(t *testing.T, dir string) {
 	}
 }
 
+func TestInit_CreatesTemplates(t *testing.T) {
+	dir := t.TempDir()
+	v := New(dir)
+	if err := v.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	for _, name := range []string{"note.md", "inbox.md"} {
+		path := filepath.Join(dir, "templates", name)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			t.Errorf("expected template %s to exist", name)
+		}
+	}
+}
+
 func TestRemoveFromIndex(t *testing.T) {
 	dir := t.TempDir()
 	v := New(dir)
