@@ -6,13 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"lucidvault/internal/store"
 	"lucidvault/internal/vault"
 )
 
-// SyncToInbox creates inbox files for bookmarks that haven't been processed yet.
-// It checks the DB for already-processed URLs and skips them.
+// SyncToInbox creates inbox files for bookmarks not yet known to the DB.
+// Each new URL is recorded in the DB immediately, so it won't be re-added
+// on subsequent runs — even if the user deletes the inbox file to reject it.
 // Returns the number of new inbox files created.
 func SyncToInbox(bookmarks []Bookmark, db *store.Store, vaultPath string) (int, error) {
 	inboxDir := filepath.Join(vaultPath, "inbox")
@@ -53,6 +55,17 @@ func SyncToInbox(bookmarks []Bookmark, db *store.Store, vaultPath string) (int, 
 		}
 		if closeErr != nil {
 			return created, fmt.Errorf("closing inbox file %s: %w", inboxFile, closeErr)
+		}
+
+		// Record in DB so the URL is never re-added to inbox (e.g. after
+		// restart or if the user deletes the file to reject it).
+		if err := db.UpsertBookmark(&store.BookmarkRecord{
+			Title:         bm.Title,
+			URL:           bm.Link,
+			URLNormalized: normalizedURL,
+			ProcessedAt:   time.Now(),
+		}); err != nil {
+			return created, fmt.Errorf("recording bookmark %q: %w", bm.Link, err)
 		}
 
 		slog.Info("created inbox file from raindrop", "title", bm.Title, "slug", slug)
