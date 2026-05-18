@@ -1,3 +1,9 @@
+## v0.10.3 (2026-05-18)
+
+### Fix
+
+- record bookmark in DB at inbox creation to prevent reappearing items (#47)
+
 ## v0.10.2 (2026-05-18)
 
 ### Fix
