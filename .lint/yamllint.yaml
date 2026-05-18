@@ -3,6 +3,7 @@ extends: default
 
 ignore:
   - ".claude/skills/"
+  - ".claude/cc-skills-golang/"
 
 rules:
   document-start: disable
