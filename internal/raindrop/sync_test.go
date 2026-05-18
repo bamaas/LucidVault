@@ -45,7 +45,7 @@ func TestSyncToInbox_CreatesFiles(t *testing.T) {
 		{ID: 2, Title: "Rust Intro", Link: "https://example.com/rust-intro", Tags: []string{"rust"}},
 	}
 
-	created, err := SyncToInbox(bookmarks, db, vaultPath)
+	created, err := SyncToInbox(bookmarks, db, vaultPath, false)
 	if err != nil {
 		t.Fatalf("SyncToInbox: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestSyncToInbox_SkipsProcessedURLs(t *testing.T) {
 		{ID: 2, Title: "New Article", Link: "https://example.com/new-article"},
 	}
 
-	created, err := SyncToInbox(bookmarks, db, vaultPath)
+	created, err := SyncToInbox(bookmarks, db, vaultPath, false)
 	if err != nil {
 		t.Fatalf("SyncToInbox: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestSyncToInbox_SkipsExistingInboxFiles(t *testing.T) {
 		{ID: 1, Title: "Existing Article", Link: "https://example.com/existing"},
 	}
 
-	created, err := SyncToInbox(bookmarks, db, vaultPath)
+	created, err := SyncToInbox(bookmarks, db, vaultPath, false)
 	if err != nil {
 		t.Fatalf("SyncToInbox: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestSyncToInbox_FileFormat(t *testing.T) {
 		{ID: 42, Title: "My Article", Link: "https://example.com/my-article", Tags: []string{"tech", "go"}},
 	}
 
-	_, err := SyncToInbox(bookmarks, db, vaultPath)
+	_, err := SyncToInbox(bookmarks, db, vaultPath, false)
 	if err != nil {
 		t.Fatalf("SyncToInbox: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestSyncToInbox_SlugCollisionSkipsSecond(t *testing.T) {
 		{ID: 2, Title: "Go Testing!", Link: "https://example.com/go-testing-2"},
 	}
 
-	created, err := SyncToInbox(bookmarks, db, vaultPath)
+	created, err := SyncToInbox(bookmarks, db, vaultPath, false)
 	if err != nil {
 		t.Fatalf("SyncToInbox: %v", err)
 	}
@@ -197,6 +197,67 @@ func TestSyncToInbox_SlugCollisionSkipsSecond(t *testing.T) {
 	}
 	if !contains(string(data), "https://example.com/go-testing-1") {
 		t.Error("expected inbox file to contain URL from first bookmark")
+	}
+}
+
+func TestSyncToInbox_ForceCreatesFilesForProcessedURLs(t *testing.T) {
+	db := newTestStore(t)
+	vaultPath := t.TempDir()
+	mustMkdir(t, filepath.Join(vaultPath, "inbox"))
+
+	// Mark URL as already processed in DB
+	if err := db.UpsertBookmark(&store.BookmarkRecord{
+		WikiPath:      "wiki/already-done.md",
+		RawPath:       "raw/already-done.md",
+		Title:         "Already Done",
+		URL:           "https://example.com/already-done",
+		URLNormalized: "https://example.com/already-done",
+	}); err != nil {
+		t.Fatalf("UpsertBookmark: %v", err)
+	}
+
+	bookmarks := []Bookmark{
+		{ID: 1, Title: "Already Done", Link: "https://example.com/already-done"},
+		{ID: 2, Title: "New Article", Link: "https://example.com/new-article"},
+	}
+
+	// With force=true, the processed URL should still get an inbox file
+	created, err := SyncToInbox(bookmarks, db, vaultPath, true)
+	if err != nil {
+		t.Fatalf("SyncToInbox: %v", err)
+	}
+	if created != 2 {
+		t.Errorf("expected 2 created (force bypasses dedup), got %d", created)
+	}
+
+	entries, _ := os.ReadDir(filepath.Join(vaultPath, "inbox"))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 inbox files, got %d", len(entries))
+	}
+
+	// Verify the re-fetched file has correct content
+	data, err := os.ReadFile(filepath.Join(vaultPath, "inbox", vault.GenerateSlug("Already Done")+".md"))
+	if err != nil {
+		t.Fatalf("reading inbox file: %v", err)
+	}
+	content := string(data)
+	if !contains(content, "https://example.com/already-done") {
+		t.Error("inbox file missing URL for re-fetched bookmark")
+	}
+	if !contains(content, `title: "Already Done"`) {
+		t.Error("inbox file missing title in frontmatter")
+	}
+
+	// Verify DB record was NOT overwritten (wiki_path/raw_path preserved)
+	rec, err := db.GetBookmarkByURL(vault.NormalizeURL("https://example.com/already-done"))
+	if err != nil {
+		t.Fatalf("GetBookmarkByURL: %v", err)
+	}
+	if rec.WikiPath != "wiki/already-done.md" {
+		t.Errorf("expected wiki_path preserved, got %q", rec.WikiPath)
+	}
+	if rec.RawPath != "raw/already-done.md" {
+		t.Errorf("expected raw_path preserved, got %q", rec.RawPath)
 	}
 }
 

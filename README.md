@@ -18,6 +18,7 @@ LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.m
 - **Resilient** — Falls back to basic metadata when scraping fails (paywalled sites, blocked content)
 - **Notes indexing** — Personal notes in `notes/` are automatically scanned and get a wiki copy in `wiki/` with tags. Notes without tags are auto-tagged via the LLM; notes with existing tags keep them as-is. The `index.md` points to the wiki copy for consistent retrieval
 - **Re-enrich** — Changed your enrichment prompt or model? Run with `--re-enrich` to re-process all bookmarks using existing raw content
+- **Re-fetch** — Run with `--re-fetch` to force re-syncing all bookmarks from external sources (e.g. Raindrop.io) to inbox, bypassing dedup. Items flow through the full pipeline (scrape + enrich), then exit
 - **Reprocess** — Want to re-scrape and re-enrich a URL? Drop it in `inbox/` again — it always gets processed
 
 ## Getting started
@@ -145,16 +146,21 @@ Environment variables configure the service. CLI flags control one-off operation
 | Flag | Description |
 |------|-------------|
 | `--re-enrich` | Re-enrich all bookmarks using existing raw content, then exit. Useful after changing the enrichment prompt or model. Does not re-scrape. |
+| `--re-fetch` | Re-fetch all bookmarks from external sources (e.g. Raindrop.io) to inbox, bypassing dedup. Items flow through the full pipeline (scrape + enrich), then exit. Requires `RAINDROP_ACCESS_TOKEN`. |
 
 ```bash
-# Binary
-lucidvault --re-enrich
-
-# Docker
+# Re-enrich all bookmarks (uses existing raw content, does not re-scrape)
 docker run --rm \
   -e OLLAMA_API_KEY=<your-key> \
   -v ~/lucid-vault:/vault \
   ghcr.io/bamaas/lucidvault:latest --re-enrich
+
+# Re-fetch all bookmarks from Raindrop (re-scrape + re-enrich)
+docker run --rm \
+  -e OLLAMA_API_KEY=<your-key> \
+  -e RAINDROP_ACCESS_TOKEN=<your-token> \
+  -v ~/lucid-vault:/vault \
+  ghcr.io/bamaas/lucidvault:latest --re-fetch
 ```
 
 ## Vault structure
