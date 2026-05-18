@@ -4,6 +4,10 @@ set -e
 
 echo "Initializing repository..."
 
+# Initialize submodules
+echo "Initializing submodules"
+git submodule update --init
+
 # Set githooks
 echo "Setting githooks"
 git config --local core.hooksPath .githooks/
