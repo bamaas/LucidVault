@@ -13,6 +13,6 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
 COPY --from=builder /src/bin/lucidvault /lucidvault
-USER nobody:nobody
+USER nobody:nogroup
 ENV VAULT_PATH=/vault
 ENTRYPOINT ["/lucidvault"]
