@@ -1,6 +1,6 @@
 module lucidvault
 
-go 1.25.0
+go 1.25.5
 
 require modernc.org/sqlite v1.49.1
 
