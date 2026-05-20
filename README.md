@@ -15,6 +15,7 @@ LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.m
 - **YouTube transcripts** — YouTube URLs are automatically detected and their transcripts fetched via the [Supadata](https://supadata.ai) API, then enriched like any other page
 - **Enrich** — LLM (Ollama Cloud, free) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** — Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
+- **MCP server** — Built-in MCP server exposes the vault as structured retrieval primitives for any AI client (Claude Code, Cursor, Windsurf, OpenClaw). Supports stdio and Streamable HTTP transports
 - **Resilient** — Falls back to basic metadata when scraping fails (paywalled sites, blocked content)
 - **Notes indexing** — Personal notes in `notes/` are automatically scanned and get a wiki copy in `wiki/` with tags. Notes without tags are auto-tagged via the LLM; notes with existing tags keep them as-is. The `index.md` points to the wiki copy for consistent retrieval
 - **Re-enrich** — Changed your enrichment prompt or model? Run with `--re-enrich` to re-process all bookmarks using existing raw content
@@ -193,6 +194,48 @@ Claude Code is instructed to:
 6. Offer to fetch a URL as a last resort, either one found in a vault page or provided by the user
 
 It will never scan entire directories, and will not search the web unprompted.
+
+### MCP server
+
+LucidVault includes a built-in MCP (Model Context Protocol) server that exposes the vault as structured retrieval primitives. Any MCP-compatible AI client (Claude Code, Cursor, Windsurf, OpenClaw) can query your knowledge base.
+
+**Start the server:**
+
+```bash
+# Stdio transport (for Claude Code, Cursor)
+lucidvault mcp
+
+# Streamable HTTP transport (for remote clients, mobile)
+lucidvault mcp --http :8080
+```
+
+**Available tools:**
+
+| Tool | Description |
+|------|-------------|
+| `get_soul` | Read user profile (soul.md) |
+| `search_index` | Search index for topics, titles, and tags |
+| `read_wiki` | Read a curated wiki page |
+| `grep_vault` | Search for exact terms (scoped to wiki/notes/raw) |
+| `read_note` | Read a personal note |
+| `read_raw` | Read original source content (fallback) |
+| `related_notes` | Get linked pages from a wiki note |
+
+**Claude Code configuration** (`~/.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "lucidvault": {
+      "command": "lucidvault",
+      "args": ["mcp"],
+      "env": {
+        "VAULT_PATH": "/path/to/your/vault"
+      }
+    }
+  }
+}
+```
 
 ## Tech stack
 

@@ -16,6 +16,7 @@ import (
 	"lucidvault/internal/claudemd"
 	"lucidvault/internal/enrich"
 	"lucidvault/internal/inbox"
+	"lucidvault/internal/mcpserver"
 	"lucidvault/internal/notes"
 	"lucidvault/internal/raindrop"
 	"lucidvault/internal/scraper"
@@ -37,6 +38,12 @@ type config struct {
 }
 
 func main() {
+	// Handle "mcp" subcommand before flag parsing.
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		runMCP(os.Args[2:])
+		return
+	}
+
 	reEnrich := flag.Bool("re-enrich", false, "re-enrich all bookmarks using updated prompt, then exit")
 	reFetch := flag.Bool("re-fetch", false, "re-fetch all bookmarks from external sources to inbox, then exit")
 	flag.Parse()
@@ -737,4 +744,16 @@ func resolveContainerPath(hostPath string) string {
 		}
 	}
 	return hostPath
+}
+
+func runMCP(args []string) {
+	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	httpAddr := fs.String("http", "", "Serve Streamable HTTP on this address (e.g. :8080). Default: stdio transport.")
+	_ = fs.Parse(args)
+
+	vaultPath := os.Getenv("VAULT_PATH")
+	if vaultPath == "" {
+		vaultPath = "/vault"
+	}
+	mcpserver.Run(vaultPath, *httpAddr)
 }
