@@ -284,6 +284,13 @@ func TestHandleReadWiki(t *testing.T) {
 			t.Error("expected error for non-existent slug")
 		}
 	})
+
+	t.Run("path traversal rejected", func(t *testing.T) {
+		_, err := HandleReadWiki(v, "../../etc/passwd")
+		if err == nil {
+			t.Error("expected error for path traversal attempt")
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +411,13 @@ func TestHandleReadNote(t *testing.T) {
 			t.Error("expected error for missing note")
 		}
 	})
+
+	t.Run("path traversal rejected", func(t *testing.T) {
+		_, err := HandleReadNote(v, "notes/../../etc/passwd")
+		if err == nil {
+			t.Error("expected error for path traversal attempt")
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +441,20 @@ func TestHandleReadRaw(t *testing.T) {
 		_, err := HandleReadRaw(v, "nonexistent-file.md")
 		if err == nil {
 			t.Error("expected error for missing raw file")
+		}
+	})
+
+	t.Run("path separator in filename rejected", func(t *testing.T) {
+		_, err := HandleReadRaw(v, "../wiki/gitops.md")
+		if err == nil {
+			t.Error("expected error for path with separators")
+		}
+	})
+
+	t.Run("dotdot in filename rejected", func(t *testing.T) {
+		_, err := HandleReadRaw(v, "../../etc/passwd")
+		if err == nil {
+			t.Error("expected error for dotdot in filename")
 		}
 	})
 }
