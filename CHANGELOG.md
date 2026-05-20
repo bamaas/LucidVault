@@ -1,3 +1,9 @@
+## v0.13.0 (2026-05-20)
+
+### Feat
+
+- **mcpserver**: add MCP server with retrieval primitives (#53)
+
 ## v0.12.0 (2026-05-18)
 
 ### Feat
