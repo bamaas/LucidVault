@@ -1,3 +1,9 @@
+## v0.14.0 (2026-05-21)
+
+### Feat
+
+- **mcpserver**: add add_bookmark and add_note MCP tools (#54)
+
 ## v0.13.0 (2026-05-20)
 
 ### Feat
