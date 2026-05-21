@@ -197,7 +197,7 @@ It will never scan entire directories, and will not search the web unprompted.
 
 ### MCP server
 
-LucidVault includes a built-in MCP (Model Context Protocol) server that exposes the vault as structured retrieval primitives. Any MCP-compatible AI client (Claude Code, Cursor, Windsurf, OpenClaw) can query your knowledge base.
+LucidVault includes a built-in MCP (Model Context Protocol) server that exposes the vault as structured retrieval primitives and inbox write tools. Any MCP-compatible AI client (Claude Code, Cursor, Windsurf, OpenClaw) can query your knowledge base and submit bookmarks or notes.
 
 **Start the server:**
 
@@ -220,6 +220,8 @@ lucidvault mcp --http :8080
 | `read_note` | Read a personal note |
 | `read_raw` | Read original source content (fallback) |
 | `related_notes` | Get linked pages from a wiki note |
+| `add_bookmark` | Add a URL to the inbox for pipeline processing |
+| `add_note` | Create a personal note in the knowledge base |
 
 **Claude Code configuration** (`~/.claude/settings.json`):
 
