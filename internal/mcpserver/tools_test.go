@@ -528,18 +528,13 @@ func TestHandleAddBookmark(t *testing.T) {
 	t.Run("happy path with url title and tags", func(t *testing.T) {
 		v, dir := setupTestVault(t)
 
-		// Ensure inbox directory exists.
-		if err := os.MkdirAll(filepath.Join(dir, "inbox"), 0o755); err != nil {
-			t.Fatalf("creating inbox dir: %v", err)
-		}
-
 		filename, err := HandleAddBookmark(v, "https://example.com/article", "Some Title", []string{"tag1", "tag2"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if filename == "" {
-			t.Fatal("expected non-empty filename")
+		if filename != "some-title.md" {
+			t.Errorf("expected filename %q, got %q", "some-title.md", filename)
 		}
 
 		// Read back the created file.
@@ -577,17 +572,13 @@ func TestHandleAddBookmark(t *testing.T) {
 	t.Run("url only derives slug from url", func(t *testing.T) {
 		v, dir := setupTestVault(t)
 
-		if err := os.MkdirAll(filepath.Join(dir, "inbox"), 0o755); err != nil {
-			t.Fatalf("creating inbox dir: %v", err)
-		}
-
 		filename, err := HandleAddBookmark(v, "https://example.com/go-testing-guide", "", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if filename == "" {
-			t.Fatal("expected non-empty filename")
+		if filename != "examplecom-go-testing-guide.md" {
+			t.Errorf("expected filename %q, got %q", "examplecom-go-testing-guide.md", filename)
 		}
 
 		// File should exist in inbox.
@@ -611,11 +602,7 @@ func TestHandleAddBookmark(t *testing.T) {
 	})
 
 	t.Run("empty url returns error", func(t *testing.T) {
-		v, dir := setupTestVault(t)
-
-		if err := os.MkdirAll(filepath.Join(dir, "inbox"), 0o755); err != nil {
-			t.Fatalf("creating inbox dir: %v", err)
-		}
+		v, _ := setupTestVault(t)
 
 		_, err := HandleAddBookmark(v, "", "Some Title", nil)
 		if err == nil {
@@ -625,10 +612,6 @@ func TestHandleAddBookmark(t *testing.T) {
 
 	t.Run("path traversal in title is sanitized", func(t *testing.T) {
 		v, dir := setupTestVault(t)
-
-		if err := os.MkdirAll(filepath.Join(dir, "inbox"), 0o755); err != nil {
-			t.Fatalf("creating inbox dir: %v", err)
-		}
 
 		filename, err := HandleAddBookmark(v, "https://example.com/safe", "../../etc/passwd", nil)
 		if err != nil {
@@ -666,8 +649,8 @@ func TestHandleAddNote(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if filename == "" {
-			t.Fatal("expected non-empty filename")
+		if filename != "my-test-note.md" {
+			t.Errorf("expected filename %q, got %q", "my-test-note.md", filename)
 		}
 
 		// Read back the created file.
@@ -783,4 +766,96 @@ func TestHandleAddNote(t *testing.T) {
 			t.Error("expected error for empty content")
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// parseTags
+// ---------------------------------------------------------------------------
+
+func TestParseTags(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{"empty string", "", nil},
+		{"single tag", "golang", []string{"golang"}},
+		{"two tags", "golang, testing", []string{"golang", "testing"}},
+		{"extra whitespace", "  golang , testing , ", []string{"golang", "testing"}},
+		{"only commas", ",,", nil},
+		{"whitespace only", "  ", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseTags(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("parseTags(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("parseTags(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// slugFromURL
+// ---------------------------------------------------------------------------
+
+func TestSlugFromURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"full path", "https://example.com/go-testing-guide", "examplecom-go-testing-guide"},
+		{"root with slash", "https://example.com/", "examplecom"},
+		{"root no slash", "https://example.com", "examplecom"},
+		{"subdomain with path", "https://sub.example.com/a/b/c", "subexamplecom-a-b-c"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := slugFromURL(tt.url)
+			if got != tt.want {
+				t.Errorf("slugFromURL(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// add_bookmark: overwrite
+// ---------------------------------------------------------------------------
+
+func TestHandleAddBookmark_overwrite(t *testing.T) {
+	v, dir := setupTestVault(t)
+
+	filename1, err := HandleAddBookmark(v, "https://example.com/v1", "Overwrite Test", []string{"v1"})
+	if err != nil {
+		t.Fatalf("first bookmark: %v", err)
+	}
+
+	filename2, err := HandleAddBookmark(v, "https://example.com/v2", "Overwrite Test", []string{"v2"})
+	if err != nil {
+		t.Fatalf("second bookmark: %v", err)
+	}
+
+	if filename1 != filename2 {
+		t.Errorf("expected same filename, got %q and %q", filename1, filename2)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "inbox", filename2))
+	if err != nil {
+		t.Fatalf("reading overwritten file: %v", err)
+	}
+
+	body := string(content)
+	if strings.Contains(body, "https://example.com/v1") {
+		t.Error("expected old URL to be overwritten")
+	}
+	if !strings.Contains(body, "https://example.com/v2") {
+		t.Errorf("expected new URL, got:\n%s", body)
+	}
 }

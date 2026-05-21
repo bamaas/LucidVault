@@ -264,7 +264,12 @@ func HandleAddBookmark(v *vault.Vault, rawURL, title string, tags []string) (str
 	b.WriteString(rawURL)
 	b.WriteString("\n")
 
-	absPath := filepath.Join(v.BasePath, "inbox", filename)
+	inboxDir := filepath.Join(v.BasePath, "inbox")
+	if err := os.MkdirAll(inboxDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating inbox directory: %w", err)
+	}
+
+	absPath := filepath.Join(inboxDir, filename)
 	if err := os.WriteFile(absPath, []byte(b.String()), 0o644); err != nil {
 		return "", fmt.Errorf("writing inbox file: %w", err)
 	}
