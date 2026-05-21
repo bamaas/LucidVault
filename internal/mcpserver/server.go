@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -179,4 +180,77 @@ func registerTools(s *server.MCPServer, v *vault.Vault) {
 		}
 		return mcp.NewToolResultText(string(data)), nil
 	})
+
+	// add_bookmark — Write
+	s.AddTool(mcp.NewTool("add_bookmark",
+		mcp.WithDescription("Add a URL to the inbox for processing. Creates an inbox file that the pipeline will scrape, enrich, and index. Use this to save articles, docs, or any web page to the knowledge base."),
+		mcp.WithString("url",
+			mcp.Required(),
+			mcp.Description("URL to bookmark"),
+		),
+		mcp.WithString("title",
+			mcp.Description("Human-readable title (used for filename). If omitted, derived from URL."),
+		),
+		mcp.WithString("tags",
+			mcp.Description("Comma-separated tags for categorization (e.g. \"golang, testing\")"),
+		),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		rawURL := req.GetString("url", "")
+		if rawURL == "" {
+			return mcp.NewToolResultError("url is required"), nil
+		}
+		title := req.GetString("title", "")
+		tags := parseTags(req.GetString("tags", ""))
+		filename, err := HandleAddBookmark(v, rawURL, title, tags)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("Bookmark saved to inbox/%s — it will be processed in the next pipeline run.", filename)), nil
+	})
+
+	// add_note — Write
+	s.AddTool(mcp.NewTool("add_note",
+		mcp.WithDescription("Create a personal note in the knowledge base. The note will be auto-tagged and indexed by the pipeline. Use this to capture thoughts, reflections, or working notes."),
+		mcp.WithString("title",
+			mcp.Required(),
+			mcp.Description("Note title (used for H1 heading and filename)"),
+		),
+		mcp.WithString("content",
+			mcp.Required(),
+			mcp.Description("Markdown body of the note"),
+		),
+		mcp.WithString("tags",
+			mcp.Description("Comma-separated tags (e.g. \"golang, testing\"). If omitted, the pipeline will auto-tag."),
+		),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		title := req.GetString("title", "")
+		if title == "" {
+			return mcp.NewToolResultError("title is required"), nil
+		}
+		content := req.GetString("content", "")
+		if content == "" {
+			return mcp.NewToolResultError("content is required"), nil
+		}
+		tags := parseTags(req.GetString("tags", ""))
+		filename, err := HandleAddNote(v, title, content, tags)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("Note saved to notes/%s", filename)), nil
+	})
+}
+
+// parseTags splits a comma-separated tag string into a slice.
+func parseTags(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var tags []string
+	for _, t := range strings.Split(s, ",") {
+		t = strings.TrimSpace(t)
+		if t != "" {
+			tags = append(tags, t)
+		}
+	}
+	return tags
 }

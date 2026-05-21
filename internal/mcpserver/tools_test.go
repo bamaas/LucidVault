@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"lucidvault/internal/vault"
@@ -517,4 +518,362 @@ func TestHandleRelatedNotes(t *testing.T) {
 			t.Error("expected error for non-existent slug")
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// add_bookmark
+// ---------------------------------------------------------------------------
+
+func TestHandleAddBookmark(t *testing.T) {
+	t.Run("happy path with url title and tags", func(t *testing.T) {
+		v, dir := setupTestVault(t)
+
+		filename, err := HandleAddBookmark(v, "https://example.com/article", "Some Title", []string{"tag1", "tag2"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if filename != "some-title.md" {
+			t.Errorf("expected filename %q, got %q", "some-title.md", filename)
+		}
+
+		// Read back the created file.
+		content, err := os.ReadFile(filepath.Join(dir, "inbox", filename))
+		if err != nil {
+			t.Fatalf("reading created file: %v", err)
+		}
+
+		body := string(content)
+
+		// Verify frontmatter contains title.
+		if !strings.Contains(body, `title: "Some Title"`) {
+			t.Errorf("expected title in frontmatter, got:\n%s", body)
+		}
+
+		// Verify frontmatter contains tags.
+		if !strings.Contains(body, "tag1") || !strings.Contains(body, "tag2") {
+			t.Errorf("expected tags in frontmatter, got:\n%s", body)
+		}
+
+		// Verify URL is in the body (after frontmatter).
+		if !strings.Contains(body, "https://example.com/article") {
+			t.Errorf("expected URL in body, got:\n%s", body)
+		}
+
+		// Verify frontmatter delimiters.
+		if !strings.HasPrefix(body, "---\n") {
+			t.Errorf("expected file to start with frontmatter delimiter, got:\n%s", body)
+		}
+		if strings.Count(body, "---") < 2 {
+			t.Errorf("expected opening and closing frontmatter delimiters, got:\n%s", body)
+		}
+	})
+
+	t.Run("url only derives slug from url", func(t *testing.T) {
+		v, dir := setupTestVault(t)
+
+		filename, err := HandleAddBookmark(v, "https://example.com/go-testing-guide", "", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if filename != "examplecom-go-testing-guide.md" {
+			t.Errorf("expected filename %q, got %q", "examplecom-go-testing-guide.md", filename)
+		}
+
+		// File should exist in inbox.
+		path := filepath.Join(dir, "inbox", filename)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading created file: %v", err)
+		}
+
+		body := string(content)
+
+		// URL should be in the body.
+		if !strings.Contains(body, "https://example.com/go-testing-guide") {
+			t.Errorf("expected URL in body, got:\n%s", body)
+		}
+
+		// Tags should be empty.
+		if !strings.Contains(body, "tags: []") {
+			t.Errorf("expected empty tags, got:\n%s", body)
+		}
+	})
+
+	t.Run("empty url returns error", func(t *testing.T) {
+		v, _ := setupTestVault(t)
+
+		_, err := HandleAddBookmark(v, "", "Some Title", nil)
+		if err == nil {
+			t.Error("expected error for empty URL")
+		}
+	})
+
+	t.Run("invalid url returns error", func(t *testing.T) {
+		v, _ := setupTestVault(t)
+
+		_, err := HandleAddBookmark(v, "not-a-url", "Title", nil)
+		if err == nil {
+			t.Error("expected error for invalid URL")
+		}
+	})
+
+	t.Run("ftp url returns error", func(t *testing.T) {
+		v, _ := setupTestVault(t)
+
+		_, err := HandleAddBookmark(v, "ftp://files.example.com/doc", "Title", nil)
+		if err == nil {
+			t.Error("expected error for non-http URL")
+		}
+	})
+
+	t.Run("path traversal in title is sanitized", func(t *testing.T) {
+		v, dir := setupTestVault(t)
+
+		filename, err := HandleAddBookmark(v, "https://example.com/safe", "../../etc/passwd", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Filename must not contain path separators.
+		if strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+			t.Errorf("filename contains path separator: %q", filename)
+		}
+
+		// Filename must not contain "..".
+		if strings.Contains(filename, "..") {
+			t.Errorf("filename contains path traversal: %q", filename)
+		}
+
+		// The file should exist inside inbox/, not elsewhere.
+		path := filepath.Join(dir, "inbox", filename)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			t.Errorf("expected file at %s but it doesn't exist", path)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// add_note
+// ---------------------------------------------------------------------------
+
+func TestHandleAddNote(t *testing.T) {
+	t.Run("happy path with title content and tags", func(t *testing.T) {
+		v, dir := setupTestVault(t)
+
+		filename, err := HandleAddNote(v, "My Test Note", "This is the note body.\n\nWith multiple paragraphs.", []string{"golang", "testing"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if filename != "my-test-note.md" {
+			t.Errorf("expected filename %q, got %q", "my-test-note.md", filename)
+		}
+
+		// Read back the created file.
+		content, err := os.ReadFile(filepath.Join(dir, "notes", filename))
+		if err != nil {
+			t.Fatalf("reading created file: %v", err)
+		}
+
+		body := string(content)
+
+		// Verify frontmatter has date.
+		if !strings.Contains(body, "date:") {
+			t.Errorf("expected date in frontmatter, got:\n%s", body)
+		}
+
+		// Verify tags in frontmatter.
+		if !strings.Contains(body, "golang") || !strings.Contains(body, "testing") {
+			t.Errorf("expected tags in frontmatter, got:\n%s", body)
+		}
+
+		// Verify H1 title.
+		if !strings.Contains(body, "# My Test Note") {
+			t.Errorf("expected H1 title, got:\n%s", body)
+		}
+
+		// Verify content body.
+		if !strings.Contains(body, "This is the note body.") {
+			t.Errorf("expected content in body, got:\n%s", body)
+		}
+
+		// Verify frontmatter delimiters.
+		if !strings.HasPrefix(body, "---\n") {
+			t.Errorf("expected file to start with frontmatter delimiter, got:\n%s", body)
+		}
+	})
+
+	t.Run("no tags creates file with empty tags", func(t *testing.T) {
+		v, dir := setupTestVault(t)
+
+		filename, err := HandleAddNote(v, "Tagless Note", "Some content here.", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		content, err := os.ReadFile(filepath.Join(dir, "notes", filename))
+		if err != nil {
+			t.Fatalf("reading created file: %v", err)
+		}
+
+		body := string(content)
+
+		// Tags should be empty.
+		if !strings.Contains(body, "tags: []") {
+			t.Errorf("expected empty tags in frontmatter, got:\n%s", body)
+		}
+
+		// Date should still be present.
+		if !strings.Contains(body, "date:") {
+			t.Errorf("expected date in frontmatter, got:\n%s", body)
+		}
+	})
+
+	t.Run("overwrite existing note with same title", func(t *testing.T) {
+		v, dir := setupTestVault(t)
+
+		// Create the first version.
+		filename1, err := HandleAddNote(v, "Overwrite Me", "Original content.", []string{"v1"})
+		if err != nil {
+			t.Fatalf("unexpected error creating first note: %v", err)
+		}
+
+		// Create the second version with the same title.
+		filename2, err := HandleAddNote(v, "Overwrite Me", "Updated content.", []string{"v2"})
+		if err != nil {
+			t.Fatalf("unexpected error creating second note: %v", err)
+		}
+
+		// Both calls should return the same filename (same slug).
+		if filename1 != filename2 {
+			t.Errorf("expected same filename for same title, got %q and %q", filename1, filename2)
+		}
+
+		// Read back and verify it has the new content.
+		content, err := os.ReadFile(filepath.Join(dir, "notes", filename2))
+		if err != nil {
+			t.Fatalf("reading overwritten file: %v", err)
+		}
+
+		body := string(content)
+
+		if strings.Contains(body, "Original content") {
+			t.Error("expected original content to be overwritten")
+		}
+		if !strings.Contains(body, "Updated content.") {
+			t.Errorf("expected updated content, got:\n%s", body)
+		}
+	})
+
+	t.Run("empty title returns error", func(t *testing.T) {
+		v, _ := setupTestVault(t)
+
+		_, err := HandleAddNote(v, "", "Some content.", nil)
+		if err == nil {
+			t.Error("expected error for empty title")
+		}
+	})
+
+	t.Run("empty content returns error", func(t *testing.T) {
+		v, _ := setupTestVault(t)
+
+		_, err := HandleAddNote(v, "Has Title", "", nil)
+		if err == nil {
+			t.Error("expected error for empty content")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// parseTags
+// ---------------------------------------------------------------------------
+
+func TestParseTags(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{"empty string", "", nil},
+		{"single tag", "golang", []string{"golang"}},
+		{"two tags", "golang, testing", []string{"golang", "testing"}},
+		{"extra whitespace", "  golang , testing , ", []string{"golang", "testing"}},
+		{"only commas", ",,", nil},
+		{"whitespace only", "  ", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseTags(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("parseTags(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("parseTags(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// slugFromURL
+// ---------------------------------------------------------------------------
+
+func TestSlugFromURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"full path", "https://example.com/go-testing-guide", "examplecom-go-testing-guide"},
+		{"root with slash", "https://example.com/", "examplecom"},
+		{"root no slash", "https://example.com", "examplecom"},
+		{"subdomain with path", "https://sub.example.com/a/b/c", "subexamplecom-a-b-c"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := slugFromURL(tt.url)
+			if got != tt.want {
+				t.Errorf("slugFromURL(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// add_bookmark: overwrite
+// ---------------------------------------------------------------------------
+
+func TestHandleAddBookmark_overwrite(t *testing.T) {
+	v, dir := setupTestVault(t)
+
+	filename1, err := HandleAddBookmark(v, "https://example.com/v1", "Overwrite Test", []string{"v1"})
+	if err != nil {
+		t.Fatalf("first bookmark: %v", err)
+	}
+
+	filename2, err := HandleAddBookmark(v, "https://example.com/v2", "Overwrite Test", []string{"v2"})
+	if err != nil {
+		t.Fatalf("second bookmark: %v", err)
+	}
+
+	if filename1 != filename2 {
+		t.Errorf("expected same filename, got %q and %q", filename1, filename2)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "inbox", filename2))
+	if err != nil {
+		t.Fatalf("reading overwritten file: %v", err)
+	}
+
+	body := string(content)
+	if strings.Contains(body, "https://example.com/v1") {
+		t.Error("expected old URL to be overwritten")
+	}
+	if !strings.Contains(body, "https://example.com/v2") {
+		t.Errorf("expected new URL, got:\n%s", body)
+	}
 }

@@ -2,9 +2,11 @@ package mcpserver
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"lucidvault/internal/vault"
 )
@@ -231,4 +233,110 @@ func HandleRelatedNotes(v *vault.Vault, slug string) ([]RelatedEntry, error) {
 		results = []RelatedEntry{}
 	}
 	return results, nil
+}
+
+// HandleAddBookmark creates an inbox file for a URL to be processed by the pipeline.
+func HandleAddBookmark(v *vault.Vault, rawURL, title string, tags []string) (string, error) {
+	if rawURL == "" {
+		return "", fmt.Errorf("url is required")
+	}
+
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("invalid URL: must start with http:// or https://")
+	}
+
+	slug := ""
+	if title != "" {
+		slug = vault.GenerateSlug(title)
+	} else {
+		slug = slugFromURL(rawURL)
+	}
+
+	filename := slug + ".md"
+
+	if tags == nil {
+		tags = []string{}
+	}
+
+	var b strings.Builder
+	b.WriteString("---\n")
+	fmt.Fprintf(&b, "title: %q\n", title)
+	b.WriteString("tags: [")
+	b.WriteString(strings.Join(tags, ", "))
+	b.WriteString("]\n")
+	b.WriteString("---\n\n")
+	b.WriteString(rawURL)
+	b.WriteString("\n")
+
+	inboxDir := filepath.Join(v.BasePath, "inbox")
+	if err := os.MkdirAll(inboxDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating inbox directory: %w", err)
+	}
+
+	absPath := filepath.Join(inboxDir, filename)
+	if err := os.WriteFile(absPath, []byte(b.String()), 0o644); err != nil {
+		return "", fmt.Errorf("writing inbox file: %w", err)
+	}
+
+	return filename, nil
+}
+
+// slugFromURL derives a slug from a URL's host and path segments.
+func slugFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "untitled"
+	}
+
+	parts := []string{u.Hostname()}
+	for _, seg := range strings.Split(strings.Trim(u.Path, "/"), "/") {
+		if seg != "" {
+			parts = append(parts, seg)
+		}
+	}
+
+	return vault.GenerateSlug(strings.Join(parts, " "))
+}
+
+// HandleAddNote creates a note file in the notes directory.
+func HandleAddNote(v *vault.Vault, title, content string, tags []string) (string, error) {
+	if title == "" {
+		return "", fmt.Errorf("title is required")
+	}
+	if content == "" {
+		return "", fmt.Errorf("content is required")
+	}
+
+	slug := vault.GenerateSlug(title)
+	filename := slug + ".md"
+
+	if tags == nil {
+		tags = []string{}
+	}
+
+	date := time.Now().Format("2006-01-02")
+
+	var b strings.Builder
+	b.WriteString("---\n")
+	fmt.Fprintf(&b, "date: %q\n", date)
+	b.WriteString("tags: [")
+	b.WriteString(strings.Join(tags, ", "))
+	b.WriteString("]\n")
+	b.WriteString("---\n\n")
+	fmt.Fprintf(&b, "# %s\n\n", title)
+	b.WriteString(content)
+	b.WriteString("\n")
+
+	notesDir := filepath.Join(v.BasePath, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating notes directory: %w", err)
+	}
+
+	absPath := filepath.Join(notesDir, filename)
+	if err := os.WriteFile(absPath, []byte(b.String()), 0o644); err != nil {
+		return "", fmt.Errorf("writing note file: %w", err)
+	}
+
+	return filename, nil
 }
