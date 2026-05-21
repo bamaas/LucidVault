@@ -241,6 +241,11 @@ func HandleAddBookmark(v *vault.Vault, rawURL, title string, tags []string) (str
 		return "", fmt.Errorf("url is required")
 	}
 
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("invalid URL: must start with http:// or https://")
+	}
+
 	slug := ""
 	if title != "" {
 		slug = vault.GenerateSlug(title)

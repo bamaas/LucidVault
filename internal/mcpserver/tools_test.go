@@ -610,6 +610,24 @@ func TestHandleAddBookmark(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid url returns error", func(t *testing.T) {
+		v, _ := setupTestVault(t)
+
+		_, err := HandleAddBookmark(v, "not-a-url", "Title", nil)
+		if err == nil {
+			t.Error("expected error for invalid URL")
+		}
+	})
+
+	t.Run("ftp url returns error", func(t *testing.T) {
+		v, _ := setupTestVault(t)
+
+		_, err := HandleAddBookmark(v, "ftp://files.example.com/doc", "Title", nil)
+		if err == nil {
+			t.Error("expected error for non-http URL")
+		}
+	})
+
 	t.Run("path traversal in title is sanitized", func(t *testing.T) {
 		v, dir := setupTestVault(t)
 
