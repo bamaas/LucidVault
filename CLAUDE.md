@@ -39,6 +39,9 @@ internal/notes/          — Notes scanner, frontmatter parser
 internal/mcpserver/      — MCP server (retrieval + inbox write tools for AI agents)
 internal/store/          — SQLite state (modernc.org/sqlite, pure Go)
 internal/vault/          — Vault file writer, slug/URL helpers
+deploy/livesync-bridge/   — LiveSync bridge Dockerfile and config
+docker-compose.yml        — Full stack: LucidVault + LiveSync bridge + CouchDB
+.env.example              — Environment variable template for Docker Compose
 ```
 
 ## Key Interfaces
@@ -89,6 +92,15 @@ mise run lint:commits          # Check commit message (used by commit-msg hook)
 - `VAULT_PATH` — (required) Path to Obsidian vault
 - `RAINDROP_ACCESS_TOKEN` — (optional) Enables Raindrop.io as an inbox feeder
 - `SUPADATA_API_KEY` — (optional) Supadata API key for YouTube transcript extraction
+
+## Deployment
+
+Two deployment options:
+
+1. **Local Docker** — Single container, vault as volume mount. Default for users who don't need multi-device sync.
+2. **Docker Compose with LiveSync** — LucidVault + livesync-bridge sidecar + CouchDB. Enables multi-device vault access via Obsidian LiveSync. Zero LucidVault code changes — sync is entirely infrastructure.
+
+See `docs/design/017-couchdb-livesync.md` for the full design document and `docs/adr/017-couchdb-livesync-obsidian-sync.md` for the architectural decision record.
 
 ## Workflow
 

@@ -1,0 +1,51 @@
+# LucidVault with Obsidian LiveSync
+#
+# Notes:
+# - To enable E2EE: set passphrase and obfuscatePassphrase in deploy/livesync-bridge/config.json
+#   to match your Obsidian LiveSync settings.
+# - CouchDB credentials must match between the couchdb service env and bridge config.json.
+# - The livesync-bridge syncs the entire vault including raw/. Per-directory exclusion is not
+#   supported without restructuring into multiple storage peers.
+
+services:
+  lucidvault:
+    image: ghcr.io/bamaas/lucidvault:latest
+    environment:
+      - OLLAMA_API_KEY=${OLLAMA_API_KEY:?OLLAMA_API_KEY is required}
+      - VAULT_PATH=/vault
+      - RAINDROP_ACCESS_TOKEN=${RAINDROP_ACCESS_TOKEN:-}
+      - SUPADATA_API_KEY=${SUPADATA_API_KEY:-}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-}
+      - POLL_INTERVAL=${POLL_INTERVAL:-}
+    volumes:
+      - vault:/vault
+      - db:/data
+    depends_on:
+      - couchdb
+    restart: unless-stopped
+
+  livesync-bridge:
+    build:
+      context: deploy/livesync-bridge
+    volumes:
+      - vault:/data/vault
+      - ./deploy/livesync-bridge/config.json:/app/dat/config.json:ro
+    depends_on:
+      - couchdb
+    restart: unless-stopped
+
+  couchdb:
+    image: couchdb:3
+    environment:
+      - COUCHDB_USER=${COUCHDB_USER:-admin}
+      - COUCHDB_PASSWORD=${COUCHDB_PASSWORD:-password}
+    volumes:
+      - couchdb_data:/opt/couchdb/data
+    ports:
+      - "${COUCHDB_BIND:-127.0.0.1}:5984:5984"
+    restart: unless-stopped
+
+volumes:
+  vault:
+  db:
+  couchdb_data:

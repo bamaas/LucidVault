@@ -1,0 +1,25 @@
+{
+  "peers": [
+    {
+      "type": "couchdb",
+      "name": "livesync-db",
+      "database": "obsidian-vault",
+      "username": "admin",
+      "password": "password",
+      "url": "http://couchdb:5984",
+      "customChunkSize": 0,
+      "minimumChunkSize": 0,
+      "passphrase": "",
+      "obfuscatePassphrase": "",
+      "baseDir": "",
+      "useRemoteTweaks": true
+    },
+    {
+      "type": "storage",
+      "name": "vault-disk",
+      "baseDir": "/data/vault",
+      "scanOfflineChanges": true,
+      "useChokidar": true
+    }
+  ]
+}
