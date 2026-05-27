@@ -1,3 +1,9 @@
+## v0.15.0 (2026-05-27)
+
+### Feat
+
+- add Obsidian LiveSync multi-device sync via Docker Compose (#56)
+
 ## v0.14.1 (2026-05-27)
 
 ### Refactor
