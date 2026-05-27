@@ -1,3 +1,9 @@
+## v0.14.1 (2026-05-27)
+
+### Refactor
+
+- **commands**: delegate work phases to subagents (#55)
+
 ## v0.14.0 (2026-05-21)
 
 ### Feat
