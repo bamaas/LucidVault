@@ -11,7 +11,7 @@ If no argument given, look for `PLAN.md` in the current directory. If that doesn
 - Read the plan file at the given path to understand the feature spec.
 - Read `docs/adr/` for any architectural decisions relevant to this feature.
 - Read the relevant skill files in `.claude/skills/golang/` and follow their guidance throughout.
-- If this change introduces a new architectural or design decision, write an ADR in `docs/adr/` before writing any code. Number it sequentially and keep it short: Status, Context, Decision, Consequences.
+- ADRs should already exist from the planning phase (`/grill-with-docs`). Follow existing ADRs — do not create new ones during implementation. If you discover a missing architectural decision, stop and flag it to the user rather than deciding on the fly.
 
 ## Step 1 — Write failing tests (subagent)
 

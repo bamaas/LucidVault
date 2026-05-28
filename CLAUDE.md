@@ -144,7 +144,9 @@ docs/plans/
 
 Read `docs/adr/` before implementing — these capture architectural decisions and their reasoning.
 
-Every architectural or design decision **must** have an ADR in `docs/adr/`. Keep them short: Status, Context (2-3 sentences), Decision (1 sentence), Consequences (bullet list). Number sequentially (`NNN-slug.md`).
+ADRs are created during the planning phase (`/grill-with-docs`), not during implementation. If an implementing agent discovers a missing architectural decision, it should stop and flag it to the user rather than deciding on the fly.
+
+Format: Status, Context (2-3 sentences), Decision (1 sentence), Consequences (bullet list). Number sequentially (`NNN-slug.md`).
 
 ## Workflow Orchestration
 
