@@ -283,6 +283,19 @@ lucidvault mcp --http :8080
 | Versioning | Commitizen (conventional commits, auto changelog) |
 | Bookmark source | Inbox folder (+ optional Raindrop.io) |
 
+## Development workflow
+
+Feature development is driven by plans and Claude Code commands.
+
+1. **Write a plan** — Create `docs/plans/plan-<feature>.md` describing requirements, goals, scope, and edge cases.
+2. **Decompose (large features)** — Run `/decompose docs/plans/plan-<feature>.md` to break the plan into numbered, context-window-sized sub-plans in `docs/plans/plan-<feature>/`.
+3. **Deliver** — Run `/deliver docs/plans/plan-<feature>.md`. This automates the full cycle:
+   - **Single mode** (no sub-plans): implement (TDD) → test quality → review → PR
+   - **Multi mode** (with sub-plans): loops implement → test → review per sub-plan, single PR at end
+4. **Reference later** — Plans and sub-plans are committed to the repo. Use them to understand why a feature was built a certain way, what edge cases were considered, and how execution was ordered.
+
+For small fixes or changes that don't need a plan, work directly and commit with [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+
 ## To do
 
 _No pending items._
