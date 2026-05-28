@@ -39,6 +39,7 @@ internal/notes/          — Notes scanner, frontmatter parser
 internal/mcpserver/      — MCP server (retrieval + inbox write tools for AI agents)
 internal/store/          — SQLite state (modernc.org/sqlite, pure Go)
 internal/vault/          — Vault file writer, slug/URL helpers
+CONTEXT.md                — Domain glossary (ubiquitous language, no implementation details)
 docs/plans/               — Feature plans and sub-plans (permanent reference)
 docs/adr/                 — Architecture Decision Records
 deploy/livesync-bridge/   — LiveSync bridge Dockerfile and config
@@ -122,10 +123,11 @@ docs/plans/
 - **Sub-plans** describe *how* to execute: ordered, self-contained chunks sized for one context window. Created by `/decompose`, committed alongside the parent plan.
 - **Reference use** — Plans and sub-plans are committed to the repo. When debugging or extending a feature later, read the relevant plan to understand requirements, execution order, edge cases, and acceptance criteria.
 
-### Delivery workflow
+### Feature workflow
 
-- **Small features** (no sub-plans): `/deliver docs/plans/plan-feature.md` — single pass through implement → test → review → PR.
-- **Large features** (with sub-plans): `/decompose docs/plans/plan-feature.md` first, then `/deliver docs/plans/plan-feature.md` — loops through each sub-plan with implement → test → review per chunk, single PR at end.
+1. `/grill-with-docs` — stress-test the idea, sharpen terms in `CONTEXT.md`, create ADRs, produce plan in `docs/plans/`
+2. `/decompose docs/plans/plan-feature.md` — (large features only) break plan into sub-plans
+3. `/deliver docs/plans/plan-feature.md` — implement + test + review + PR (loops per sub-plan if decomposed)
 
 ## Workflow
 
@@ -142,7 +144,9 @@ docs/plans/
 
 Read `docs/adr/` before implementing — these capture architectural decisions and their reasoning.
 
-Every architectural or design decision **must** have an ADR in `docs/adr/`. Keep them short: Status, Context (2-3 sentences), Decision (1 sentence), Consequences (bullet list). Number sequentially (`NNN-slug.md`).
+ADRs are created during the planning phase (`/grill-with-docs`), not during implementation. If an implementing agent discovers a missing architectural decision, it should stop and flag it to the user rather than deciding on the fly.
+
+Format: Status, Context (2-3 sentences), Decision (1 sentence), Consequences (bullet list). Number sequentially (`NNN-slug.md`).
 
 ## Workflow Orchestration
 
@@ -183,7 +187,8 @@ Every architectural or design decision **must** have an ADR in `docs/adr/`. Keep
 
 ### 6. Design Validation
 
-- For architectural decisions or ambiguous requirements, suggest `/grill-me` before implementing
+- For features, use `/grill-with-docs` to stress-test the idea against the codebase, sharpen terminology in `CONTEXT.md`, create ADRs for trade-offs, and produce a plan in `docs/plans/`
+- For quick questions or non-codebase brainstorming, `/grill-me` is still appropriate
 - Don't auto-trigger — only when the plan involves trade-offs worth exploring
 
 ### 7. Review Before Merge
