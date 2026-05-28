@@ -1,3 +1,9 @@
+## v0.16.0 (2026-05-28)
+
+### Feat
+
+- **commands**: add plan decomposition and multi-plan delivery workflow (#58)
+
 ## v0.15.0 (2026-05-27)
 
 ### Feat
