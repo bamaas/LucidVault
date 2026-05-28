@@ -39,6 +39,8 @@ internal/notes/          — Notes scanner, frontmatter parser
 internal/mcpserver/      — MCP server (retrieval + inbox write tools for AI agents)
 internal/store/          — SQLite state (modernc.org/sqlite, pure Go)
 internal/vault/          — Vault file writer, slug/URL helpers
+docs/plans/               — Feature plans and sub-plans (permanent reference)
+docs/adr/                 — Architecture Decision Records
 deploy/livesync-bridge/   — LiveSync bridge Dockerfile and config
 docker-compose.yml        — Full stack: LucidVault + LiveSync bridge + CouchDB
 .env.example              — Environment variable template for Docker Compose
@@ -101,6 +103,29 @@ Two deployment options:
 2. **Docker Compose with LiveSync** — LucidVault + livesync-bridge sidecar + CouchDB. Enables multi-device vault access via Obsidian LiveSync. Zero LucidVault code changes — sync is entirely infrastructure.
 
 See `docs/design/017-couchdb-livesync.md` for the full design document and `docs/adr/017-couchdb-livesync-obsidian-sync.md` for the architectural decision record.
+
+## Plans
+
+Feature plans live in `docs/plans/` and serve as permanent reference documentation.
+
+```text
+docs/plans/
+  plan-vault-hygiene.md              — parent plan (requirements, goals, scope)
+  plan-vault-hygiene/                — sub-plans (created by /decompose)
+    01-scan-orphaned-files.md
+    02-cleanup-stale-index.md
+    03-add-hygiene-command.md
+  plan-agent-retrieval.md            — plan without sub-plans (single mode)
+```
+
+- **Parent plans** describe *what* to build: requirements, goals, scope, edge cases.
+- **Sub-plans** describe *how* to execute: ordered, self-contained chunks sized for one context window. Created by `/decompose`, committed alongside the parent plan.
+- **Reference use** — Plans and sub-plans are committed to the repo. When debugging or extending a feature later, read the relevant plan to understand requirements, execution order, edge cases, and acceptance criteria.
+
+### Delivery workflow
+
+- **Small features** (no sub-plans): `/deliver docs/plans/plan-feature.md` — single pass through implement → test → review → PR.
+- **Large features** (with sub-plans): `/decompose docs/plans/plan-feature.md` first, then `/deliver docs/plans/plan-feature.md` — loops through each sub-plan with implement → test → review per chunk, single PR at end.
 
 ## Workflow
 
