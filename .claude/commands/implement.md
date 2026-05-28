@@ -4,11 +4,12 @@ Implement the current feature using TDD.
 
 The plan path is provided as argument: $ARGUMENTS
 
-If no argument given, look for `PLAN.md` in the current directory. If that doesn't exist, look in `docs/plans/` and ask the user which plan to implement.
+If no argument given, look for plans in `docs/plans/` and ask the user which one to implement.
 
 ## Before starting
 - Pull latest from main: `git fetch origin main && git merge origin/main`
 - Read the plan file at the given path to understand the feature spec.
+- Read `CONTEXT.md` for domain terminology — use consistent naming in code, tests, and comments.
 - Read `docs/adr/` for any architectural decisions relevant to this feature.
 - Read the relevant skill files in `.claude/skills/golang/` and follow their guidance throughout.
 - ADRs should already exist from the planning phase (`/grill-with-docs`). Follow existing ADRs — do not create new ones during implementation. If you discover a missing architectural decision, stop and flag it to the user rather than deciding on the fly.

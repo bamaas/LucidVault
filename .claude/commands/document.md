@@ -29,10 +29,8 @@ If this change introduces or modifies any of the following, update `CLAUDE.md` a
 - Common gotchas or design principles
 
 ## Step 4 — ADRs
-If this change introduces a new architectural or design decision:
-- Write an ADR in `docs/adr/` before or alongside the implementation
-- Number sequentially (`NNN-slug.md`)
-- Keep it short: Status, Context (2-3 sentences), Decision (1 sentence), Consequences (bullet list)
+ADRs are created during the planning phase (`/grill-with-docs`), not during implementation or documentation.
+If you notice a missing architectural decision, flag it to the user — do not create one here.
 
 ## Step 5 — Commit
 Run /commit for any documentation changes:
