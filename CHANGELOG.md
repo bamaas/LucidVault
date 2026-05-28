@@ -1,3 +1,9 @@
+## v0.17.0 (2026-05-28)
+
+### Feat
+
+- **commands**: add /grill-with-docs, CONTEXT.md, and planning-first ADR policy (#59)
+
 ## v0.16.0 (2026-05-28)
 
 ### Feat
