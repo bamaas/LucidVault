@@ -1,8 +1,14 @@
 Implement the current feature using TDD.
 
+## Input
+
+The plan path is provided as argument: $ARGUMENTS
+
+If no argument given, look for `PLAN.md` in the current directory. If that doesn't exist, look in `docs/plans/` and ask the user which plan to implement.
+
 ## Before starting
 - Pull latest from main: `git fetch origin main && git merge origin/main`
-- Read PLAN.md to understand the feature spec.
+- Read the plan file at the given path to understand the feature spec.
 - Read `docs/adr/` for any architectural decisions relevant to this feature.
 - Read the relevant skill files in `.claude/skills/golang/` and follow their guidance throughout.
 - If this change introduces a new architectural or design decision, write an ADR in `docs/adr/` before writing any code. Number it sequentially and keep it short: Status, Context, Decision, Consequences.
@@ -12,7 +18,7 @@ Implement the current feature using TDD.
 Spawn a subagent with the following instructions:
 
 > You are a senior Go engineer writing functional tests. Re-read CLAUDE.md before
-> starting. Read PLAN.md for the feature spec.
+> starting. Read the plan file at: [plan path] for the feature spec.
 >
 > Your job is to define **what** the code should do, not **how** it does it.
 > Write tests based purely on the spec — inputs, expected outputs, error cases.
@@ -34,7 +40,7 @@ Spawn a subagent with the following instructions:
 
 > You are a senior Go engineer implementing a feature. Re-read CLAUDE.md before
 > starting. Read the failing tests to understand the required behavior and
-> contracts. Read PLAN.md for the feature spec.
+> contracts. Read the plan file at: [plan path] for the feature spec.
 >
 > Write the implementation code until `mise run test` passes completely.
 >
