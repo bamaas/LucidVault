@@ -231,6 +231,22 @@ func TestParseWikiLinks(t *testing.T) {
 			content: "[[slug]] and [[slug|Different Display]]",
 			want:    []string{"slug"},
 		},
+		// --- Hardening: whitespace and edge cases ---
+		{
+			name:    "whitespace-only link filtered out",
+			content: "before [[ ]] after [[real]]",
+			want:    []string{"real"},
+		},
+		{
+			name:    "unclosed fenced code block eats remaining content",
+			content: "[[before]]\n```\n[[inside]]\n[[also-inside]]",
+			want:    []string{"before"},
+		},
+		{
+			name:    "unclosed frontmatter treated as normal content",
+			content: "---\ntitle: test\n[[inside-fm]]",
+			want:    []string{"inside-fm"},
+		},
 		// --- Combined scenarios ---
 		{
 			name:    "all hardening combined",

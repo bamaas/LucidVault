@@ -31,7 +31,7 @@ func ParseIndexEntry(line string) *IndexEntry {
 	if tagStr == "" {
 		tags = []string{}
 	} else {
-		for _, t := range strings.Split(tagStr, ",") {
+		for t := range strings.SplitSeq(tagStr, ",") {
 			tags = append(tags, strings.TrimSpace(t))
 		}
 	}
@@ -77,8 +77,14 @@ func ParseWikiLinks(content string) []string {
 		target := m[1]
 
 		// 5. Handle pipe syntax: [[slug|Display Name]] -> slug
-		if idx := strings.Index(target, "|"); idx >= 0 {
-			target = target[:idx]
+		if before, _, found := strings.Cut(target, "|"); found {
+			target = before
+		}
+
+		// 5b. Trim whitespace and skip empty/whitespace-only targets.
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
 		}
 
 		// 6. Filter .md targets (raw file back-references).
@@ -103,12 +109,10 @@ func stripFrontmatter(content string) string {
 	}
 	// Find closing --- after the opening one.
 	rest := content[3:]
-	end := strings.Index(rest, "\n---")
-	if end == -1 {
+	_, after, found := strings.Cut(rest, "\n---")
+	if !found {
 		return content
 	}
-	// Skip past the closing --- and its newline.
-	after := rest[end+4:]
 	if len(after) > 0 && after[0] == '\n' {
 		after = after[1:]
 	}
@@ -118,11 +122,10 @@ func stripFrontmatter(content string) string {
 // stripFencedCode removes fenced code blocks (``` or ~~~) from content.
 func stripFencedCode(content string) string {
 	var result strings.Builder
-	lines := strings.Split(content, "\n")
 	inFence := false
 	var fenceMarker string
 
-	for _, line := range lines {
+	for line := range strings.SplitSeq(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !inFence {
 			if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
@@ -147,16 +150,15 @@ func ParseFrontmatterTitle(content string) string {
 	if !strings.HasPrefix(content, "---") {
 		return ""
 	}
-	end := strings.Index(content[3:], "---")
-	if end == -1 {
+	frontmatter, _, found := strings.Cut(content[3:], "---")
+	if !found {
 		return ""
 	}
-	frontmatter := content[3 : end+3]
 
-	for _, line := range strings.Split(frontmatter, "\n") {
+	for line := range strings.SplitSeq(frontmatter, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "title:") {
-			val := strings.TrimSpace(strings.TrimPrefix(line, "title:"))
+		if val, ok := strings.CutPrefix(line, "title:"); ok {
+			val = strings.TrimSpace(val)
 			// Strip quotes
 			if len(val) >= 2 {
 				if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
