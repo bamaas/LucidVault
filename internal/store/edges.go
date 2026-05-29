@@ -1,8 +1,10 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -252,6 +254,7 @@ func (s *Store) FindOrphans() ([]string, error) {
 	for slug := range orphanSet {
 		orphans = append(orphans, slug)
 	}
+	sort.Strings(orphans)
 	return orphans, nil
 }
 
@@ -264,7 +267,7 @@ func slugFromWikiPath(wikiPath string) string {
 // FindBrokenEdges returns edges where the target slug does not exist on disk.
 // The exists function is called for each unique to_slug to check file presence.
 func (s *Store) FindBrokenEdges(exists func(string) bool) ([]Edge, error) {
-	rows, err := s.db.Query("SELECT DISTINCT from_slug, to_slug, type FROM edges")
+	rows, err := s.db.Query("SELECT from_slug, to_slug, type FROM edges")
 	if err != nil {
 		return nil, fmt.Errorf("querying edges for broken check: %w", err)
 	}
@@ -294,25 +297,32 @@ func (s *Store) FindBrokenEdges(exists func(string) bool) ([]Edge, error) {
 	return broken, nil
 }
 
-// WithFileLock executes fn within a SQLite exclusive transaction.
-// This provides cross-process write safety via SQLite's locking mechanism.
+// WithFileLock executes fn while holding a SQLite exclusive lock.
+// This provides cross-process write safety: BEGIN EXCLUSIVE immediately acquires
+// a write lock that blocks other writers (including other OS processes) until
+// the transaction completes.
+// Note: fn may use s.db for reads/writes — they run on a separate connection
+// from the lock holder, but SQLite serializes them safely.
 func (s *Store) WithFileLock(fn func() error) error {
-	tx, err := s.db.Begin()
+	// Use a dedicated connection so BEGIN EXCLUSIVE is not managed by database/sql's
+	// pool, which only supports BEGIN (deferred).
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("beginning exclusive transaction: %w", err)
+		return fmt.Errorf("acquiring connection for lock: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = conn.Close() }()
 
-	// Acquire exclusive lock
-	if _, err := tx.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
-		return fmt.Errorf("setting exclusive lock: %w", err)
+	if _, err := conn.ExecContext(ctx, "BEGIN EXCLUSIVE"); err != nil {
+		return fmt.Errorf("beginning exclusive transaction: %w", err)
 	}
 
 	if err := fn(); err != nil {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("committing exclusive transaction: %w", err)
 	}
 	return nil

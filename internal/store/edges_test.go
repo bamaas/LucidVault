@@ -606,10 +606,15 @@ func TestWithFileLock_RollsBackOnError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 
-	// Edge should still exist because the tx was rolled back
-	// Note: WithFileLock wraps fn in a transaction. If fn uses s.db directly
-	// (not the tx), this test verifies the rollback behavior.
-	// The implementation should pass the tx to fn or use the exclusive tx for all ops within.
+	// Verify the edge still exists: the DELETE ran on s.db within the scope of
+	// the exclusive tx (same underlying connection), so the rollback undoes it.
+	count, countErr := s.EdgeCount()
+	if countErr != nil {
+		t.Fatalf("EdgeCount: %v", countErr)
+	}
+	if count != 1 {
+		t.Errorf("EdgeCount = %d, want 1 (DELETE should be rolled back with the tx)", count)
+	}
 }
 
 // --- DeleteBookmarkByWikiPath ---
@@ -681,5 +686,178 @@ func TestDeleteBookmarkByWikiPath_OnlyDeletesMatching(t *testing.T) {
 	}
 	if records[0].WikiPath != "wiki/keep.md" {
 		t.Errorf("remaining WikiPath = %q, want %q", records[0].WikiPath, "wiki/keep.md")
+	}
+}
+
+// --- slugFromWikiPath ---
+
+func TestSlugFromWikiPath(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"wiki/my-slug.md", "my-slug"},
+		{"wiki/nested/path/slug.md", "slug"},
+		{"slug.md", "slug"},
+		{"no-extension", "no-extension"},
+		{"", ""},         // Base=".", Ext=".", TrimSuffix(".",".") = ""
+		{"wiki/.md", ""}, // Base=".md", TrimSuffix removes ".md" ext
+	}
+	for _, tt := range tests {
+		got := slugFromWikiPath(tt.input)
+		if got != tt.want {
+			t.Errorf("slugFromWikiPath(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// --- RebuildEdges duplicate handling ---
+
+func TestRebuildEdges_DeduplicatesSameEdge(t *testing.T) {
+	s := newTestStore(t)
+	edges := []Edge{
+		{FromSlug: "a", ToSlug: "b", Type: "wikilink"},
+		{FromSlug: "a", ToSlug: "b", Type: "wikilink"}, // duplicate
+	}
+	if err := s.RebuildEdges("wikilink", edges); err != nil {
+		t.Fatalf("RebuildEdges: %v", err)
+	}
+	count, err := s.EdgeCount()
+	if err != nil {
+		t.Fatalf("EdgeCount: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("EdgeCount = %d, want 1 (duplicate ignored via INSERT OR IGNORE)", count)
+	}
+}
+
+// --- RebuildEdges with empty slice ---
+
+func TestRebuildEdges_EmptySlice(t *testing.T) {
+	s := newTestStore(t)
+	// Insert some edges first
+	if err := s.RebuildEdges("wikilink", []Edge{
+		{FromSlug: "a", ToSlug: "b", Type: "wikilink"},
+	}); err != nil {
+		t.Fatalf("RebuildEdges (setup): %v", err)
+	}
+	// Rebuild with empty slice should clear all edges of that type
+	if err := s.RebuildEdges("wikilink", []Edge{}); err != nil {
+		t.Fatalf("RebuildEdges (empty): %v", err)
+	}
+	count, err := s.EdgeCount()
+	if err != nil {
+		t.Fatalf("EdgeCount: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("EdgeCount = %d, want 0 after rebuild with empty slice", count)
+	}
+}
+
+// --- UpsertEdgesFrom type isolation ---
+
+func TestUpsertEdgesFrom_DoesNotAffectOtherTypes(t *testing.T) {
+	s := newTestStore(t)
+	// Insert wikilink edges for slug "a"
+	if err := s.UpsertEdgesFrom("a", "wikilink", []Edge{
+		{FromSlug: "a", ToSlug: "b", Type: "wikilink"},
+	}); err != nil {
+		t.Fatalf("UpsertEdgesFrom wikilink: %v", err)
+	}
+	// Insert backlink edges for same slug "a"
+	if err := s.UpsertEdgesFrom("a", "backlink", []Edge{
+		{FromSlug: "a", ToSlug: "c", Type: "backlink"},
+	}); err != nil {
+		t.Fatalf("UpsertEdgesFrom backlink: %v", err)
+	}
+
+	// Clear wikilink edges for "a" — backlink should survive
+	if err := s.UpsertEdgesFrom("a", "wikilink", nil); err != nil {
+		t.Fatalf("UpsertEdgesFrom (clear wikilink): %v", err)
+	}
+
+	count, err := s.EdgeCount()
+	if err != nil {
+		t.Fatalf("EdgeCount: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("EdgeCount = %d, want 1 (backlink survives)", count)
+	}
+	out, err := s.GetOutboundEdges("a")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	if len(out) != 1 || out[0].Type != "backlink" {
+		t.Errorf("remaining edge = %+v, want backlink a->c", out)
+	}
+}
+
+// --- FindBrokenEdges caching ---
+
+func TestFindBrokenEdges_CachesExistsCheck(t *testing.T) {
+	s := newTestStore(t)
+	// Two edges pointing to the same target
+	edges := []Edge{
+		{FromSlug: "a", ToSlug: "x", Type: "wikilink"},
+		{FromSlug: "b", ToSlug: "x", Type: "wikilink"},
+	}
+	if err := s.RebuildEdges("wikilink", edges); err != nil {
+		t.Fatalf("RebuildEdges: %v", err)
+	}
+
+	callCount := 0
+	exists := func(slug string) bool {
+		callCount++
+		return true
+	}
+
+	_, err := s.FindBrokenEdges(exists)
+	if err != nil {
+		t.Fatalf("FindBrokenEdges: %v", err)
+	}
+	// "x" appears twice as to_slug but exists should only be called once (cached)
+	if callCount != 1 {
+		t.Errorf("exists called %d times, want 1 (should cache per slug)", callCount)
+	}
+}
+
+// --- FindOrphans: bookmark with inbound edge is excluded ---
+
+func TestFindOrphans_BookmarkWithInboundIsNotOrphan(t *testing.T) {
+	s := newTestStore(t)
+	// Bookmark exists
+	if err := s.UpsertBookmark(&BookmarkRecord{
+		WikiPath:      "wiki/linked.md",
+		RawPath:       "raw/linked.md",
+		Title:         "Linked",
+		URL:           "http://example.com/linked",
+		URLNormalized: "http://example.com/linked",
+	}); err != nil {
+		t.Fatalf("UpsertBookmark: %v", err)
+	}
+	// Edge points TO the bookmark's slug
+	if err := s.RebuildEdges("wikilink", []Edge{
+		{FromSlug: "other", ToSlug: "linked", Type: "wikilink"},
+	}); err != nil {
+		t.Fatalf("RebuildEdges: %v", err)
+	}
+
+	orphans, err := s.FindOrphans()
+	if err != nil {
+		t.Fatalf("FindOrphans: %v", err)
+	}
+	for _, o := range orphans {
+		if o == "linked" {
+			t.Errorf("FindOrphans includes 'linked' which has inbound edge")
+		}
+	}
+}
+
+// --- DeleteEdgesInvolving on non-existent slug ---
+
+func TestDeleteEdgesInvolving_NonExistent(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.DeleteEdgesInvolving("nonexistent"); err != nil {
+		t.Fatalf("DeleteEdgesInvolving (non-existent): %v", err)
 	}
 }
