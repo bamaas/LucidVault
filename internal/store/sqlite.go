@@ -66,6 +66,14 @@ func (s *Store) migrate() error {
 			last_processed TEXT NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_bookmarks_url_normalized ON bookmarks(url_normalized);
+		CREATE TABLE IF NOT EXISTS edges (
+			from_slug TEXT NOT NULL,
+			to_slug   TEXT NOT NULL,
+			type      TEXT NOT NULL DEFAULT 'wikilink',
+			PRIMARY KEY (from_slug, to_slug, type)
+		);
+		CREATE INDEX IF NOT EXISTS idx_edges_to   ON edges(to_slug);
+		CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
 	`)
 	if err != nil {
 		return fmt.Errorf("executing migrations: %w", err)
