@@ -156,9 +156,86 @@ func TestParseWikiLinks(t *testing.T) {
 			want:    []string{"start-link", "end-link"},
 		},
 		{
-			name:    "link with raw filename pattern",
+			name:    "link with raw filename pattern filtered out",
 			content: "*Source: [[2024-01-15-kubernetes-networking.md]]*",
-			want:    []string{"2024-01-15-kubernetes-networking.md"},
+			want:    []string{},
+		},
+		// --- Hardening: fenced code blocks ---
+		{
+			name:    "skip links inside backtick fenced code block",
+			content: "Before [[real-link]]\n```\n[[code-link]]\n```\nAfter [[another-real]]",
+			want:    []string{"real-link", "another-real"},
+		},
+		{
+			name:    "skip links inside tilde fenced code block",
+			content: "Before [[real-link]]\n~~~\n[[code-link]]\n~~~\nAfter [[another-real]]",
+			want:    []string{"real-link", "another-real"},
+		},
+		{
+			name:    "skip links inside fenced code block with language",
+			content: "```markdown\n[[code-link]]\n```\n[[real-link]]",
+			want:    []string{"real-link"},
+		},
+		{
+			name:    "multiple code blocks",
+			content: "[[a]]\n```\n[[b]]\n```\n[[c]]\n~~~\n[[d]]\n~~~\n[[e]]",
+			want:    []string{"a", "c", "e"},
+		},
+		// --- Hardening: inline code ---
+		{
+			name:    "skip links inside inline code",
+			content: "See `[[not-a-link]]` but [[real-link]] is valid",
+			want:    []string{"real-link"},
+		},
+		{
+			name:    "skip links inside double backtick inline code",
+			content: "See ``[[not-a-link]]`` but [[real-link]] is valid",
+			want:    []string{"real-link"},
+		},
+		// --- Hardening: frontmatter ---
+		{
+			name:    "skip links in YAML frontmatter",
+			content: "---\nrelated: \"[[frontmatter-link]]\"\ntags: [test]\n---\n\n[[body-link]]",
+			want:    []string{"body-link"},
+		},
+		{
+			name:    "no frontmatter still works",
+			content: "[[normal-link]] in content without frontmatter",
+			want:    []string{"normal-link"},
+		},
+		// --- Hardening: pipe syntax ---
+		{
+			name:    "pipe syntax takes slug before pipe",
+			content: "See [[kubernetes-networking|K8s Networking]] for details",
+			want:    []string{"kubernetes-networking"},
+		},
+		{
+			name:    "pipe syntax mixed with regular links",
+			content: "[[regular-link]] and [[piped|Display Name]]",
+			want:    []string{"regular-link", "piped"},
+		},
+		// --- Hardening: .md filtering ---
+		{
+			name:    "mixed md and non-md links",
+			content: "[[valid-slug]] and [[raw-file.md]] and [[another-valid]]",
+			want:    []string{"valid-slug", "another-valid"},
+		},
+		// --- Hardening: deduplication ---
+		{
+			name:    "duplicate links deduplicated",
+			content: "[[same-link]] appears twice: [[same-link]]",
+			want:    []string{"same-link"},
+		},
+		{
+			name:    "duplicate after pipe resolution",
+			content: "[[slug]] and [[slug|Different Display]]",
+			want:    []string{"slug"},
+		},
+		// --- Combined scenarios ---
+		{
+			name:    "all hardening combined",
+			content: "---\nrelated: \"[[fm-link]]\"\n---\n\n[[real]] and [[piped|Name]]\n```\n[[in-code]]\n```\nSee `[[inline]]` and [[real]] and [[raw.md]]",
+			want:    []string{"real", "piped"},
 		},
 	}
 

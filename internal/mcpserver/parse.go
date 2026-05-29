@@ -50,18 +50,96 @@ func ParseIndexEntry(line string) *IndexEntry {
 }
 
 var wikiLinkRe = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+var inlineCodeRe = regexp.MustCompile("``[^`]+``|`[^`]+`")
 
 // ParseWikiLinks extracts all [[link]] targets from markdown content.
+// It skips links inside YAML frontmatter, fenced code blocks, and inline code.
+// It handles pipe syntax ([[slug|Display]]), filters .md targets, and deduplicates.
 func ParseWikiLinks(content string) []string {
-	matches := wikiLinkRe.FindAllStringSubmatch(content, -1)
+	// 1. Strip YAML frontmatter.
+	body := stripFrontmatter(content)
+
+	// 2. Strip fenced code blocks (``` or ~~~).
+	body = stripFencedCode(body)
+
+	// 3. Strip inline code spans.
+	body = inlineCodeRe.ReplaceAllString(body, "")
+
+	// 4. Extract [[...]] targets.
+	matches := wikiLinkRe.FindAllStringSubmatch(body, -1)
 	if len(matches) == 0 {
 		return []string{}
 	}
+
+	seen := make(map[string]struct{})
 	var links []string
 	for _, m := range matches {
-		links = append(links, m[1])
+		target := m[1]
+
+		// 5. Handle pipe syntax: [[slug|Display Name]] -> slug
+		if idx := strings.Index(target, "|"); idx >= 0 {
+			target = target[:idx]
+		}
+
+		// 6. Filter .md targets (raw file back-references).
+		if strings.HasSuffix(target, ".md") {
+			continue
+		}
+
+		// 7. Deduplicate.
+		if _, exists := seen[target]; exists {
+			continue
+		}
+		seen[target] = struct{}{}
+		links = append(links, target)
 	}
 	return links
+}
+
+// stripFrontmatter removes YAML frontmatter (--- ... ---) from the start of content.
+func stripFrontmatter(content string) string {
+	if !strings.HasPrefix(content, "---") {
+		return content
+	}
+	// Find closing --- after the opening one.
+	rest := content[3:]
+	end := strings.Index(rest, "\n---")
+	if end == -1 {
+		return content
+	}
+	// Skip past the closing --- and its newline.
+	after := rest[end+4:]
+	if len(after) > 0 && after[0] == '\n' {
+		after = after[1:]
+	}
+	return after
+}
+
+// stripFencedCode removes fenced code blocks (``` or ~~~) from content.
+func stripFencedCode(content string) string {
+	var result strings.Builder
+	lines := strings.Split(content, "\n")
+	inFence := false
+	var fenceMarker string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !inFence {
+			if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+				inFence = true
+				fenceMarker = trimmed[:3]
+				continue
+			}
+			result.WriteString(line)
+			result.WriteByte('\n')
+		} else {
+			// Check for closing fence (must start with same marker).
+			if strings.HasPrefix(trimmed, fenceMarker) && strings.TrimSpace(strings.TrimLeft(trimmed, fenceMarker[:1])) == "" {
+				inFence = false
+			}
+		}
+	}
+	return result.String()
 }
 
 // ParseFrontmatterTitle extracts the title field from YAML frontmatter.
