@@ -46,6 +46,7 @@ func main() {
 
 	reEnrich := flag.Bool("re-enrich", false, "re-enrich all bookmarks using updated prompt, then exit")
 	reFetch := flag.Bool("re-fetch", false, "re-fetch all bookmarks from external sources to inbox, then exit")
+	rebuildEdges := flag.Bool("rebuild-edges", false, "force full rebuild of wikilink edges, then continue normally")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -102,6 +103,23 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 	slog.Info("database initialized", "path", dbPath)
+
+	// Edge rebuild: trigger on --rebuild-edges flag or when edges table is empty (D5)
+	rebuildNeeded := *rebuildEdges
+	if !rebuildNeeded {
+		edgeCount, err := db.EdgeCount()
+		if err != nil {
+			slog.Error("failed to check edge count", "error", err)
+		} else if edgeCount == 0 {
+			rebuildNeeded = true
+			slog.Info("edges table empty, triggering full rebuild")
+		}
+	}
+	if rebuildNeeded {
+		if err := rebuildAllEdges(db, v); err != nil {
+			slog.Error("failed to rebuild edges", "error", err)
+		}
+	}
 
 	// Initialize Raindrop client (optional)
 	var rd *raindrop.Client
@@ -317,6 +335,9 @@ func processInboxItem(ctx context.Context, item inbox.Item, sc *scraper.Scraper,
 	if err != nil {
 		return fmt.Errorf("writing wiki file: %w", err)
 	}
+
+	// Sync wikilink edges incrementally
+	syncEdgesFromContent(db, slug, wikiContent)
 
 	// Extract tags from enriched content for index
 	tags := notes.ParseFrontmatter(wikiContent)
@@ -583,6 +604,9 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 			continue
 		}
 
+		// Sync wikilink edges incrementally
+		syncEdgesFromContent(db, wikiSlug, wikiContent)
+
 		// Index the wiki slug (not the notes/ path)
 		if err := v.UpdateIndex(wikiSlug, nf.Title, tags); err != nil {
 			slog.Error("failed to update index for note", "path", nf.Path, "error", err)
@@ -744,6 +768,57 @@ func resolveContainerPath(hostPath string) string {
 		}
 	}
 	return hostPath
+}
+
+// rebuildAllEdges performs a full scan of wiki/ and rebuilds all wikilink edges.
+func rebuildAllEdges(db *store.Store, v *vault.Vault) error {
+	slog.Info("rebuilding all wikilink edges")
+
+	wikiFiles, err := v.ScanWikiDir()
+	if err != nil {
+		return fmt.Errorf("scanning wiki dir: %w", err)
+	}
+
+	var allEdges []store.Edge
+	for _, relPath := range wikiFiles {
+		content, err := v.ReadFile(relPath)
+		if err != nil {
+			slog.Warn("failed to read wiki file for edge rebuild", "path", relPath, "error", err)
+			continue
+		}
+		slug := store.SlugFromWikiRelPath(relPath)
+		links := mcpserver.ParseWikiLinks(content)
+		for _, link := range links {
+			allEdges = append(allEdges, store.Edge{
+				FromSlug: slug,
+				ToSlug:   link,
+				Type:     "wikilink",
+			})
+		}
+	}
+
+	if err := db.RebuildEdges("wikilink", allEdges); err != nil {
+		return fmt.Errorf("rebuilding edges: %w", err)
+	}
+
+	slog.Info("edge rebuild complete", "files_scanned", len(wikiFiles), "edges_created", len(allEdges))
+	return nil
+}
+
+// syncEdgesFromContent parses wikilinks from content and upserts edges for the given slug.
+func syncEdgesFromContent(db *store.Store, slug, content string) {
+	links := mcpserver.ParseWikiLinks(content)
+	var edges []store.Edge
+	for _, link := range links {
+		edges = append(edges, store.Edge{
+			FromSlug: slug,
+			ToSlug:   link,
+			Type:     "wikilink",
+		})
+	}
+	if err := db.UpsertEdgesFrom(slug, "wikilink", edges); err != nil {
+		slog.Warn("failed to sync edges", "slug", slug, "error", err)
+	}
 }
 
 func runMCP(args []string) {

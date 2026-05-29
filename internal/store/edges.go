@@ -264,6 +264,15 @@ func slugFromWikiPath(wikiPath string) string {
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
+// SlugFromWikiRelPath extracts a slug that preserves subdirectory structure relative to wiki/.
+// e.g. "wiki/foo.md" -> "foo", "wiki/notes/bar.md" -> "notes/bar".
+func SlugFromWikiRelPath(wikiRelPath string) string {
+	// Strip "wiki/" prefix
+	trimmed := strings.TrimPrefix(wikiRelPath, "wiki/")
+	// Remove .md extension
+	return strings.TrimSuffix(trimmed, filepath.Ext(trimmed))
+}
+
 // FindBrokenEdges returns edges where the target slug does not exist on disk.
 // The exists function is called for each unique to_slug to check file presence.
 func (s *Store) FindBrokenEdges(exists func(string) bool) ([]Edge, error) {

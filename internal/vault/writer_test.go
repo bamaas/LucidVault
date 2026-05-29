@@ -199,6 +199,92 @@ func TestFileExists_Empty(t *testing.T) {
 	}
 }
 
+func TestScanWikiDir_Empty(t *testing.T) {
+	dir := t.TempDir()
+	v := New(dir)
+	if err := v.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	paths, err := v.ScanWikiDir()
+	if err != nil {
+		t.Fatalf("ScanWikiDir: %v", err)
+	}
+	if len(paths) != 0 {
+		t.Errorf("expected 0 paths, got %d", len(paths))
+	}
+}
+
+func TestScanWikiDir_FindsFiles(t *testing.T) {
+	dir := t.TempDir()
+	v := New(dir)
+	if err := v.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Create wiki files at different depths
+	wikiDir := filepath.Join(dir, "wiki")
+	notesDir := filepath.Join(dir, "wiki", "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"foo.md", "bar.md"} {
+		if err := os.WriteFile(filepath.Join(wikiDir, f), []byte("# "+f), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(notesDir, "baz.md"), []byte("# baz"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-md file should be ignored
+	if err := os.WriteFile(filepath.Join(wikiDir, "readme.txt"), []byte("ignore"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, err := v.ScanWikiDir()
+	if err != nil {
+		t.Fatalf("ScanWikiDir: %v", err)
+	}
+
+	if len(paths) != 3 {
+		t.Fatalf("expected 3 paths, got %d: %v", len(paths), paths)
+	}
+
+	// Check expected paths (relative to vault base)
+	expected := map[string]bool{
+		"wiki/foo.md":       false,
+		"wiki/bar.md":       false,
+		"wiki/notes/baz.md": false,
+	}
+	for _, p := range paths {
+		if _, ok := expected[p]; !ok {
+			t.Errorf("unexpected path: %s", p)
+		} else {
+			expected[p] = true
+		}
+	}
+	for p, found := range expected {
+		if !found {
+			t.Errorf("missing expected path: %s", p)
+		}
+	}
+}
+
+func TestScanWikiDir_NoWikiDir(t *testing.T) {
+	dir := t.TempDir()
+	// Don't init -- no wiki/ directory
+	v := New(dir)
+
+	paths, err := v.ScanWikiDir()
+	if err != nil {
+		t.Fatalf("ScanWikiDir: %v", err)
+	}
+	if len(paths) != 0 {
+		t.Errorf("expected 0 paths for missing wiki dir, got %d", len(paths))
+	}
+}
+
 func TestFileExists_WhitespaceOnly(t *testing.T) {
 	dir := t.TempDir()
 	v := New(dir)

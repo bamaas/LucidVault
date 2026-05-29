@@ -44,13 +44,13 @@ In `processInboxItem` and `processNotes`, after calling `vault.WriteWiki()`:
 
 ## Acceptance Criteria
 
-- [ ] `ScanWikiDir` returns all `.md` files recursively under `wiki/`
-- [ ] `--rebuild-edges` flag triggers full edge rebuild
-- [ ] Empty edges table triggers automatic rebuild on startup
-- [ ] After `processInboxItem` writes wiki, edges are synced incrementally
-- [ ] After `processNotes` writes wiki, edges are synced incrementally
-- [ ] Rebuild is idempotent — running twice produces same result
-- [ ] `mise run test` passes, `mise run lint` passes
+- [x] `ScanWikiDir` returns all `.md` files recursively under `wiki/`
+- [x] `--rebuild-edges` flag triggers full edge rebuild
+- [x] Empty edges table triggers automatic rebuild on startup
+- [x] After `processInboxItem` writes wiki, edges are synced incrementally
+- [x] After `processNotes` writes wiki, edges are synced incrementally
+- [x] Rebuild is idempotent — running twice produces same result
+- [x] `mise run test` passes, `mise run lint` passes
 
 ## Dependencies
 
