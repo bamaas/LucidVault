@@ -69,6 +69,38 @@ https://
 	return nil
 }
 
+// ScanWikiDir returns a list of relative paths (e.g. "wiki/foo.md", "wiki/notes/bar.md")
+// for all .md files under the wiki/ directory. Returns empty slice if wiki/ doesn't exist.
+func (v *Vault) ScanWikiDir() ([]string, error) {
+	wikiDir := filepath.Join(v.BasePath, "wiki")
+	if _, err := os.Stat(wikiDir); os.IsNotExist(err) {
+		return nil, nil
+	}
+
+	var paths []string
+	err := filepath.Walk(wikiDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != ".md" {
+			return nil
+		}
+		rel, err := filepath.Rel(v.BasePath, path)
+		if err != nil {
+			return fmt.Errorf("computing relative path: %w", err)
+		}
+		paths = append(paths, rel)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scanning wiki directory: %w", err)
+	}
+	return paths, nil
+}
+
 func (v *Vault) FileExists(relPath string) bool {
 	absPath := filepath.Join(v.BasePath, relPath)
 	data, err := os.ReadFile(absPath)

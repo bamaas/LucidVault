@@ -36,7 +36,7 @@ internal/raindrop/       — Raindrop API client and inbox sync (optional feeder
 internal/scraper/        — Scraper (Jina Reader + Supadata YouTube transcripts)
 internal/enrich/         — Ollama Cloud enrichment
 internal/notes/          — Notes scanner, frontmatter parser
-internal/mcpserver/      — MCP server (retrieval + inbox write tools for AI agents)
+internal/mcpserver/      — MCP server (retrieval, inbox write, vault mutation tools for AI agents)
 internal/store/          — SQLite state (modernc.org/sqlite, pure Go)
 internal/vault/          — Vault file writer, slug/URL helpers
 CONTEXT.md                — Domain glossary (ubiquitous language, no implementation details)
@@ -95,6 +95,7 @@ mise run lint:commits          # Check commit message (used by commit-msg hook)
 - `VAULT_PATH` — (required) Path to Obsidian vault
 - `RAINDROP_ACCESS_TOKEN` — (optional) Enables Raindrop.io as an inbox feeder
 - `SUPADATA_API_KEY` — (optional) Supadata API key for YouTube transcript extraction
+- `HYGIENE_INTERVAL` — (optional, default: 10) Run vault hygiene every Nth poll cycle
 
 ## Deployment
 

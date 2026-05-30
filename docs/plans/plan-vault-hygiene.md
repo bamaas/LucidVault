@@ -13,12 +13,13 @@ LucidVault's vault degrades silently over time:
 5. **Orphan pages** — wiki pages with zero inbound links, unreachable from navigation.
 6. **No mutation tools** — MCP server can only create bookmarks/notes. Cannot edit, update, or delete existing pages.
 7. **Tag drift** — frontmatter tags edited after enrichment, index.md out of sync.
+8. **Raw↔wiki drift** — orphaned raw files when wiki is deleted, broken footer links when raw is deleted.
 
 ## Design Principles
 
 - **LucidVault owns its own health** — no dependency on Obsidian plugins or external agents.
 - **Prevention over detection** — auto-linking at enrichment stops most issues at source.
-- **Auto-fix what's safe** — remove broken edges, sync index entries automatically. Never auto-delete files.
+- **Auto-fix what's safe** — remove broken edges, sync index entries, delete orphaned raw files, fix broken footer links. Never auto-delete wiki files.
 - **Wiki directory is source of truth** — index.md is a derived artifact kept in sync by hygiene cycle.
 - **Minimal code** — no separate hygiene framework. Auto-fix is ~50 lines. Auto-linking is a natural pipeline extension.
 
@@ -41,6 +42,8 @@ Decisions made during plan review. Rationale preserved for future reference.
 | D11 | Auto-linking excludes the new page itself from candidates. | New page shares all tags with itself — would always match. Filter `newSlug` from candidate list before sorting. |
 | D12 | `delete_page` collects inbound edges before deleting them. | Must call `GetInboundEdges(slug)` before `DeleteEdgesInvolving(slug)` to build the "dangling reference" return list. |
 | D13 | `FindBrokenEdges` accepts a file-exists checker function. | Store is database-only — can't check filesystem. Pass `v.FileExists` as `exists func(slug string) bool` parameter. Keeps Store testable. |
+| D14 | Orphaned raw files (no matching wiki) → auto-delete. | Raw is a reproducible cache (re-scrape URL). Wiki is source of truth. Orphaned raw is dead weight with no discovery path. Safe to delete — not user-authored content. |
+| D15 | Wiki with missing raw → rewrite `*Source:` footer to use original URL from frontmatter. | Deleted raw creates broken local link in wiki footer. Fix preserves provenance (original URL still in frontmatter `url:` field) without data loss. Don't delete wiki — it holds all enriched value. |
 
 ---
 
@@ -186,7 +189,10 @@ func runHygiene(db *store.Store, v *vault.Vault) {
     // 2. Bidirectional index sync (D10) — 3 directions in single pass
     syncIndex(v)
 
-    // 3. Log orphan pages (warning only)
+    // 3. Raw↔wiki consistency (D14, D15)
+    cleanRawWikiOrphans(v)
+
+    // 4. Log orphan pages (warning only)
     orphans := db.FindOrphans()
     for _, slug := range orphans {
         slog.Warn("hygiene: orphan page", "slug", slug)
@@ -233,6 +239,36 @@ func syncIndex(v *vault.Vault) {
 }
 ```
 
+**Raw↔wiki consistency (D14, D15):**
+
+```go
+func cleanRawWikiOrphans(v *vault.Vault) {
+    // D14: Orphaned raw files — raw exists, no matching wiki → delete raw
+    rawFiles := scanRawDir(v)
+    for _, file := range rawFiles {
+        slug := deriveSlug(file)
+        if !v.FileExists("wiki/" + slug + ".md") {
+            os.Remove(file)
+            slog.Info("hygiene: deleted orphaned raw file", "slug", slug)
+        }
+    }
+
+    // D15: Wiki with missing raw → rewrite footer to use original URL
+    wikiFiles := scanWikiDir(v)
+    for _, file := range wikiFiles {
+        slug := deriveSlug(file)
+        rawPath := "raw/" + slug + ".md"
+        if !v.FileExists(rawPath) && hasRawFooterLink(file, rawPath) {
+            url := parseFrontmatterURL(file)
+            if url != "" {
+                rewriteFooterLink(file, rawPath, url)
+                slog.Info("hygiene: fixed broken raw link in footer", "slug", slug)
+            }
+        }
+    }
+}
+```
+
 **Trigger:** Every Nth poll cycle, configurable via `HYGIENE_INTERVAL` env var (default: every 10th cycle).
 
 **What it fixes automatically:**
@@ -241,6 +277,8 @@ func syncIndex(v *vault.Vault) {
 - Stale index entries → removed from index.md.
 - Missing index entries → added to index.md from wiki file frontmatter.
 - Tag/title drift → index.md updated to match frontmatter (source of truth).
+- Orphaned raw files → deleted when no matching wiki page exists **(D14)**.
+- Broken raw footer links → rewritten to use original URL from frontmatter **(D15)**.
 
 **What it does NOT fix (logs only):**
 
@@ -358,14 +396,15 @@ All checks return empty results. Edges table is empty (triggers auto-rebuild on 
 ### Phase 3: Auto-Fix (Hygiene Cycle)
 
 11. Implement `syncIndex(v)` — bidirectional 3-direction index sync (stale removal, missing addition, tag/title sync).
-12. Add `runHygiene()` to poll loop with configurable `HYGIENE_INTERVAL`.
+12. Implement `cleanRawWikiOrphans(v)` — delete orphaned raw files (D14), fix broken raw footer links (D15).
+13. Add `runHygiene()` to poll loop with configurable `HYGIENE_INTERVAL`.
 
 ### Phase 4: MCP Write Tools
 
-13. Add `DeleteBookmarkByWikiPath(wikiPath)` to store.
-14. Implement `update_wiki(slug, section, content)` with section parsing.
-15. Implement `delete_page(slug)` with full cleanup (disk + index + edges + bookmarks/notes table).
-16. Register new tools in MCP server.
+14. Add `DeleteBookmarkByWikiPath(wikiPath)` to store.
+15. Implement `update_wiki(slug, section, content)` with section parsing.
+16. Implement `delete_page(slug)` with full cleanup (disk + index + edges + bookmarks/notes table).
+17. Register new tools in MCP server.
 
 ---
 

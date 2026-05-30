@@ -25,17 +25,21 @@ import (
 )
 
 type config struct {
-	raindropToken  string
-	ollamaAPIKey   string
-	ollamaModel    string
-	vaultPath      string
-	pollInterval   time.Duration
-	enrichDelayMs  int
-	enrichRetries  int
-	supadataAPIKey string
-	forceReEnrich  bool
-	forceReFetch   bool
+	raindropToken   string
+	ollamaAPIKey    string
+	ollamaModel     string
+	vaultPath       string
+	pollInterval    time.Duration
+	enrichDelayMs   int
+	enrichRetries   int
+	supadataAPIKey  string
+	forceReEnrich   bool
+	forceReFetch    bool
+	hygieneInterval int
 }
+
+// pollCycleCount tracks the number of poll cycles for hygiene scheduling.
+var pollCycleCount int
 
 func main() {
 	// Handle "mcp" subcommand before flag parsing.
@@ -46,6 +50,7 @@ func main() {
 
 	reEnrich := flag.Bool("re-enrich", false, "re-enrich all bookmarks using updated prompt, then exit")
 	reFetch := flag.Bool("re-fetch", false, "re-fetch all bookmarks from external sources to inbox, then exit")
+	rebuildEdges := flag.Bool("rebuild-edges", false, "force full rebuild of wikilink edges, then continue normally")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -102,6 +107,23 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 	slog.Info("database initialized", "path", dbPath)
+
+	// Edge rebuild: trigger on --rebuild-edges flag or when edges table is empty (D5)
+	rebuildNeeded := *rebuildEdges
+	if !rebuildNeeded {
+		edgeCount, err := db.EdgeCount()
+		if err != nil {
+			slog.Error("failed to check edge count", "error", err)
+		} else if edgeCount == 0 {
+			rebuildNeeded = true
+			slog.Info("edges table empty, triggering full rebuild")
+		}
+	}
+	if rebuildNeeded {
+		if err := rebuildAllEdges(db, v); err != nil {
+			slog.Error("failed to rebuild edges", "error", err)
+		}
+	}
 
 	// Initialize Raindrop client (optional)
 	var rd *raindrop.Client
@@ -183,6 +205,12 @@ func runPollCycle(ctx context.Context, cfg *config, rd *raindrop.Client, sc *scr
 
 	// Step 3: Process notes
 	processNotes(ctx, en, db, v)
+
+	// Step 4: Hygiene cycle (every Nth poll cycle)
+	pollCycleCount++
+	if cfg.hygieneInterval > 0 && pollCycleCount%cfg.hygieneInterval == 0 {
+		runHygiene(db, v)
+	}
 }
 
 func syncRaindropToInbox(ctx context.Context, rd *raindrop.Client, db *store.Store, v *vault.Vault, force bool) {
@@ -318,6 +346,9 @@ func processInboxItem(ctx context.Context, item inbox.Item, sc *scraper.Scraper,
 		return fmt.Errorf("writing wiki file: %w", err)
 	}
 
+	// Sync wikilink edges incrementally
+	syncEdgesFromContent(db, slug, wikiContent)
+
 	// Extract tags from enriched content for index
 	tags := notes.ParseFrontmatter(wikiContent)
 	if len(tags) == 0 {
@@ -336,6 +367,9 @@ func processInboxItem(ctx context.Context, item inbox.Item, sc *scraper.Scraper,
 	if err := v.UpdateIndex(slug, title, tags); err != nil {
 		return fmt.Errorf("updating index: %w", err)
 	}
+
+	// Auto-link: add backlinks to related pages
+	autoLinkRelated(db, v, slug, tags, wikiContent)
 
 	// Upsert to database
 	normalizedURL := vault.NormalizeURL(item.URL)
@@ -583,6 +617,12 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 			continue
 		}
 
+		// Sync wikilink edges incrementally
+		syncEdgesFromContent(db, wikiSlug, wikiContent)
+
+		// Auto-link: add backlinks to related pages
+		autoLinkRelated(db, v, wikiSlug, tags, wikiContent)
+
 		// Index the wiki slug (not the notes/ path)
 		if err := v.UpdateIndex(wikiSlug, nf.Title, tags); err != nil {
 			slog.Error("failed to update index for note", "path", nf.Path, "error", err)
@@ -707,6 +747,14 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 
 	supadataAPIKey := os.Getenv("SUPADATA_API_KEY")
 
+	hygieneInterval := 10
+	if v := os.Getenv("HYGIENE_INTERVAL"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing HYGIENE_INTERVAL: %w", err)
+		}
+		hygieneInterval = n
+	}
 	return &config{
 		raindropToken:  raindropToken,
 		ollamaAPIKey:   apiKey,
@@ -717,7 +765,8 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 		enrichRetries:  enrichRetries,
 		supadataAPIKey: supadataAPIKey,
 		forceReEnrich:  forceReEnrich,
-		forceReFetch:   forceReFetch,
+		forceReFetch:    forceReFetch,
+		hygieneInterval: hygieneInterval,
 	}, nil
 }
 
@@ -746,6 +795,90 @@ func resolveContainerPath(hostPath string) string {
 	return hostPath
 }
 
+// rebuildAllEdges performs a full scan of wiki/ and rebuilds all wikilink edges.
+func rebuildAllEdges(db *store.Store, v *vault.Vault) error {
+	slog.Info("rebuilding all wikilink edges")
+
+	wikiFiles, err := v.ScanWikiDir()
+	if err != nil {
+		return fmt.Errorf("scanning wiki dir: %w", err)
+	}
+
+	var allEdges []store.Edge
+	for _, relPath := range wikiFiles {
+		content, err := v.ReadFile(relPath)
+		if err != nil {
+			slog.Warn("failed to read wiki file for edge rebuild", "path", relPath, "error", err)
+			continue
+		}
+		slug := store.SlugFromWikiRelPath(relPath)
+		links := mcpserver.ParseWikiLinks(content)
+		for _, link := range links {
+			allEdges = append(allEdges, store.Edge{
+				FromSlug: slug,
+				ToSlug:   link,
+				Type:     "wikilink",
+			})
+		}
+	}
+
+	if err := db.RebuildEdges("wikilink", allEdges); err != nil {
+		return fmt.Errorf("rebuilding edges: %w", err)
+	}
+
+	slog.Info("edge rebuild complete", "files_scanned", len(wikiFiles), "edges_created", len(allEdges))
+	return nil
+}
+
+// syncEdgesFromContent parses wikilinks from content and upserts edges for the given slug.
+func syncEdgesFromContent(db *store.Store, slug, content string) {
+	links := mcpserver.ParseWikiLinks(content)
+	var edges []store.Edge
+	for _, link := range links {
+		edges = append(edges, store.Edge{
+			FromSlug: slug,
+			ToSlug:   link,
+			Type:     "wikilink",
+		})
+	}
+	if err := db.UpsertEdgesFrom(slug, "wikilink", edges); err != nil {
+		slog.Warn("failed to sync edges", "slug", slug, "error", err)
+	}
+}
+
+// autoLinkRelated finds related pages by tag overlap and adds backlinks to them.
+// It wraps file mutations in WithFileLock for cross-process safety.
+func autoLinkRelated(db *store.Store, v *vault.Vault, slug string, tags []string, wikiContent string) {
+	candidates, err := v.FindRelatedByTags(slug, tags)
+	if err != nil {
+		slog.Warn("failed to find related pages", "slug", slug, "error", err)
+		return
+	}
+
+	for _, c := range candidates {
+		line := c.BacklinkLine(slug)
+
+		candidateWikiPath := filepath.Join("wiki", c.Slug+".md")
+		err := db.WithFileLock(func() error {
+			return v.UpdateRelatedSection(candidateWikiPath, []string{line})
+		})
+		if err != nil {
+			slog.Warn("failed to update related section", "candidate", c.Slug, "error", err)
+			continue
+		}
+
+		// Read updated candidate content and sync its edges
+		updatedContent, err := v.ReadFile(candidateWikiPath)
+		if err != nil {
+			slog.Warn("failed to read updated candidate", "candidate", c.Slug, "error", err)
+			continue
+		}
+		syncEdgesFromContent(db, c.Slug, updatedContent)
+
+		slog.Info("auto-linked related page", "from", slug, "to", c.Slug, "shared_tags", c.SharedTags)
+	}
+}
+
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	httpAddr := fs.String("http", "", "Serve Streamable HTTP on this address (e.g. :8080). Default: stdio transport.")
@@ -755,5 +888,248 @@ func runMCP(args []string) {
 	if vaultPath == "" {
 		vaultPath = "/vault"
 	}
-	mcpserver.Run(vaultPath, *httpAddr)
+	dbPath := filepath.Join(vaultPath, ".lucidvault.db")
+	mcpserver.Run(vaultPath, *httpAddr, dbPath)
+}
+
+// runHygiene orchestrates all hygiene steps.
+func runHygiene(db *store.Store, v *vault.Vault) {
+	slog.Info("running hygiene cycle")
+
+	// 1. Broken edges: remove edges where target file doesn't exist
+	broken, err := db.FindBrokenEdges(func(slug string) bool {
+		return v.FileExists("wiki/" + slug + ".md")
+	})
+	if err != nil {
+		slog.Error("hygiene: failed to find broken edges", "error", err)
+	} else {
+		for _, edge := range broken {
+			if err := db.DeleteEdge(edge.FromSlug, edge.ToSlug); err != nil {
+				slog.Error("hygiene: failed to delete broken edge", "from", edge.FromSlug, "to", edge.ToSlug, "error", err)
+			} else {
+				slog.Info("hygiene: deleted broken edge", "from", edge.FromSlug, "to", edge.ToSlug)
+			}
+		}
+	}
+
+	// 2. Bidirectional index sync
+	syncIndex(v)
+
+	// 3. Raw/wiki consistency
+	cleanRawWikiOrphans(v)
+
+	// 4. Log orphan pages
+	orphans, err := db.FindOrphans()
+	if err != nil {
+		slog.Error("hygiene: failed to find orphans", "error", err)
+	} else {
+		for _, slug := range orphans {
+			slog.Warn("hygiene: orphan page (no inbound links)", "slug", slug)
+		}
+	}
+
+	slog.Info("hygiene cycle complete")
+}
+
+// syncIndex performs bidirectional 3-direction sync between wiki files and index.md.
+func syncIndex(v *vault.Vault) {
+	// Build set of current index entries
+	indexContent, err := v.ReadIndex()
+	if err != nil {
+		slog.Error("hygiene: failed to read index", "error", err)
+		return
+	}
+
+	indexEntries := parseAllIndexEntries(indexContent)
+
+	// Scan all wiki files on disk
+	wikiFiles, err := v.ScanWikiDir()
+	if err != nil {
+		slog.Error("hygiene: failed to scan wiki dir", "error", err)
+		return
+	}
+
+	diskSlugs := make(map[string]bool)
+	for _, relPath := range wikiFiles {
+		slug := store.SlugFromWikiRelPath(relPath)
+		diskSlugs[slug] = true
+
+		content, err := v.ReadFile(relPath)
+		if err != nil {
+			slog.Warn("hygiene: failed to read wiki file", "path", relPath, "error", err)
+			continue
+		}
+
+		title := notes.ParseTitle(content)
+		if title == "" {
+			title = notes.ParseH1(content)
+		}
+		if title == "" {
+			title = notes.TitleFromFilename(relPath)
+		}
+		tags := notes.ParseFrontmatter(content)
+
+		existing, inIndex := indexEntries[slug]
+		if !inIndex {
+			// Direction 2: file exists, not in index → add
+			if err := v.UpdateIndex(slug, title, tags); err != nil {
+				slog.Error("hygiene: failed to add missing index entry", "slug", slug, "error", err)
+			} else {
+				slog.Info("hygiene: added missing index entry", "slug", slug)
+			}
+		} else if existing.title != title || !tagsEqual(existing.tags, tags) {
+			// Direction 3: metadata drifted → update
+			if err := v.RemoveFromIndex(slug); err != nil {
+				slog.Error("hygiene: failed to remove drifted index entry", "slug", slug, "error", err)
+				continue
+			}
+			if err := v.UpdateIndex(slug, title, tags); err != nil {
+				slog.Error("hygiene: failed to update drifted index entry", "slug", slug, "error", err)
+			} else {
+				slog.Info("hygiene: synced drifted index entry", "slug", slug)
+			}
+		}
+	}
+
+	// Direction 1: index entry exists, file gone → remove
+	for slug := range indexEntries {
+		if !diskSlugs[slug] {
+			if err := v.RemoveFromIndex(slug); err != nil {
+				slog.Error("hygiene: failed to remove stale index entry", "slug", slug, "error", err)
+			} else {
+				slog.Info("hygiene: removed stale index entry", "slug", slug)
+			}
+		}
+	}
+}
+
+// cleanRawWikiOrphans handles raw/wiki consistency (D14, D15).
+func cleanRawWikiOrphans(v *vault.Vault) {
+	// D14: raw file exists, no matching wiki → delete raw
+	rawFiles, err := v.ScanRawDir()
+	if err != nil {
+		slog.Error("hygiene: failed to scan raw dir", "error", err)
+		return
+	}
+
+	for _, rawPath := range rawFiles {
+		slug := strings.TrimSuffix(filepath.Base(rawPath), ".md")
+		if !v.FileExists("wiki/" + slug + ".md") {
+			if err := v.DeleteFile(rawPath); err != nil {
+				slog.Error("hygiene: failed to delete orphaned raw file", "path", rawPath, "error", err)
+			} else {
+				slog.Info("hygiene: deleted orphaned raw file", "slug", slug)
+			}
+		}
+	}
+
+	// D15: wiki exists, raw missing, footer has broken raw link → rewrite to URL
+	wikiFiles, err := v.ScanWikiDir()
+	if err != nil {
+		slog.Error("hygiene: failed to scan wiki dir for footer check", "error", err)
+		return
+	}
+
+	for _, wikiPath := range wikiFiles {
+		slug := store.SlugFromWikiRelPath(wikiPath)
+		rawPath := "raw/" + slug + ".md"
+		if v.FileExists(rawPath) {
+			continue
+		}
+
+		content, err := v.ReadFile(wikiPath)
+		if err != nil {
+			continue
+		}
+
+		if !vault.HasRawFooterLink(content, rawPath) {
+			continue
+		}
+
+		url := vault.ParseFrontmatterURL(content)
+		if url == "" {
+			continue
+		}
+
+		if err := v.RewriteFooterLink(wikiPath, rawPath, url); err != nil {
+			slog.Error("hygiene: failed to rewrite footer link", "path", wikiPath, "error", err)
+		} else {
+			slog.Info("hygiene: rewrote broken raw footer link", "slug", slug)
+		}
+	}
+}
+
+// runPollCycleWithHygiene runs hygiene on every Nth poll cycle.
+func runPollCycleWithHygiene(cfg *config, db *store.Store, v *vault.Vault) {
+	pollCycleCount++
+	if cfg.hygieneInterval > 0 && pollCycleCount%cfg.hygieneInterval == 0 {
+		runHygiene(db, v)
+	}
+}
+
+// hygiene index entry (local, avoids import cycle with autolink.go's indexEntry)
+type hygieneIndexEntry struct {
+	title string
+	tags  []string
+}
+
+// parseAllIndexEntries parses all entries from index.md content into a map keyed by slug.
+func parseAllIndexEntries(content string) map[string]hygieneIndexEntry {
+	entries := make(map[string]hygieneIndexEntry)
+	for _, line := range strings.Split(content, "\n") {
+		// Parse: "- [[slug]] — Title [tag1, tag2]"
+		if !strings.HasPrefix(line, "- [[") {
+			continue
+		}
+		end := strings.Index(line, "]]")
+		if end < 4 {
+			continue
+		}
+		slug := line[4:end]
+
+		// Extract title: after "]] — " up to " [" (tags bracket)
+		rest := line[end+2:]
+		title := ""
+		tags := []string{}
+
+		dashIdx := strings.Index(rest, " — ")
+		if dashIdx >= 0 {
+			afterDash := rest[dashIdx+len(" — "):]
+			bracketIdx := strings.LastIndex(afterDash, " [")
+			if bracketIdx >= 0 {
+				title = afterDash[:bracketIdx]
+				// Extract tags from [tag1, tag2]
+				tagStr := afterDash[bracketIdx+2:]
+				tagStr = strings.TrimSuffix(tagStr, "]")
+				for _, t := range strings.Split(tagStr, ",") {
+					t = strings.TrimSpace(t)
+					if t != "" {
+						tags = append(tags, t)
+					}
+				}
+			} else {
+				title = afterDash
+			}
+		}
+
+		entries[slug] = hygieneIndexEntry{title: title, tags: tags}
+	}
+	return entries
+}
+
+// tagsEqual checks if two tag slices are equivalent (order-insensitive).
+func tagsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	aMap := make(map[string]bool, len(a))
+	for _, t := range a {
+		aMap[t] = true
+	}
+	for _, t := range b {
+		if !aMap[t] {
+			return false
+		}
+	}
+	return true
 }
