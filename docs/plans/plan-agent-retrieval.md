@@ -1,6 +1,6 @@
 # Plan: Agent-Based Retrieval via Hermes
 
-> Depends on: [plan-vault-hygiene.md](plan-vault-hygiene.md) (edges table + MCP write tools)
+> Depends on: edges table (delivered in vault-hygiene, already implemented)
 
 ## Problem
 
@@ -44,6 +44,7 @@ An AI agent with direct file access resolves all three: it reads files, follows 
 │  │  read any .md file        — direct content access  │ │
 │  │  ls / tree                — browse vault structure  │ │
 │  │  read index.md            — topic discovery        │ │
+│  │  read AGENTS.md           — vault rules + tools    │ │
 │  │  follow [[wikilinks]]     — manual graph traversal │ │
 │  └────────────────────────────────────────────────────┘ │
 │                                                         │
@@ -74,17 +75,19 @@ An AI agent with direct file access resolves all three: it reads files, follows 
 │  • Index.md consistency                                 │
 │  • Edge table sync on every mutation                    │
 │  • Path traversal protection                            │
+│  • AGENTS.md generation (auto-updated)                  │
 └──────────────────────┬──────────────────────────────────┘
                        │ filesystem
                        ▼
 ┌─────────────────────────────────────────────────────────┐
 │                  OBSIDIAN VAULT                          │
-│  wiki/     — LLM-enriched summaries (primary knowledge) │
-│  raw/      — original scraped content (immutable)       │
-│  notes/    — personal notes                             │
-│  index.md  — master catalog                             │
-│  soul.md   — user profile                               │
-│  inbox/    — pending URLs (pipeline input)               │
+│  wiki/      — LLM-enriched summaries (primary knowledge)│
+│  raw/       — original scraped content (immutable)      │
+│  notes/     — personal notes                            │
+│  index.md   — master catalog                            │
+│  soul.md    — user profile                              │
+│  AGENTS.md  — auto-generated agent instructions         │
+│  inbox/     — pending URLs (pipeline input)             │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -174,34 +177,31 @@ User: "What do I know about service mesh alternatives to Istio?"
 
 - Precise factual: "what is Raft?" — keyword search finds it immediately
 
-### Agent Rules (for AGENTS.md)
+### AGENTS.md — Auto-Generated Agent Instructions
 
-```markdown
-## Vault Access Rules
+LucidVault generates and maintains `AGENTS.md` in the vault root. This file instructs any agent (Hermes, Claude Code, etc.) on how to interact with the vault efficiently.
 
-- NEVER create, edit, or delete vault files directly
-- ALL writes go through MCP tools (add_bookmark, add_note, update_wiki, etc.)
-- You MAY read vault files directly OR use MCP read tools — pick whichever fits
+**Design: static template + dynamic sections.**
 
-## Retrieval Strategy
+- **Static sections** (hand-authored, version-controlled in `internal/agentsmd/template.md`):
+  - Vault Access Rules (read/write boundaries)
+  - Retrieval Strategy (search patterns, fallback order)
+  - Content Guidelines (raw/ size warnings, wiki preference)
+- **Dynamic sections** (generated at runtime):
+  - Available MCP Tools — introspected from registered tools with descriptions and parameters
+  - Vault Stats — page counts per section, edge count, tag frequency, last pipeline run
 
-- Start with vault_overview (MCP) for context priming if not in memory
-- Use direct grep for exact terms, error messages, specific phrases
-- Use search_index (MCP) for topic discovery (searches slugs + titles + tags)
-- Use expand_graph (MCP) for cluster discovery (multi-hop graph traversal)
-- Use related_notes (MCP) for bidirectional link navigation
-- Read wiki pages directly for full content
-- Fall back to notes/ and raw/ when wiki doesn't have enough detail
-- Follow [[wikilinks]] found in pages to discover connected knowledge
+**Generation behavior:**
 
-## Hygiene
+- Written to `{vaultPath}/AGENTS.md` on startup and each poll cycle
+- Idempotent — only writes if content changed (avoids unnecessary file churn for LiveSync)
+- Package: `internal/agentsmd/`
 
-- LucidVault auto-fixes broken edges and stale index entries on its poll cycle
-- Hermes handles what auto-fix can't: assess orphan pages, repair complex link issues
-- Read vault logs to find auto-fix actions, then review and act on remaining issues
-- Fix link issues via update_wiki (MCP)
-- Never auto-delete pages — always ask the user first
-```
+**Why LucidVault generates it (not hand-maintained):**
+
+- Tool surface stays in sync automatically as MCP tools are added/removed
+- Vault stats give agents instant orientation without needing `vault_overview` call
+- Single source of truth — no drift between what MCP server offers and what docs claim
 
 ---
 
@@ -240,24 +240,7 @@ Hermes:
 Total: 7 reads + 1 MCP call, ~10 seconds
 ```
 
-### Flow 3: Hygiene Enhancement
-
-LucidVault auto-fixes broken edges and stale index entries on its poll cycle.
-Hermes handles the cases auto-fix can't: orphan assessment, complex link repairs.
-
-```text
-Hermes (scheduled skill, e.g. weekly):
-  1. grep vault logs for "hygiene:" entries    → finds recent auto-fix actions
-  2. read orphan pages flagged in logs         → assess if still relevant
-  3. grep wiki/ for orphan's topics            → find pages that should link to it
-  4. update_wiki("related-page",               → MCP
-       "Related", "- [[orphan-page]] — connection found")
-  5. Report to user: "Re-connected 2 orphan pages, 1 needs your review"
-
-Total: 4 reads + 1 MCP call
-```
-
-### Flow 4: Save from Mobile
+### Flow 3: Save from Mobile
 
 ```text
 User (Telegram): "Save this article: https://example.com/good-article"
@@ -276,7 +259,7 @@ Total: 1 MCP call, <2 seconds
 ### Hermes writes files directly despite rules
 
 **Risk:** AGENTS.md says "never write directly" but Hermes has fs write capability.
-**Handling:** Mount vault read-only in Hermes workspace config if possible. If not, rely on instructions (Hermes is instruction-following). Hygiene audit catches format violations.
+**Handling:** Mount vault read-only in Hermes workspace config if possible. If not, rely on instructions (Hermes is instruction-following).
 
 ### MCP connection loss
 
@@ -303,34 +286,44 @@ Total: 1 MCP call, <2 seconds
 **Risk:** Hermes + Claude Code + OpenWebUI all query via MCP at once.
 **Handling:** MCP server is stateless per request. SQLite handles concurrent reads. Writes serialize via SQLite locking. No issue at expected concurrency (<5 simultaneous queries).
 
+### AGENTS.md conflicts with LiveSync
+
+**Risk:** LucidVault regenerates AGENTS.md while LiveSync is syncing.
+**Handling:** Only write when content changes (content-hash comparison). Writes go through `WithFileLock` for cross-process safety. LiveSync conflict resolution handles rare races (last-write-wins is fine for generated files).
+
 ---
 
 ## Implementation Order
 
 ### Phase 1: MCP Read Tool Enhancements (in LucidVault)
 
-> Requires: edges table from vault-hygiene plan Phase 1
-
 1. Implement `ExpandGraph` with recursive CTE in `store.Store`.
 2. Add `expand_graph` MCP tool.
-3. Modify `related_notes` to use bidirectional edge lookups from SQLite.
+3. Modify `related_notes` to use bidirectional edge lookups from SQLite (pass `*store.Store` to handler).
 4. Add `vault_overview` MCP tool.
 
-### Phase 2: Hermes Agent Setup (outside LucidVault codebase)
+### Phase 2: AGENTS.md Generation (in LucidVault)
 
-5. Install Hermes Agent on vault host.
-6. Configure workspace pointing at vault path.
-7. Connect LucidVault MCP server as MCP endpoint in Hermes config.
-8. Write `AGENTS.md` with retrieval + mutation rules.
-9. Connect Telegram + WhatsApp channels via Hermes gateway.
-10. Write initial `vault-query` skill as a starting point for Hermes to build on.
+5. Create `internal/agentsmd/` package.
+6. Write static template (`internal/agentsmd/template.md`) with vault access rules and retrieval strategy.
+7. Implement dynamic section generation: introspect registered MCP tools, query vault stats.
+8. Generate `AGENTS.md` on startup and each poll cycle (idempotent, content-hash check).
 
-### Phase 3: Validation
+### Phase 3: Hermes Agent Setup (outside LucidVault codebase)
 
-11. Test retrieval quality: run 20 representative queries, compare agent vs MCP-only results.
-12. Test mutation safety: verify all writes go through MCP, no direct file modifications.
-13. Test edge cases: MCP down, large files, concurrent queries.
-14. Let Hermes build skills over 2 weeks of real usage, review quality.
+9. Install Hermes Agent on vault host.
+10. Configure workspace pointing at vault path (read-only mount if possible).
+11. Connect LucidVault MCP server as MCP endpoint in Hermes config.
+12. Hermes reads `AGENTS.md` from vault root for instructions.
+13. Connect Telegram + WhatsApp channels via Hermes gateway.
+14. Write initial `vault-query` skill as a starting point for Hermes to build on.
+
+### Phase 4: Validation
+
+15. Test retrieval quality: run 20 representative queries, compare agent vs MCP-only results.
+16. Test mutation safety: verify all writes go through MCP, no direct file modifications.
+17. Test edge cases: MCP down, large files, concurrent queries.
+18. Let Hermes build skills over 2 weeks of real usage, review quality.
 
 ---
 
@@ -341,7 +334,9 @@ Total: 1 MCP call, <2 seconds
 | Retrieval agent | Hermes Agent | Self-improving, persistent memory, MCP support, 16+ chat integrations |
 | Agent file access | Read: direct, Write: MCP only | Best retrieval quality + vault structure safety |
 | Vector/semantic search | Deferred | Graph + keyword + agent exploration covers 80%+ of queries. Add embeddings later if retrieval gaps emerge. |
-| LucidVault code changes | MCP tools only | Agent is external. LucidVault stays minimal — pipeline + MCP. |
+| LucidVault code changes | MCP tools + AGENTS.md generation | Agent is external. LucidVault stays minimal — pipeline + MCP + agent instructions. |
+| AGENTS.md ownership | LucidVault generates it | Tool surface and vault stats stay in sync automatically. No manual maintenance drift. |
+| AGENTS.md structure | Static template + dynamic sections | Rules rarely change (hand-authored). Tool list + stats change with code (auto-generated). |
 
 ## Research Sources
 
