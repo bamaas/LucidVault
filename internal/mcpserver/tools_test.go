@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
+	"lucidvault/internal/store"
 	"lucidvault/internal/vault"
 )
 
@@ -875,5 +877,60 @@ func TestHandleAddBookmark_overwrite(t *testing.T) {
 	}
 	if !strings.Contains(body, "https://example.com/v2") {
 		t.Errorf("expected new URL, got:\n%s", body)
+	}
+}
+
+// --- HandleExpandGraph ---
+
+func newTestStoreForMCP(t *testing.T) *store.Store {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+func TestHandleExpandGraph(t *testing.T) {
+	db := newTestStoreForMCP(t)
+
+	// Build a small graph: a->b->c, b->d
+	edges := []store.Edge{
+		{FromSlug: "a", ToSlug: "b", Type: "wikilink"},
+		{FromSlug: "b", ToSlug: "c", Type: "wikilink"},
+		{FromSlug: "b", ToSlug: "d", Type: "wikilink"},
+	}
+	if err := db.RebuildEdges("wikilink", edges); err != nil {
+		t.Fatalf("RebuildEdges: %v", err)
+	}
+
+	result, err := HandleExpandGraph(db, []string{"a"}, 2)
+	if err != nil {
+		t.Fatalf("HandleExpandGraph: %v", err)
+	}
+	sort.Strings(result)
+	expected := []string{"b", "c", "d"}
+	if len(result) != len(expected) {
+		t.Fatalf("HandleExpandGraph = %v, want %v", result, expected)
+	}
+	for i := range expected {
+		if result[i] != expected[i] {
+			t.Errorf("result[%d] = %q, want %q", i, result[i], expected[i])
+		}
+	}
+}
+
+func TestHandleExpandGraph_DefaultHops(t *testing.T) {
+	db := newTestStoreForMCP(t)
+
+	// hops=0 should default to 2
+	result, err := HandleExpandGraph(db, []string{"nonexistent"}, 0)
+	if err != nil {
+		t.Fatalf("HandleExpandGraph: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty for nonexistent seed, got %v", result)
 	}
 }

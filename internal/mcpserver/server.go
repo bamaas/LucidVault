@@ -286,6 +286,34 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store) {
 			return mcp.NewToolResultText(fmt.Sprintf("Section %q of wiki/%s.md updated successfully.", section, slug)), nil
 		})
 
+		// expand_graph — Graph traversal (requires store)
+		s.AddTool(mcp.NewTool("expand_graph",
+			mcp.WithDescription("Expand a set of seed slugs by traversing wiki-link edges up to N hops. Returns all connected slugs within the hop radius. Use this to discover clusters of related content."),
+			mcp.WithString("seeds",
+				mcp.Required(),
+				mcp.Description("Comma-separated list of slugs to expand from"),
+			),
+			mcp.WithNumber("hops",
+				mcp.Description("Max traversal depth (1-5, default 2)"),
+			),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			seedsRaw := req.GetString("seeds", "")
+			if seedsRaw == "" {
+				return mcp.NewToolResultError("seeds is required"), nil
+			}
+			seeds := parseTags(seedsRaw) // reuse comma-splitting logic
+			hops := int(req.GetFloat("hops", 2))
+			result, err := HandleExpandGraph(db, seeds, hops)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			data, err := json.Marshal(result)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("marshalling result: %v", err)), nil
+			}
+			return mcp.NewToolResultText(string(data)), nil
+		})
+
 		// delete_page — Write (requires store)
 		s.AddTool(mcp.NewTool("delete_page",
 			mcp.WithDescription("Delete a vault page and all its artifacts (wiki file, raw file, index entry, edges, DB record). Returns a list of pages that still reference the deleted page (dangling references)."),

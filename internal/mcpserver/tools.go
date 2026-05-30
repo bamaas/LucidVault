@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"lucidvault/internal/store"
 	"lucidvault/internal/vault"
 )
 
@@ -339,4 +340,13 @@ func HandleAddNote(v *vault.Vault, title, content string, tags []string) (string
 	}
 
 	return filename, nil
+}
+
+// HandleExpandGraph expands seed slugs by traversing wiki-link edges up to N hops.
+// Returns deduplicated slugs reachable from seeds, excluding the seeds themselves.
+func HandleExpandGraph(db *store.Store, seeds []string, hops int) ([]string, error) {
+	if hops < 1 {
+		hops = 2
+	}
+	return db.ExpandGraph(seeds, hops)
 }

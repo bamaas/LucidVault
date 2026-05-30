@@ -861,3 +861,149 @@ func TestDeleteEdgesInvolving_NonExistent(t *testing.T) {
 		t.Fatalf("DeleteEdgesInvolving (non-existent): %v", err)
 	}
 }
+
+// --- ExpandGraph ---
+
+// seedGraph inserts edges to form the graph:
+//
+//	A -> B -> C -> D
+//	     B -> E
+//	     F -> A (cycle back)
+func seedGraph(t *testing.T, s *Store) {
+	t.Helper()
+	edges := []Edge{
+		{FromSlug: "a", ToSlug: "b", Type: "wikilink"},
+		{FromSlug: "b", ToSlug: "c", Type: "wikilink"},
+		{FromSlug: "c", ToSlug: "d", Type: "wikilink"},
+		{FromSlug: "b", ToSlug: "e", Type: "wikilink"},
+		{FromSlug: "f", ToSlug: "a", Type: "wikilink"},
+	}
+	if err := s.RebuildEdges("wikilink", edges); err != nil {
+		t.Fatalf("RebuildEdges: %v", err)
+	}
+}
+
+func TestExpandGraph_EmptySeeds(t *testing.T) {
+	s := newTestStore(t)
+	seedGraph(t, s)
+
+	result, err := s.ExpandGraph(nil, 2)
+	if err != nil {
+		t.Fatalf("ExpandGraph: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty result for empty seeds, got %v", result)
+	}
+}
+
+func TestExpandGraph_SingleSeed_OneHop(t *testing.T) {
+	s := newTestStore(t)
+	seedGraph(t, s)
+
+	// From "a": outbound to "b", inbound from "f"
+	result, err := s.ExpandGraph([]string{"a"}, 1)
+	if err != nil {
+		t.Fatalf("ExpandGraph: %v", err)
+	}
+	sort.Strings(result)
+	expected := []string{"b", "f"}
+	if fmt.Sprintf("%v", result) != fmt.Sprintf("%v", expected) {
+		t.Errorf("ExpandGraph([a], 1) = %v, want %v", result, expected)
+	}
+}
+
+func TestExpandGraph_SingleSeed_TwoHops(t *testing.T) {
+	s := newTestStore(t)
+	seedGraph(t, s)
+
+	// From "a": hop1 = {b, f}, hop2 = {c, e} (from b outbound)
+	result, err := s.ExpandGraph([]string{"a"}, 2)
+	if err != nil {
+		t.Fatalf("ExpandGraph: %v", err)
+	}
+	sort.Strings(result)
+	expected := []string{"b", "c", "e", "f"}
+	if fmt.Sprintf("%v", result) != fmt.Sprintf("%v", expected) {
+		t.Errorf("ExpandGraph([a], 2) = %v, want %v", result, expected)
+	}
+}
+
+func TestExpandGraph_MultipleSeeds(t *testing.T) {
+	s := newTestStore(t)
+	seedGraph(t, s)
+
+	// From "d" (1 hop): inbound from "c"
+	// From "e" (1 hop): inbound from "b"
+	// Union: {b, c}
+	result, err := s.ExpandGraph([]string{"d", "e"}, 1)
+	if err != nil {
+		t.Fatalf("ExpandGraph: %v", err)
+	}
+	sort.Strings(result)
+	expected := []string{"b", "c"}
+	if fmt.Sprintf("%v", result) != fmt.Sprintf("%v", expected) {
+		t.Errorf("ExpandGraph([d,e], 1) = %v, want %v", result, expected)
+	}
+}
+
+func TestExpandGraph_MaxHopsCapped(t *testing.T) {
+	s := newTestStore(t)
+	seedGraph(t, s)
+
+	// Passing maxHops=100 should be capped at 5 internally.
+	// With our small graph, result should be the same as hops=5.
+	result100, err := s.ExpandGraph([]string{"a"}, 100)
+	if err != nil {
+		t.Fatalf("ExpandGraph (100): %v", err)
+	}
+	result5, err := s.ExpandGraph([]string{"a"}, 5)
+	if err != nil {
+		t.Fatalf("ExpandGraph (5): %v", err)
+	}
+	sort.Strings(result100)
+	sort.Strings(result5)
+	if fmt.Sprintf("%v", result100) != fmt.Sprintf("%v", result5) {
+		t.Errorf("maxHops cap: hops=100 gave %v, hops=5 gave %v", result100, result5)
+	}
+}
+
+func TestExpandGraph_CycleDoesNotHang(t *testing.T) {
+	s := newTestStore(t)
+	seedGraph(t, s)
+
+	// "f" -> "a" -> "b" -> ... and "f" <- "a" forms a cycle.
+	// Should not hang or produce duplicates.
+	result, err := s.ExpandGraph([]string{"f"}, 3)
+	if err != nil {
+		t.Fatalf("ExpandGraph: %v", err)
+	}
+	// Check no duplicates
+	seen := map[string]bool{}
+	for _, slug := range result {
+		if seen[slug] {
+			t.Errorf("duplicate slug in result: %q", slug)
+		}
+		seen[slug] = true
+	}
+	// "f" itself should not appear
+	for _, slug := range result {
+		if slug == "f" {
+			t.Error("seed 'f' should not appear in results")
+		}
+	}
+}
+
+func TestExpandGraph_SeedsExcluded(t *testing.T) {
+	s := newTestStore(t)
+	seedGraph(t, s)
+
+	result, err := s.ExpandGraph([]string{"a", "b"}, 2)
+	if err != nil {
+		t.Fatalf("ExpandGraph: %v", err)
+	}
+	for _, slug := range result {
+		if slug == "a" || slug == "b" {
+			t.Errorf("seed %q should be excluded from results", slug)
+		}
+	}
+}
