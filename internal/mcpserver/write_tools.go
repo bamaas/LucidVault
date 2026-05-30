@@ -21,7 +21,6 @@ type DeleteResult struct {
 // File mutations are wrapped in WithFileLock (D4).
 func HandleUpdateWiki(v *vault.Vault, db *store.Store, slug, section, content string) error {
 	// Read, parse, and write inside the file lock.
-	var newContent string
 	err := db.WithFileLock(func() error {
 		relPath := "wiki/" + slug + ".md"
 		existing, err := v.ReadFile(relPath)
@@ -58,7 +57,7 @@ func HandleUpdateWiki(v *vault.Vault, db *store.Store, slug, section, content st
 			b.WriteString(s.raw())
 		}
 
-		newContent = b.String()
+		newContent := b.String()
 		if _, err := v.WriteWiki(slug+".md", newContent); err != nil {
 			return fmt.Errorf("writing wiki page %q: %w", slug, err)
 		}
@@ -196,8 +195,9 @@ func parseSections(body string) []sectionBlock {
 
 		// Check for ## heading (not inside code block).
 		if strings.HasPrefix(line, "## ") {
-			// Save current section.
-			current.content = strings.Join(contentLines, "\n")
+			// Save current section. Add trailing "\n" because Split consumed
+			// the line separator between the last content line and this heading.
+			current.content = strings.Join(contentLines, "\n") + "\n"
 			sections = append(sections, current)
 
 			// Start new section.

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"lucidvault/internal/store"
 	"lucidvault/internal/vault"
@@ -220,6 +221,19 @@ func TestHandleUpdateWiki_UpdatesLastUpdated(t *testing.T) {
 
 	if !strings.Contains(s, "last_updated:") {
 		t.Errorf("expected last_updated in frontmatter, got:\n%s", s)
+	}
+	// Verify the date is in YYYY-MM-DD format and is today's date.
+	today := time.Now().Format("2006-01-02")
+	if !strings.Contains(s, "last_updated: "+today) {
+		t.Errorf("expected last_updated to be %q, got:\n%s", today, s)
+	}
+	// Verify last_updated is inside frontmatter (between --- delimiters).
+	parts := strings.SplitN(s, "---", 3)
+	if len(parts) < 3 {
+		t.Fatalf("expected frontmatter delimiters, got:\n%s", s)
+	}
+	if !strings.Contains(parts[1], "last_updated: "+today) {
+		t.Errorf("last_updated should be inside frontmatter, got frontmatter:\n%s", parts[1])
 	}
 }
 
@@ -625,5 +639,204 @@ Last updated: 2024-01-15
 	}
 	if result.Slug != "lock-test" {
 		t.Errorf("result slug = %q, want %q", result.Slug, "lock-test")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper function unit tests
+// ---------------------------------------------------------------------------
+
+func TestParseSections_BasicSplit(t *testing.T) {
+	body := `# Title
+
+## Summary
+Some summary.
+
+## Key Takeaways
+- Point one
+
+## Related
+- [[link]]
+`
+	sections := parseSections(body)
+	if len(sections) != 4 { // preamble + 3 sections
+		t.Fatalf("expected 4 sections, got %d", len(sections))
+	}
+	if sections[0].heading != "" {
+		t.Errorf("preamble should have empty heading, got %q", sections[0].heading)
+	}
+	if sections[1].heading != "Summary" {
+		t.Errorf("section 1 heading = %q, want %q", sections[1].heading, "Summary")
+	}
+	if sections[2].heading != "Key Takeaways" {
+		t.Errorf("section 2 heading = %q, want %q", sections[2].heading, "Key Takeaways")
+	}
+	if sections[3].heading != "Related" {
+		t.Errorf("section 3 heading = %q, want %q", sections[3].heading, "Related")
+	}
+}
+
+func TestParseSections_CodeBlockPreservesHeadings(t *testing.T) {
+	body := "## Real\nBefore code.\n```\n## Fake Heading\n```\n## Also Real\nAfter code.\n"
+	sections := parseSections(body)
+	// preamble (empty) + Real + Also Real = 3
+	headings := make([]string, len(sections))
+	for i, s := range sections {
+		headings[i] = s.heading
+	}
+	if len(sections) != 3 {
+		t.Fatalf("expected 3 sections, got %d: %v", len(sections), headings)
+	}
+	if sections[1].heading != "Real" {
+		t.Errorf("section 1 heading = %q, want %q", sections[1].heading, "Real")
+	}
+	if !strings.Contains(sections[1].content, "## Fake Heading") {
+		t.Errorf("code block heading should be in Real section content, got:\n%s", sections[1].content)
+	}
+	if sections[2].heading != "Also Real" {
+		t.Errorf("section 2 heading = %q, want %q", sections[2].heading, "Also Real")
+	}
+}
+
+func TestParseSections_RoundTrip(t *testing.T) {
+	// parseSections absorbs trailing blank lines before ## headings into the
+	// preceding section's content. This is by design — the heading prefix
+	// ("## Heading\n") does not include the leading blank line. So a true
+	// byte-for-byte round trip is only guaranteed when there are no blank
+	// lines immediately before ## headings. We test that case here.
+	body := "Preamble text.\n## Summary\nContent A.\n## Notes\nContent B.\n"
+	sections := parseSections(body)
+	var rebuilt strings.Builder
+	for _, s := range sections {
+		rebuilt.WriteString(s.raw())
+	}
+	if rebuilt.String() != body {
+		t.Errorf("round-trip failed.\nInput:\n%q\nOutput:\n%q", body, rebuilt.String())
+	}
+
+	// Also verify that a round trip with blank lines at least preserves all content
+	// (blank lines end up as trailing content of the preceding section).
+	bodyWithBlanks := "Preamble.\n\n## A\nContent A.\n\n## B\nContent B.\n"
+	sections2 := parseSections(bodyWithBlanks)
+	var rebuilt2 strings.Builder
+	for _, s := range sections2 {
+		rebuilt2.WriteString(s.raw())
+	}
+	if rebuilt2.String() != bodyWithBlanks {
+		// This is expected to match because blank lines are part of the
+		// content of the preceding section.
+		t.Errorf("round-trip with blanks failed.\nInput:\n%q\nOutput:\n%q", bodyWithBlanks, rebuilt2.String())
+	}
+}
+
+func TestSplitFrontmatter_WithFrontmatter(t *testing.T) {
+	content := "---\ntitle: Test\ntags: []\n---\n\n# Body\n"
+	fm, body := splitFrontmatter(content)
+	if !strings.HasPrefix(fm, "---") {
+		t.Errorf("frontmatter should start with ---, got:\n%s", fm)
+	}
+	if !strings.HasSuffix(fm, "\n") {
+		t.Errorf("frontmatter should end with newline, got:\n%q", fm)
+	}
+	if !strings.Contains(fm, "title: Test") {
+		t.Errorf("frontmatter should contain title, got:\n%s", fm)
+	}
+	if !strings.HasPrefix(body, "\n# Body") {
+		t.Errorf("body should start with the content after frontmatter, got:\n%q", body)
+	}
+}
+
+func TestSplitFrontmatter_NoFrontmatter(t *testing.T) {
+	content := "# No Frontmatter\nJust body.\n"
+	fm, body := splitFrontmatter(content)
+	if fm != "" {
+		t.Errorf("expected empty frontmatter, got:\n%s", fm)
+	}
+	if body != content {
+		t.Errorf("body should be entire content, got:\n%s", body)
+	}
+}
+
+func TestUpsertFrontmatterField_AddsNew(t *testing.T) {
+	fm := "---\ntitle: Test\ntags: []\n---\n"
+	result := upsertFrontmatterField(fm, "last_updated", "2024-06-01")
+	if !strings.Contains(result, "last_updated: 2024-06-01") {
+		t.Errorf("expected last_updated field, got:\n%s", result)
+	}
+	// Should still have closing ---
+	if !strings.Contains(result, "---") {
+		t.Errorf("should preserve frontmatter delimiters, got:\n%s", result)
+	}
+}
+
+func TestUpsertFrontmatterField_UpdatesExisting(t *testing.T) {
+	fm := "---\ntitle: Test\nlast_updated: 2024-01-01\ntags: []\n---\n"
+	result := upsertFrontmatterField(fm, "last_updated", "2024-06-01")
+	if !strings.Contains(result, "last_updated: 2024-06-01") {
+		t.Errorf("expected updated last_updated, got:\n%s", result)
+	}
+	if strings.Contains(result, "2024-01-01") {
+		t.Errorf("old date should be replaced, got:\n%s", result)
+	}
+}
+
+func TestHandleUpdateWiki_PreservesSectionHeading(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	if err := os.WriteFile(filepath.Join(dir, "wiki/test-page.md"), []byte(wikiPageWithSections), 0o644); err != nil {
+		t.Fatalf("writing wiki page: %v", err)
+	}
+
+	err := HandleUpdateWiki(v, db, "test-page", "Summary", "New content.")
+	if err != nil {
+		t.Fatalf("HandleUpdateWiki: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "wiki/test-page.md"))
+	if err != nil {
+		t.Fatalf("reading wiki page: %v", err)
+	}
+	s := string(content)
+
+	// The ## Summary heading must still be present.
+	if !strings.Contains(s, "## Summary") {
+		t.Errorf("## Summary heading should be preserved, got:\n%s", s)
+	}
+	// Frontmatter should be preserved.
+	if !strings.Contains(s, "title: \"Test Page\"") {
+		t.Errorf("frontmatter title should be preserved, got:\n%s", s)
+	}
+	if !strings.Contains(s, "source: \"https://example.com/test\"") {
+		t.Errorf("frontmatter source should be preserved, got:\n%s", s)
+	}
+}
+
+func TestHandleUpdateWiki_NonRelatedDoesNotSyncEdges(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+
+	page := "---\ntitle: Edge Test\ntags: []\n---\n\n# Edge Test\n\n## Summary\nOld.\n\n## Related\n- [[existing-link]] — Existing\n"
+	if err := os.WriteFile(filepath.Join(dir, "wiki/edge-test.md"), []byte(page), 0o644); err != nil {
+		t.Fatalf("writing wiki page: %v", err)
+	}
+
+	// Insert initial edges.
+	initialEdges := []store.Edge{
+		{FromSlug: "edge-test", ToSlug: "existing-link", Type: "wikilink"},
+	}
+	if err := db.UpsertEdgesFrom("edge-test", "wikilink", initialEdges); err != nil {
+		t.Fatalf("inserting initial edges: %v", err)
+	}
+
+	// Update Summary (NOT Related) — edges should remain unchanged.
+	err := HandleUpdateWiki(v, db, "edge-test", "Summary", "Updated summary.")
+	if err != nil {
+		t.Fatalf("HandleUpdateWiki: %v", err)
+	}
+
+	edges, err := db.GetOutboundEdges("edge-test")
+	if err != nil {
+		t.Fatalf("getting outbound edges: %v", err)
+	}
+	if len(edges) != 1 || edges[0].ToSlug != "existing-link" {
+		t.Errorf("edges should be unchanged after non-Related update, got: %v", edges)
 	}
 }
