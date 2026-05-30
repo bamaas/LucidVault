@@ -36,7 +36,7 @@ internal/raindrop/       — Raindrop API client and inbox sync (optional feeder
 internal/scraper/        — Scraper (Jina Reader + Supadata YouTube transcripts)
 internal/enrich/         — Ollama Cloud enrichment
 internal/notes/          — Notes scanner, frontmatter parser
-internal/mcpserver/      — MCP server (retrieval + inbox write tools for AI agents)
+internal/mcpserver/      — MCP server (retrieval, inbox write, vault mutation tools for AI agents)
 internal/store/          — SQLite state (modernc.org/sqlite, pure Go)
 internal/vault/          — Vault file writer, slug/URL helpers
 CONTEXT.md                — Domain glossary (ubiquitous language, no implementation details)

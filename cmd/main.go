@@ -888,7 +888,8 @@ func runMCP(args []string) {
 	if vaultPath == "" {
 		vaultPath = "/vault"
 	}
-	mcpserver.Run(vaultPath, *httpAddr)
+	dbPath := filepath.Join(vaultPath, ".lucidvault.db")
+	mcpserver.Run(vaultPath, *httpAddr, dbPath)
 }
 
 // runHygiene orchestrates all hygiene steps.

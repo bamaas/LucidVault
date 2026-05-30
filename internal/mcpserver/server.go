@@ -10,13 +10,25 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"lucidvault/internal/store"
 	"lucidvault/internal/vault"
 )
 
 // Run starts the MCP server. If httpAddr is non-empty, it serves Streamable HTTP
 // on that address; otherwise it uses stdio transport.
-func Run(vaultPath, httpAddr string) {
+// dbPath is the path to the SQLite database for write operations (edges, bookmarks, notes).
+func Run(vaultPath, httpAddr, dbPath string) {
 	v := vault.New(vaultPath)
+
+	var db *store.Store
+	if dbPath != "" {
+		var err error
+		db, err = store.New(dbPath)
+		if err != nil {
+			log.Fatalf("opening database for MCP server: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+	}
 
 	s := server.NewMCPServer(
 		"lucidvault",
@@ -24,7 +36,7 @@ func Run(vaultPath, httpAddr string) {
 		server.WithToolCapabilities(false),
 	)
 
-	registerTools(s, v)
+	registerTools(s, v, db)
 
 	if httpAddr != "" {
 		httpServer := server.NewStreamableHTTPServer(s)
@@ -39,7 +51,7 @@ func Run(vaultPath, httpAddr string) {
 	}
 }
 
-func registerTools(s *server.MCPServer, v *vault.Vault) {
+func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store) {
 	// get_soul — Always
 	s.AddTool(mcp.NewTool("get_soul",
 		mcp.WithDescription("Read the user's profile (soul.md). Contains identity, interests, and preferences. Read this first to understand who you're helping."),
@@ -238,6 +250,65 @@ func registerTools(s *server.MCPServer, v *vault.Vault) {
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Note saved to notes/%s", filename)), nil
 	})
+
+	// update_wiki — Write (requires store)
+	if db != nil {
+		s.AddTool(mcp.NewTool("update_wiki",
+			mcp.WithDescription("Update a section of a wiki page. Replaces the content under a ## heading while preserving frontmatter and other sections. If the Related section is updated, edges are synced automatically."),
+			mcp.WithString("slug",
+				mcp.Required(),
+				mcp.Description("Wiki page slug (e.g. kubernetes-networking)"),
+			),
+			mcp.WithString("section",
+				mcp.Required(),
+				mcp.Description("Section heading to update (e.g. Summary, Key Takeaways, Related)"),
+			),
+			mcp.WithString("content",
+				mcp.Required(),
+				mcp.Description("New markdown content for the section"),
+			),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			slug := req.GetString("slug", "")
+			if slug == "" {
+				return mcp.NewToolResultError("slug is required"), nil
+			}
+			section := req.GetString("section", "")
+			if section == "" {
+				return mcp.NewToolResultError("section is required"), nil
+			}
+			content := req.GetString("content", "")
+			if content == "" {
+				return mcp.NewToolResultError("content is required"), nil
+			}
+			if err := HandleUpdateWiki(v, db, slug, section, content); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Section %q of wiki/%s.md updated successfully.", section, slug)), nil
+		})
+
+		// delete_page — Write (requires store)
+		s.AddTool(mcp.NewTool("delete_page",
+			mcp.WithDescription("Delete a vault page and all its artifacts (wiki file, raw file, index entry, edges, DB record). Returns a list of pages that still reference the deleted page (dangling references)."),
+			mcp.WithString("slug",
+				mcp.Required(),
+				mcp.Description("Wiki page slug to delete (e.g. kubernetes-networking or notes/my-note)"),
+			),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			slug := req.GetString("slug", "")
+			if slug == "" {
+				return mcp.NewToolResultError("slug is required"), nil
+			}
+			result, err := HandleDeletePage(v, db, slug)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			data, err := json.Marshal(result)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("marshalling result: %v", err)), nil
+			}
+			return mcp.NewToolResultText(string(data)), nil
+		})
+	}
 }
 
 // parseTags splits a comma-separated tag string into a slice.
