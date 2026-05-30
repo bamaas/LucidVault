@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -136,6 +137,16 @@ url: https://example.com/unquoted
 # Content`,
 			want: "https://example.com/unquoted",
 		},
+		{
+			name: "single-quoted url",
+			content: `---
+title: "Test"
+url: 'https://example.com/single-quoted'
+---
+
+# Content`,
+			want: "https://example.com/single-quoted",
+		},
 	}
 
 	for _, tt := range tests {
@@ -251,7 +262,7 @@ Content here.
 	}
 
 	// Should contain URL instead
-	if !containsString(result, "https://example.com/article") {
+	if !strings.Contains(result, "https://example.com/article") {
 		t.Error("expected URL to be in footer")
 	}
 }
@@ -282,15 +293,4 @@ func TestRewriteFooterLink_NoMatch(t *testing.T) {
 	}
 }
 
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && stringContains(s, substr))
-}
 
-func stringContains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}

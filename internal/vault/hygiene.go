@@ -69,7 +69,7 @@ func ParseFrontmatterURL(content string) string {
 func extractFrontmatterValue(raw string) string {
 	v := strings.TrimSpace(raw)
 	// Remove surrounding quotes
-	if len(v) >= 2 && (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
+	if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
 		v = v[1 : len(v)-1]
 	}
 	return v

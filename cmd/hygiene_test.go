@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"lucidvault/internal/store"
@@ -68,6 +69,15 @@ func TestRunHygiene_DeletesBrokenEdges(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Precondition: verify edge exists before hygiene
+	preCount, err := db.EdgeCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preCount != 1 {
+		t.Fatalf("precondition failed: expected 1 edge before hygiene, got %d", preCount)
+	}
+
 	runHygiene(db, v)
 
 	// Broken edge should be deleted
@@ -90,10 +100,16 @@ func TestSyncIndex_RemovesStaleEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Precondition: verify entry exists before sync
+	preContent, _ := v.ReadIndex()
+	if !strings.Contains(preContent, "[[deleted-page]]") {
+		t.Fatal("precondition failed: stale entry not found in index before sync")
+	}
+
 	syncIndex(v)
 
 	indexContent, _ := v.ReadIndex()
-	if containsStr(indexContent, "[[deleted-page]]") {
+	if strings.Contains(indexContent, "[[deleted-page]]") {
 		t.Error("expected stale index entry to be removed")
 	}
 }
@@ -118,10 +134,10 @@ tags:
 	syncIndex(v)
 
 	indexContent, _ := v.ReadIndex()
-	if !containsStr(indexContent, "[[unlisted-page]]") {
+	if !strings.Contains(indexContent, "[[unlisted-page]]") {
 		t.Error("expected missing wiki file to be added to index")
 	}
-	if !containsStr(indexContent, "golang") {
+	if !strings.Contains(indexContent, "golang") {
 		t.Error("expected tags from frontmatter in index entry")
 	}
 }
@@ -152,14 +168,14 @@ tags:
 
 	indexContent, _ := v.ReadIndex()
 	// Should have updated tags
-	if !containsStr(indexContent, "golang") {
+	if !strings.Contains(indexContent, "golang") {
 		t.Error("expected synced tags to include 'golang'")
 	}
-	if containsStr(indexContent, "old-tag") {
+	if strings.Contains(indexContent, "old-tag") {
 		t.Error("expected old-tag to be replaced")
 	}
 	// Should have updated title
-	if !containsStr(indexContent, "Drifted Page") {
+	if !strings.Contains(indexContent, "Drifted Page") {
 		t.Error("expected title to be synced from frontmatter")
 	}
 }
@@ -265,10 +281,6 @@ func TestRunHygiene_EmptyVaultIsNoop(t *testing.T) {
 // --- Hygiene interval config ---
 
 func TestLoadConfig_HygieneInterval(t *testing.T) {
-	// Save and restore env
-	orig := os.Getenv("HYGIENE_INTERVAL")
-	defer func() { _ = os.Setenv("HYGIENE_INTERVAL", orig) }()
-
 	// Set required vars
 	t.Setenv("OLLAMA_API_KEY", "test")
 	t.Setenv("VAULT_PATH", "/tmp/test")
@@ -312,7 +324,7 @@ func TestSyncIndex_FallsBackToSlugTitle(t *testing.T) {
 	syncIndex(v)
 
 	indexContent, _ := v.ReadIndex()
-	if !containsStr(indexContent, "[[no-frontmatter]]") {
+	if !strings.Contains(indexContent, "[[no-frontmatter]]") {
 		t.Error("expected page without frontmatter to be added to index")
 	}
 }
@@ -350,15 +362,4 @@ func TestRunPollCycle_RunsHygieneAtInterval(t *testing.T) {
 	}
 }
 
-func containsStr(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && findSubstr(s, substr)
-}
 
-func findSubstr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
