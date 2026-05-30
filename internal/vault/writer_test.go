@@ -285,6 +285,89 @@ func TestScanWikiDir_NoWikiDir(t *testing.T) {
 	}
 }
 
+func TestScanNotesDir_Empty(t *testing.T) {
+	dir := t.TempDir()
+	v := New(dir)
+	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0o755); err != nil {
+		t.Fatalf("creating notes dir: %v", err)
+	}
+
+	paths, err := v.ScanNotesDir()
+	if err != nil {
+		t.Fatalf("ScanNotesDir: %v", err)
+	}
+	if len(paths) != 0 {
+		t.Errorf("expected 0 paths, got %d", len(paths))
+	}
+}
+
+func TestScanNotesDir_FindsFiles(t *testing.T) {
+	dir := t.TempDir()
+	v := New(dir)
+
+	notesDir := filepath.Join(dir, "notes")
+	subDir := filepath.Join(notesDir, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .md files at different depths.
+	for _, f := range []string{"alpha.md", "beta.md"} {
+		if err := os.WriteFile(filepath.Join(notesDir, f), []byte("# "+f), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "gamma.md"), []byte("# gamma"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-md file should be ignored.
+	if err := os.WriteFile(filepath.Join(notesDir, "readme.txt"), []byte("ignore"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, err := v.ScanNotesDir()
+	if err != nil {
+		t.Fatalf("ScanNotesDir: %v", err)
+	}
+
+	if len(paths) != 3 {
+		t.Fatalf("expected 3 paths, got %d: %v", len(paths), paths)
+	}
+
+	expected := map[string]bool{
+		"notes/alpha.md":     false,
+		"notes/beta.md":      false,
+		"notes/sub/gamma.md": false,
+	}
+	for _, p := range paths {
+		if _, ok := expected[p]; !ok {
+			t.Errorf("unexpected path: %s", p)
+		} else {
+			expected[p] = true
+		}
+	}
+	for p, found := range expected {
+		if !found {
+			t.Errorf("missing expected path: %s", p)
+		}
+	}
+}
+
+func TestScanNotesDir_NoNotesDir(t *testing.T) {
+	dir := t.TempDir()
+	// Don't create notes/ directory.
+	v := New(dir)
+
+	paths, err := v.ScanNotesDir()
+	if err != nil {
+		t.Fatalf("ScanNotesDir: %v", err)
+	}
+	if len(paths) != 0 {
+		t.Errorf("expected 0 paths for missing notes dir, got %d", len(paths))
+	}
+}
+
 func TestFileExists_WhitespaceOnly(t *testing.T) {
 	dir := t.TempDir()
 	v := New(dir)
