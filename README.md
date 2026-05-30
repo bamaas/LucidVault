@@ -16,6 +16,7 @@ LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.m
 - **Enrich** — LLM (Ollama Cloud, free) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** — Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **MCP server** — Built-in MCP server exposes the vault as structured retrieval primitives for any AI client (Claude Code, Cursor, Windsurf, OpenClaw). Supports stdio and Streamable HTTP transports
+- **AGENTS.md** — Auto-generated vault instruction file with access rules, retrieval strategy, available MCP tools, and live vault statistics. Updated on startup and each poll cycle
 - **Resilient** — Falls back to basic metadata when scraping fails (paywalled sites, blocked content)
 - **Notes indexing** — Personal notes in `notes/` are automatically scanned and get a wiki copy in `wiki/` with tags. Notes without tags are auto-tagged via the LLM; notes with existing tags keep them as-is. The `index.md` points to the wiki copy for consistent retrieval
 - **Re-enrich** — Changed your enrichment prompt or model? Run with `--re-enrich` to re-process all bookmarks using existing raw content

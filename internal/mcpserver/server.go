@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"lucidvault/internal/agentsmd"
 	"lucidvault/internal/store"
 	"lucidvault/internal/vault"
 )
@@ -351,6 +352,106 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store) {
 			}
 			return mcp.NewToolResultText(string(data)), nil
 		})
+	}
+}
+
+// RegisteredTools returns metadata for all registered MCP tools.
+// This is a static list matching the tools defined in registerTools.
+func RegisteredTools() []agentsmd.ToolInfo {
+	return []agentsmd.ToolInfo{
+		{
+			Name:        "get_soul",
+			Description: "Read the user's profile (soul.md). Contains identity, interests, and preferences.",
+		},
+		{
+			Name:        "search_index",
+			Description: "Search the knowledge base index for topics, titles, and tags.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "query", Description: "Search keywords", Required: true},
+			},
+		},
+		{
+			Name:        "read_wiki",
+			Description: "Read a curated wiki page (LLM-enriched summary with key takeaways, tags, and links).",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "slug", Description: "Wiki page slug (from search_index results)", Required: true},
+			},
+		},
+		{
+			Name:        "grep_vault",
+			Description: "Search for exact terms across the vault. Scoped to specific sections.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "query", Description: "Search pattern", Required: true},
+				{Name: "scope", Description: "Section to search: wiki (default), notes, raw, or all"},
+			},
+		},
+		{
+			Name:        "read_note",
+			Description: "Read a personal note (user's own thoughts, reflections, and working notes).",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "path", Description: "Note path relative to vault (e.g. notes/aks-thoughts.md)", Required: true},
+			},
+		},
+		{
+			Name:        "read_raw",
+			Description: "Read the original scraped source content. Verbose and token-expensive.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "filename", Description: "Raw filename (e.g. 2024-01-15-kubernetes-networking.md)", Required: true},
+			},
+		},
+		{
+			Name:        "related_notes",
+			Description: "Get pages related to a wiki page using bidirectional edge traversal.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "slug", Description: "Wiki page slug to find relations for", Required: true},
+			},
+		},
+		{
+			Name:        "vault_overview",
+			Description: "Get a high-level overview of the vault: page counts, edge count, top tags, and metadata.",
+		},
+		{
+			Name:        "expand_graph",
+			Description: "Expand seed slugs by traversing wiki-link edges up to N hops.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "seeds", Description: "Comma-separated list of slugs to expand from", Required: true},
+				{Name: "hops", Description: "Max traversal depth (1-5, default 2)"},
+			},
+		},
+		{
+			Name:        "add_bookmark",
+			Description: "Add a URL to the inbox for processing by the pipeline.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "url", Description: "URL to bookmark", Required: true},
+				{Name: "title", Description: "Human-readable title (used for filename). If omitted, derived from URL."},
+				{Name: "tags", Description: "Comma-separated tags for categorization"},
+			},
+		},
+		{
+			Name:        "add_note",
+			Description: "Create a personal note in the knowledge base.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "title", Description: "Note title (used for H1 heading and filename)", Required: true},
+				{Name: "content", Description: "Markdown body of the note", Required: true},
+				{Name: "tags", Description: "Comma-separated tags. If omitted, the pipeline will auto-tag."},
+			},
+		},
+		{
+			Name:        "update_wiki",
+			Description: "Update a section of a wiki page. Preserves frontmatter and other sections.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "slug", Description: "Wiki page slug (e.g. kubernetes-networking)", Required: true},
+				{Name: "section", Description: "Section heading to update (e.g. Summary, Key Takeaways, Related)", Required: true},
+				{Name: "content", Description: "New markdown content for the section", Required: true},
+			},
+		},
+		{
+			Name:        "delete_page",
+			Description: "Delete a vault page and all its artifacts (wiki, raw, index entry, edges, DB record).",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "slug", Description: "Wiki page slug to delete", Required: true},
+			},
+		},
 	}
 }
 

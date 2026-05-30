@@ -352,7 +352,7 @@ func HandleVaultOverview(v *vault.Vault, db *store.Store) (*VaultOverview, error
 	}
 
 	tagFreq := make(map[string]int)
-	for _, line := range strings.Split(indexContent, "\n") {
+	for line := range strings.SplitSeq(indexContent, "\n") {
 		if strings.HasPrefix(line, "Last updated:") {
 			overview.LastUpdated = strings.TrimSpace(strings.TrimPrefix(line, "Last updated:"))
 		}

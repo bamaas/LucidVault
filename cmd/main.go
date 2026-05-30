@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"lucidvault/internal/agentsmd"
 	"lucidvault/internal/claudemd"
 	"lucidvault/internal/enrich"
 	"lucidvault/internal/inbox"
@@ -211,6 +212,9 @@ func runPollCycle(ctx context.Context, cfg *config, rd *raindrop.Client, sc *scr
 	if cfg.hygieneInterval > 0 && pollCycleCount%cfg.hygieneInterval == 0 {
 		runHygiene(db, v)
 	}
+
+	// Step 5: Generate AGENTS.md
+	generateAgentsMD(db, v)
 }
 
 func syncRaindropToInbox(ctx context.Context, rd *raindrop.Client, db *store.Store, v *vault.Vault, force bool) {
@@ -1056,6 +1060,27 @@ func cleanRawWikiOrphans(v *vault.Vault) {
 		} else {
 			slog.Info("hygiene: rewrote broken raw footer link", "slug", slug)
 		}
+	}
+}
+
+// generateAgentsMD generates AGENTS.md in the vault root with MCP tool docs and vault stats.
+func generateAgentsMD(db *store.Store, v *vault.Vault) {
+	stats, err := agentsmd.CollectStats(v, db)
+	if err != nil {
+		slog.Warn("failed to collect vault stats for AGENTS.md", "error", err)
+		return
+	}
+
+	tools := mcpserver.RegisteredTools()
+	content := agentsmd.Generate(tools, stats)
+
+	written, err := agentsmd.WriteIfChanged(v.BasePath, content)
+	if err != nil {
+		slog.Warn("failed to write AGENTS.md", "error", err)
+		return
+	}
+	if written {
+		slog.Info("AGENTS.md updated")
 	}
 }
 

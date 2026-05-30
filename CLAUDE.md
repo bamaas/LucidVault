@@ -37,6 +37,7 @@ internal/scraper/        — Scraper (Jina Reader + Supadata YouTube transcripts
 internal/enrich/         — Ollama Cloud enrichment
 internal/notes/          — Notes scanner, frontmatter parser
 internal/mcpserver/      — MCP server (retrieval, inbox write, vault mutation tools for AI agents)
+internal/agentsmd/       — AGENTS.md generator (static template + dynamic MCP tools + vault stats)
 internal/store/          — SQLite state (modernc.org/sqlite, pure Go)
 internal/vault/          — Vault file writer, slug/URL helpers
 CONTEXT.md                — Domain glossary (ubiquitous language, no implementation details)
