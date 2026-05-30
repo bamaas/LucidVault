@@ -25,17 +25,21 @@ import (
 )
 
 type config struct {
-	raindropToken  string
-	ollamaAPIKey   string
-	ollamaModel    string
-	vaultPath      string
-	pollInterval   time.Duration
-	enrichDelayMs  int
-	enrichRetries  int
-	supadataAPIKey string
-	forceReEnrich  bool
-	forceReFetch   bool
+	raindropToken   string
+	ollamaAPIKey    string
+	ollamaModel     string
+	vaultPath       string
+	pollInterval    time.Duration
+	enrichDelayMs   int
+	enrichRetries   int
+	supadataAPIKey  string
+	forceReEnrich   bool
+	forceReFetch    bool
+	hygieneInterval int
 }
+
+// pollCycleCount tracks the number of poll cycles for hygiene scheduling.
+var pollCycleCount int
 
 func main() {
 	// Handle "mcp" subcommand before flag parsing.
@@ -201,6 +205,12 @@ func runPollCycle(ctx context.Context, cfg *config, rd *raindrop.Client, sc *scr
 
 	// Step 3: Process notes
 	processNotes(ctx, en, db, v)
+
+	// Step 4: Hygiene cycle (every Nth poll cycle)
+	pollCycleCount++
+	if cfg.hygieneInterval > 0 && pollCycleCount%cfg.hygieneInterval == 0 {
+		runHygiene(db, v)
+	}
 }
 
 func syncRaindropToInbox(ctx context.Context, rd *raindrop.Client, db *store.Store, v *vault.Vault, force bool) {
@@ -737,6 +747,14 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 
 	supadataAPIKey := os.Getenv("SUPADATA_API_KEY")
 
+	hygieneInterval := 10
+	if v := os.Getenv("HYGIENE_INTERVAL"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing HYGIENE_INTERVAL: %w", err)
+		}
+		hygieneInterval = n
+	}
 	return &config{
 		raindropToken:  raindropToken,
 		ollamaAPIKey:   apiKey,
@@ -747,7 +765,8 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 		enrichRetries:  enrichRetries,
 		supadataAPIKey: supadataAPIKey,
 		forceReEnrich:  forceReEnrich,
-		forceReFetch:   forceReFetch,
+		forceReFetch:    forceReFetch,
+		hygieneInterval: hygieneInterval,
 	}, nil
 }
 
@@ -870,4 +889,246 @@ func runMCP(args []string) {
 		vaultPath = "/vault"
 	}
 	mcpserver.Run(vaultPath, *httpAddr)
+}
+
+// runHygiene orchestrates all hygiene steps.
+func runHygiene(db *store.Store, v *vault.Vault) {
+	slog.Info("running hygiene cycle")
+
+	// 1. Broken edges: remove edges where target file doesn't exist
+	broken, err := db.FindBrokenEdges(func(slug string) bool {
+		return v.FileExists("wiki/" + slug + ".md")
+	})
+	if err != nil {
+		slog.Error("hygiene: failed to find broken edges", "error", err)
+	} else {
+		for _, edge := range broken {
+			if err := db.DeleteEdge(edge.FromSlug, edge.ToSlug); err != nil {
+				slog.Error("hygiene: failed to delete broken edge", "from", edge.FromSlug, "to", edge.ToSlug, "error", err)
+			} else {
+				slog.Info("hygiene: deleted broken edge", "from", edge.FromSlug, "to", edge.ToSlug)
+			}
+		}
+	}
+
+	// 2. Bidirectional index sync
+	syncIndex(v)
+
+	// 3. Raw/wiki consistency
+	cleanRawWikiOrphans(v)
+
+	// 4. Log orphan pages
+	orphans, err := db.FindOrphans()
+	if err != nil {
+		slog.Error("hygiene: failed to find orphans", "error", err)
+	} else {
+		for _, slug := range orphans {
+			slog.Warn("hygiene: orphan page (no inbound links)", "slug", slug)
+		}
+	}
+
+	slog.Info("hygiene cycle complete")
+}
+
+// syncIndex performs bidirectional 3-direction sync between wiki files and index.md.
+func syncIndex(v *vault.Vault) {
+	// Build set of current index entries
+	indexContent, err := v.ReadIndex()
+	if err != nil {
+		slog.Error("hygiene: failed to read index", "error", err)
+		return
+	}
+
+	indexEntries := parseAllIndexEntries(indexContent)
+
+	// Scan all wiki files on disk
+	wikiFiles, err := v.ScanWikiDir()
+	if err != nil {
+		slog.Error("hygiene: failed to scan wiki dir", "error", err)
+		return
+	}
+
+	diskSlugs := make(map[string]bool)
+	for _, relPath := range wikiFiles {
+		slug := store.SlugFromWikiRelPath(relPath)
+		diskSlugs[slug] = true
+
+		content, err := v.ReadFile(relPath)
+		if err != nil {
+			slog.Warn("hygiene: failed to read wiki file", "path", relPath, "error", err)
+			continue
+		}
+
+		title := notes.ParseTitle(content)
+		if title == "" {
+			title = notes.ParseH1(content)
+		}
+		if title == "" {
+			title = notes.TitleFromFilename(relPath)
+		}
+		tags := notes.ParseFrontmatter(content)
+
+		existing, inIndex := indexEntries[slug]
+		if !inIndex {
+			// Direction 2: file exists, not in index → add
+			if err := v.UpdateIndex(slug, title, tags); err != nil {
+				slog.Error("hygiene: failed to add missing index entry", "slug", slug, "error", err)
+			} else {
+				slog.Info("hygiene: added missing index entry", "slug", slug)
+			}
+		} else if existing.title != title || !tagsEqual(existing.tags, tags) {
+			// Direction 3: metadata drifted → update
+			if err := v.RemoveFromIndex(slug); err != nil {
+				slog.Error("hygiene: failed to remove drifted index entry", "slug", slug, "error", err)
+				continue
+			}
+			if err := v.UpdateIndex(slug, title, tags); err != nil {
+				slog.Error("hygiene: failed to update drifted index entry", "slug", slug, "error", err)
+			} else {
+				slog.Info("hygiene: synced drifted index entry", "slug", slug)
+			}
+		}
+	}
+
+	// Direction 1: index entry exists, file gone → remove
+	for slug := range indexEntries {
+		if !diskSlugs[slug] {
+			if err := v.RemoveFromIndex(slug); err != nil {
+				slog.Error("hygiene: failed to remove stale index entry", "slug", slug, "error", err)
+			} else {
+				slog.Info("hygiene: removed stale index entry", "slug", slug)
+			}
+		}
+	}
+}
+
+// cleanRawWikiOrphans handles raw/wiki consistency (D14, D15).
+func cleanRawWikiOrphans(v *vault.Vault) {
+	// D14: raw file exists, no matching wiki → delete raw
+	rawFiles, err := v.ScanRawDir()
+	if err != nil {
+		slog.Error("hygiene: failed to scan raw dir", "error", err)
+		return
+	}
+
+	for _, rawPath := range rawFiles {
+		slug := strings.TrimSuffix(filepath.Base(rawPath), ".md")
+		if !v.FileExists("wiki/" + slug + ".md") {
+			if err := v.DeleteFile(rawPath); err != nil {
+				slog.Error("hygiene: failed to delete orphaned raw file", "path", rawPath, "error", err)
+			} else {
+				slog.Info("hygiene: deleted orphaned raw file", "slug", slug)
+			}
+		}
+	}
+
+	// D15: wiki exists, raw missing, footer has broken raw link → rewrite to URL
+	wikiFiles, err := v.ScanWikiDir()
+	if err != nil {
+		slog.Error("hygiene: failed to scan wiki dir for footer check", "error", err)
+		return
+	}
+
+	for _, wikiPath := range wikiFiles {
+		slug := store.SlugFromWikiRelPath(wikiPath)
+		rawPath := "raw/" + slug + ".md"
+		if v.FileExists(rawPath) {
+			continue
+		}
+
+		content, err := v.ReadFile(wikiPath)
+		if err != nil {
+			continue
+		}
+
+		if !vault.HasRawFooterLink(content, rawPath) {
+			continue
+		}
+
+		url := vault.ParseFrontmatterURL(content)
+		if url == "" {
+			continue
+		}
+
+		if err := v.RewriteFooterLink(wikiPath, rawPath, url); err != nil {
+			slog.Error("hygiene: failed to rewrite footer link", "path", wikiPath, "error", err)
+		} else {
+			slog.Info("hygiene: rewrote broken raw footer link", "slug", slug)
+		}
+	}
+}
+
+// runPollCycleWithHygiene runs hygiene on every Nth poll cycle.
+func runPollCycleWithHygiene(cfg *config, db *store.Store, v *vault.Vault) {
+	pollCycleCount++
+	if cfg.hygieneInterval > 0 && pollCycleCount%cfg.hygieneInterval == 0 {
+		runHygiene(db, v)
+	}
+}
+
+// hygiene index entry (local, avoids import cycle with autolink.go's indexEntry)
+type hygieneIndexEntry struct {
+	title string
+	tags  []string
+}
+
+// parseAllIndexEntries parses all entries from index.md content into a map keyed by slug.
+func parseAllIndexEntries(content string) map[string]hygieneIndexEntry {
+	entries := make(map[string]hygieneIndexEntry)
+	for _, line := range strings.Split(content, "\n") {
+		// Parse: "- [[slug]] — Title [tag1, tag2]"
+		if !strings.HasPrefix(line, "- [[") {
+			continue
+		}
+		end := strings.Index(line, "]]")
+		if end < 4 {
+			continue
+		}
+		slug := line[4:end]
+
+		// Extract title: after "]] — " up to " [" (tags bracket)
+		rest := line[end+2:]
+		title := ""
+		tags := []string{}
+
+		dashIdx := strings.Index(rest, " — ")
+		if dashIdx >= 0 {
+			afterDash := rest[dashIdx+len(" — "):]
+			bracketIdx := strings.LastIndex(afterDash, " [")
+			if bracketIdx >= 0 {
+				title = afterDash[:bracketIdx]
+				// Extract tags from [tag1, tag2]
+				tagStr := afterDash[bracketIdx+2:]
+				tagStr = strings.TrimSuffix(tagStr, "]")
+				for _, t := range strings.Split(tagStr, ",") {
+					t = strings.TrimSpace(t)
+					if t != "" {
+						tags = append(tags, t)
+					}
+				}
+			} else {
+				title = afterDash
+			}
+		}
+
+		entries[slug] = hygieneIndexEntry{title: title, tags: tags}
+	}
+	return entries
+}
+
+// tagsEqual checks if two tag slices are equivalent (order-insensitive).
+func tagsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	aMap := make(map[string]bool, len(a))
+	for _, t := range a {
+		aMap[t] = true
+	}
+	for _, t := range b {
+		if !aMap[t] {
+			return false
+		}
+	}
+	return true
 }

@@ -53,16 +53,16 @@ Add a periodic hygiene cycle to the poll loop that auto-fixes broken edges, stal
 
 ## Acceptance Criteria
 
-- [ ] Broken edges removed from DB (page content unchanged)
-- [ ] Stale index entries removed when wiki file deleted
-- [ ] Missing index entries added when wiki file exists but not in index
-- [ ] Tag/title drift in index corrected to match frontmatter
-- [ ] Orphaned raw files (no wiki match) deleted
-- [ ] Broken raw footer links rewritten to original URL
-- [ ] Orphan pages logged as warnings (not auto-deleted)
-- [ ] Hygiene runs every Nth poll cycle (configurable)
-- [ ] Empty vault / fresh install: hygiene is a no-op
-- [ ] `mise run test` passes, `mise run lint` passes
+- [x] Broken edges removed from DB (page content unchanged)
+- [x] Stale index entries removed when wiki file deleted
+- [x] Missing index entries added when wiki file exists but not in index
+- [x] Tag/title drift in index corrected to match frontmatter
+- [x] Orphaned raw files (no wiki match) deleted
+- [x] Broken raw footer links rewritten to original URL
+- [x] Orphan pages logged as warnings (not auto-deleted)
+- [x] Hygiene runs every Nth poll cycle (configurable)
+- [x] Empty vault / fresh install: hygiene is a no-op
+- [x] `mise run test` passes, `mise run lint` passes
 
 ## Dependencies
 

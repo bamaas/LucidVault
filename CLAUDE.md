@@ -95,6 +95,7 @@ mise run lint:commits          # Check commit message (used by commit-msg hook)
 - `VAULT_PATH` — (required) Path to Obsidian vault
 - `RAINDROP_ACCESS_TOKEN` — (optional) Enables Raindrop.io as an inbox feeder
 - `SUPADATA_API_KEY` — (optional) Supadata API key for YouTube transcript extraction
+- `HYGIENE_INTERVAL` — (optional, default: 10) Run vault hygiene every Nth poll cycle
 
 ## Deployment
 

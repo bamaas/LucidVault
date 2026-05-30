@@ -141,6 +141,7 @@ Environment variables configure the service. CLI flags control one-off operation
 | `ENRICH_DELAY_MS` | No | `500` | Delay between API calls (rate limiting) |
 | `ENRICH_MAX_RETRIES` | No | `3` | Max retries on API failure |
 | `SUPADATA_API_KEY` | No | — | [Supadata](https://supadata.ai) API key for YouTube transcript extraction. When set, YouTube URLs are routed to Supadata instead of Jina. |
+| `HYGIENE_INTERVAL` | No | `10` | Run vault hygiene (broken edge cleanup, index sync, raw/wiki consistency) every Nth poll cycle |
 | `CLAUDE_MD_PATH` | No | `/CLAUDE.md` | Path to CLAUDE.md for Claude Code integration (override only if needed) |
 
 ### CLI flags
