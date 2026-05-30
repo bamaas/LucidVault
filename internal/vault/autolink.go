@@ -138,7 +138,7 @@ func (v *Vault) FindRelatedByTags(newSlug string, newTags []string) ([]BacklinkC
 
 	var candidates []candidate
 
-	for _, line := range strings.Split(indexContent, "\n") {
+	for line := range strings.SplitSeq(indexContent, "\n") {
 		entry := parseIndexEntry(line)
 		if entry == nil {
 			continue
@@ -266,7 +266,7 @@ func parseIndexEntry(line string) *indexEntry {
 	tagStr := strings.TrimSpace(matches[3])
 	var tags []string
 	if tagStr != "" {
-		for _, t := range strings.Split(tagStr, ",") {
+		for t := range strings.SplitSeq(tagStr, ",") {
 			tags = append(tags, strings.TrimSpace(t))
 		}
 	}
