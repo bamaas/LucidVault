@@ -358,6 +358,9 @@ func processInboxItem(ctx context.Context, item inbox.Item, sc *scraper.Scraper,
 		return fmt.Errorf("updating index: %w", err)
 	}
 
+	// Auto-link: add backlinks to related pages
+	autoLinkRelated(db, v, slug, tags, wikiContent)
+
 	// Upsert to database
 	normalizedURL := vault.NormalizeURL(item.URL)
 	record := &store.BookmarkRecord{
@@ -607,6 +610,9 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 		// Sync wikilink edges incrementally
 		syncEdgesFromContent(db, wikiSlug, wikiContent)
 
+		// Auto-link: add backlinks to related pages
+		autoLinkRelated(db, v, wikiSlug, tags, wikiContent)
+
 		// Index the wiki slug (not the notes/ path)
 		if err := v.UpdateIndex(wikiSlug, nf.Title, tags); err != nil {
 			slog.Error("failed to update index for note", "path", nf.Path, "error", err)
@@ -818,6 +824,41 @@ func syncEdgesFromContent(db *store.Store, slug, content string) {
 	}
 	if err := db.UpsertEdgesFrom(slug, "wikilink", edges); err != nil {
 		slog.Warn("failed to sync edges", "slug", slug, "error", err)
+	}
+}
+
+// autoLinkRelated finds related pages by tag overlap and adds backlinks to them.
+// It wraps file mutations in WithFileLock for cross-process safety.
+func autoLinkRelated(db *store.Store, v *vault.Vault, slug string, tags []string, wikiContent string) {
+	candidates, err := v.FindRelatedByTags(slug, tags)
+	if err != nil {
+		slog.Warn("failed to find related pages", "slug", slug, "error", err)
+		return
+	}
+
+	for _, c := range candidates {
+		// Compute shared tags between candidate and new page
+		sharedTags := c.SharedTags
+		line := fmt.Sprintf("[[%s]] — shared tags: %s", slug, strings.Join(sharedTags, ", "))
+
+		candidateWikiPath := filepath.Join("wiki", c.Slug+".md")
+		err := db.WithFileLock(func() error {
+			return v.UpdateRelatedSection(candidateWikiPath, []string{line})
+		})
+		if err != nil {
+			slog.Warn("failed to update related section", "candidate", c.Slug, "error", err)
+			continue
+		}
+
+		// Read updated candidate content and sync its edges
+		updatedContent, err := v.ReadFile(candidateWikiPath)
+		if err != nil {
+			slog.Warn("failed to read updated candidate", "candidate", c.Slug, "error", err)
+			continue
+		}
+		syncEdgesFromContent(db, c.Slug, updatedContent)
+
+		slog.Info("auto-linked related page", "from", slug, "to", c.Slug, "shared_tags", sharedTags)
 	}
 }
 
