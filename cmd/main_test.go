@@ -691,3 +691,188 @@ func TestProcessNotes_AutoTagsTaglessNote(t *testing.T) {
 	assertContains(t, indexContent, "[[go-concurrency]]")
 	assertContains(t, indexContent, "golang")
 }
+
+func TestSyncEdgesFromContent_CreatesEdges(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, ".lucidvault.db")
+	db, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	content := "See also [[page-b]] and [[page-c]] for details."
+	syncEdgesFromContent(db, "page-a", content)
+
+	out, err := db.GetOutboundEdges("page-a")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected 2 outbound edges, got %d", len(out))
+	}
+
+	slugs := map[string]bool{}
+	for _, e := range out {
+		slugs[e.ToSlug] = true
+		if e.Type != "wikilink" {
+			t.Errorf("expected edge type 'wikilink', got %q", e.Type)
+		}
+	}
+	if !slugs["page-b"] || !slugs["page-c"] {
+		t.Errorf("expected edges to page-b and page-c, got %v", slugs)
+	}
+}
+
+func TestSyncEdgesFromContent_ReplacesOnUpdate(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, ".lucidvault.db")
+	db, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// First version links to page-b
+	syncEdgesFromContent(db, "page-a", "Link to [[page-b]].")
+
+	// Updated version links to page-c instead
+	syncEdgesFromContent(db, "page-a", "Link to [[page-c]].")
+
+	out, err := db.GetOutboundEdges("page-a")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 outbound edge after update, got %d", len(out))
+	}
+	if out[0].ToSlug != "page-c" {
+		t.Errorf("expected edge to page-c, got %q", out[0].ToSlug)
+	}
+}
+
+func TestRebuildAllEdges_ScansWikiDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	v := vault.New(tmpDir)
+	if err := v.Init(); err != nil {
+		t.Fatalf("vault init: %v", err)
+	}
+
+	dbPath := filepath.Join(tmpDir, ".lucidvault.db")
+	db, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Create wiki files with wikilinks
+	wikiDir := filepath.Join(tmpDir, "wiki")
+	if err := os.WriteFile(filepath.Join(wikiDir, "page-a.md"), []byte("Links to [[page-b]] and [[page-c]]."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wikiDir, "page-b.md"), []byte("Links back to [[page-a]]."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rebuildAllEdges(db, v); err != nil {
+		t.Fatalf("rebuildAllEdges: %v", err)
+	}
+
+	count, err := db.EdgeCount()
+	if err != nil {
+		t.Fatalf("EdgeCount: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 edges (a->b, a->c, b->a), got %d", count)
+	}
+
+	// Verify specific edges
+	outA, err := db.GetOutboundEdges("page-a")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges page-a: %v", err)
+	}
+	if len(outA) != 2 {
+		t.Errorf("expected 2 outbound from page-a, got %d", len(outA))
+	}
+
+	outB, err := db.GetOutboundEdges("page-b")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges page-b: %v", err)
+	}
+	if len(outB) != 1 || outB[0].ToSlug != "page-a" {
+		t.Errorf("expected page-b -> [page-a], got %v", outB)
+	}
+}
+
+func TestProcessInbox_SyncsEdges(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	v := vault.New(tmpDir)
+	if err := v.Init(); err != nil {
+		t.Fatalf("vault init: %v", err)
+	}
+
+	dbPath := filepath.Join(tmpDir, ".lucidvault.db")
+	db, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	jinaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("# Content"))
+	}))
+	t.Cleanup(jinaServer.Close)
+
+	sc := scraper.New()
+	sc.SetBaseURL(jinaServer.URL + "/")
+
+	// Enricher returns content WITH wikilinks
+	wikiWithLinks := `---
+title: "Test Article"
+source: "http://example.com/test"
+date_saved: 2024-01-01
+tags:
+  - test
+type: bookmark
+---
+
+# Test Article
+
+## Summary
+See also [[related-topic]] and [[another-page]].
+
+## Key Takeaways
+- Test takeaway
+`
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		}{}
+		resp.Message.Content = wikiWithLinks
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(ollamaServer.Close)
+
+	en := enrich.NewClient("test-key", "test-model", 0, 0)
+	en.SetBaseURL(ollamaServer.URL)
+
+	writeInboxFile(t, tmpDir, "test-article.md", "https://example.com/test\n")
+
+	ctx := context.Background()
+	processInbox(ctx, sc, en, db, v)
+
+	// Verify edges were created
+	out, err := db.GetOutboundEdges("test-article")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	if len(out) != 2 {
+		t.Errorf("expected 2 outbound edges from test-article, got %d: %v", len(out), out)
+	}
+}

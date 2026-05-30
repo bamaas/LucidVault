@@ -13,6 +13,11 @@ func TestSlugFromWikiRelPath(t *testing.T) {
 		{"wiki/foo.md", "foo"},
 		{"wiki/notes/bar.md", "notes/bar"},
 		{"wiki/deep/nested/baz.md", "deep/nested/baz"},
+		// Edge cases
+		{"foo.md", "foo"},        // no wiki/ prefix
+		{"wiki/bar", "bar"},      // no .md extension
+		{"", ""},                 // empty string
+		{"wiki/.md", ""},         // hidden file style (empty slug)
 	}
 	for _, tc := range tests {
 		got := SlugFromWikiRelPath(tc.input)
@@ -138,6 +143,36 @@ func TestUpsertEdgesFrom_Incremental(t *testing.T) {
 	}
 	if len(outB) != 1 || outB[0].ToSlug != "page-c" {
 		t.Errorf("expected page-b -> [page-c], got %v", outB)
+	}
+}
+
+func TestUpsertEdgesFrom_EmptyClearsOutbound(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Insert edges from page-a
+	if err := db.UpsertEdgesFrom("page-a", "wikilink", []Edge{
+		{FromSlug: "page-a", ToSlug: "page-b", Type: "wikilink"},
+		{FromSlug: "page-a", ToSlug: "page-c", Type: "wikilink"},
+	}); err != nil {
+		t.Fatalf("UpsertEdgesFrom: %v", err)
+	}
+
+	// Upsert with empty slice — should clear all outbound edges for page-a
+	if err := db.UpsertEdgesFrom("page-a", "wikilink", nil); err != nil {
+		t.Fatalf("UpsertEdgesFrom (empty): %v", err)
+	}
+
+	out, err := db.GetOutboundEdges("page-a")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("expected 0 outbound edges after empty upsert, got %d", len(out))
 	}
 }
 
