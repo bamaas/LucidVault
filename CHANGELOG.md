@@ -1,3 +1,9 @@
+## v0.18.0 (2026-05-30)
+
+### Feat
+
+- **hygiene**: add comprehensive vault hygiene system (#60)
+
 ## v0.17.0 (2026-05-28)
 
 ### Feat
