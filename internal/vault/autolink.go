@@ -17,13 +17,8 @@ type BacklinkCandidate struct {
 
 // BacklinkLine formats the backlink entry to be inserted into the candidate's ## Related section.
 // Format: "[[newSlug]] — shared tags: tag1, tag2"
-func (c BacklinkCandidate) BacklinkLine(newSlug string, newTags []string) string {
-	// Compute shared tags between candidate and newTags
-	shared := c.SharedTags
-	if len(shared) == 0 {
-		shared = intersectTags(c.SharedTags, newTags)
-	}
-	return fmt.Sprintf("[[%s]] — shared tags: %s", newSlug, strings.Join(shared, ", "))
+func (c BacklinkCandidate) BacklinkLine(newSlug string) string {
+	return fmt.Sprintf("[[%s]] — shared tags: %s", newSlug, strings.Join(c.SharedTags, ", "))
 }
 
 // UpdateRelatedSection appends backlinks to a wiki file's ## Related section.
@@ -278,17 +273,3 @@ func parseIndexEntry(line string) *indexEntry {
 	return &indexEntry{Slug: slug, Tags: tags}
 }
 
-// intersectTags returns tags present in both a and b.
-func intersectTags(a, b []string) []string {
-	set := make(map[string]bool, len(b))
-	for _, t := range b {
-		set[t] = true
-	}
-	var result []string
-	for _, t := range a {
-		if set[t] {
-			result = append(result, t)
-		}
-	}
-	return result
-}

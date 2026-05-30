@@ -837,9 +837,7 @@ func autoLinkRelated(db *store.Store, v *vault.Vault, slug string, tags []string
 	}
 
 	for _, c := range candidates {
-		// Compute shared tags between candidate and new page
-		sharedTags := c.SharedTags
-		line := fmt.Sprintf("[[%s]] — shared tags: %s", slug, strings.Join(sharedTags, ", "))
+		line := c.BacklinkLine(slug)
 
 		candidateWikiPath := filepath.Join("wiki", c.Slug+".md")
 		err := db.WithFileLock(func() error {
@@ -858,7 +856,7 @@ func autoLinkRelated(db *store.Store, v *vault.Vault, slug string, tags []string
 		}
 		syncEdgesFromContent(db, c.Slug, updatedContent)
 
-		slog.Info("auto-linked related page", "from", slug, "to", c.Slug, "shared_tags", sharedTags)
+		slog.Info("auto-linked related page", "from", slug, "to", c.Slug, "shared_tags", c.SharedTags)
 	}
 }
 

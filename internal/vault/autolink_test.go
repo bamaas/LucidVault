@@ -334,12 +334,154 @@ func TestFindRelatedByTags_BacklinkFormat(t *testing.T) {
 	}
 
 	// Verify the backlink line format
-	line := candidates[0].BacklinkLine("new-page", []string{"go", "networking"})
+	line := candidates[0].BacklinkLine("new-page")
 	if !contains(line, "[[new-page]]") {
 		t.Errorf("expected backlink to contain [[new-page]], got: %s", line)
 	}
 	if !contains(line, "shared tags:") {
 		t.Errorf("expected backlink to contain 'shared tags:', got: %s", line)
+	}
+}
+
+// --- parseIndexEntry tests ---
+
+func TestParseIndexEntry_ValidLine(t *testing.T) {
+	entry := parseIndexEntry("- [[my-slug]] — My Title [go, networking]")
+	if entry == nil {
+		t.Fatal("expected non-nil entry")
+	}
+	if entry.Slug != "my-slug" {
+		t.Errorf("expected slug 'my-slug', got %q", entry.Slug)
+	}
+	if len(entry.Tags) != 2 || entry.Tags[0] != "go" || entry.Tags[1] != "networking" {
+		t.Errorf("expected tags [go, networking], got %v", entry.Tags)
+	}
+}
+
+func TestParseIndexEntry_EmptyTags(t *testing.T) {
+	entry := parseIndexEntry("- [[my-slug]] — My Title []")
+	if entry == nil {
+		t.Fatal("expected non-nil entry for empty tag brackets")
+	}
+	if len(entry.Tags) != 0 {
+		t.Errorf("expected 0 tags, got %v", entry.Tags)
+	}
+}
+
+func TestParseIndexEntry_NoTagBrackets(t *testing.T) {
+	// Lines without [tags] should not match
+	entry := parseIndexEntry("- [[my-slug]] — My Title")
+	if entry != nil {
+		t.Error("expected nil for line without tag brackets")
+	}
+}
+
+func TestParseIndexEntry_MalformedLines(t *testing.T) {
+	cases := []string{
+		"",
+		"random text",
+		"- no wiki link here [tag1]",
+		"# Heading",
+		"- [[slug]] - wrong dash [tag]", // regular dash, not em dash
+	}
+	for _, line := range cases {
+		if entry := parseIndexEntry(line); entry != nil {
+			t.Errorf("expected nil for line %q, got %+v", line, entry)
+		}
+	}
+}
+
+// --- FindRelatedByTags edge cases ---
+
+func TestFindRelatedByTags_FewerThanTwoNewTags(t *testing.T) {
+	dir := t.TempDir()
+	v := New(dir)
+	if err := v.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a candidate with matching tag
+	if err := v.UpdateIndex("other", "Other", []string{"go"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// With only 1 newTag, should return nil immediately
+	candidates, err := v.FindRelatedByTags("new-page", []string{"go"})
+	if err != nil {
+		t.Fatalf("FindRelatedByTags: %v", err)
+	}
+	if candidates != nil {
+		t.Errorf("expected nil with <2 newTags, got %v", candidates)
+	}
+
+	// With 0 newTags
+	candidates, err = v.FindRelatedByTags("new-page", nil)
+	if err != nil {
+		t.Fatalf("FindRelatedByTags: %v", err)
+	}
+	if candidates != nil {
+		t.Errorf("expected nil with nil newTags, got %v", candidates)
+	}
+}
+
+// --- UpdateRelatedSection edge case: append to existing Related before footer ---
+
+func TestUpdateRelatedSection_AppendsToExistingBeforeFooter(t *testing.T) {
+	dir := t.TempDir()
+	v := New(dir)
+	if err := v.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	// File with ## Related section followed by a footer
+	content := "# Test\n\n## Related\n\n- [[existing]] — shared tags: go\n\n---\n*Source: https://example.com*\n"
+	if _, err := v.WriteWiki("test.md", content); err != nil {
+		t.Fatal(err)
+	}
+
+	err := v.UpdateRelatedSection("wiki/test.md", []string{
+		"[[new-link]] — shared tags: rust",
+	})
+	if err != nil {
+		t.Fatalf("UpdateRelatedSection: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "wiki", "test.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+
+	// Both links should be present
+	if !contains(got, "[[existing]]") {
+		t.Error("expected existing link to be preserved")
+	}
+	if !contains(got, "[[new-link]]") {
+		t.Error("expected new link to be added")
+	}
+
+	// New link should appear before the footer
+	newLinkIdx := indexOf(got, "[[new-link]]")
+	footerIdx := indexOf(got, "---\n*Source:")
+	if footerIdx == -1 {
+		t.Fatal("expected footer to be preserved")
+	}
+	if newLinkIdx >= footerIdx {
+		t.Error("expected new link to appear before footer")
+	}
+}
+
+// --- BacklinkLine ---
+
+func TestBacklinkLine_Format(t *testing.T) {
+	c := BacklinkCandidate{
+		Slug:       "candidate-slug",
+		SharedTags: []string{"go", "networking"},
+	}
+	line := c.BacklinkLine("new-page")
+	expected := "[[new-page]] — shared tags: go, networking"
+	if line != expected {
+		t.Errorf("expected %q, got %q", expected, line)
 	}
 }
 
