@@ -170,9 +170,9 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store) {
 		return mcp.NewToolResultText(content), nil
 	})
 
-	// related_notes — Navigation
+	// related_notes — Navigation (bidirectional via edges table)
 	s.AddTool(mcp.NewTool("related_notes",
-		mcp.WithDescription("Get pages related to a given note by following its wiki-links. Returns linked pages for exploratory navigation. Use after reading a page to discover connected knowledge."),
+		mcp.WithDescription("Get pages related to a given wiki page using bidirectional edge traversal. Returns outbound links (pages this page references), inbound links (pages that reference this page), and pages with both directions. Use after reading a page to discover connected knowledge."),
 		mcp.WithString("slug",
 			mcp.Required(),
 			mcp.Description("Wiki page slug to find relations for"),
@@ -182,13 +182,28 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store) {
 		if slug == "" {
 			return mcp.NewToolResultError("slug is required"), nil
 		}
-		results, err := HandleRelatedNotes(v, slug)
+		results, err := HandleRelatedNotes(v, slug, db)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		data, err := json.Marshal(results)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("marshalling results: %v", err)), nil
+		}
+		return mcp.NewToolResultText(string(data)), nil
+	})
+
+	// vault_overview — Orientation
+	s.AddTool(mcp.NewTool("vault_overview",
+		mcp.WithDescription("Get a high-level overview of the vault: page counts, edge count, top tags, and metadata. Use this for orientation before diving into specific queries."),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		overview, err := HandleVaultOverview(v, db)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		data, err := json.Marshal(overview)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("marshalling overview: %v", err)), nil
 		}
 		return mcp.NewToolResultText(string(data)), nil
 	})
@@ -345,7 +360,7 @@ func parseTags(s string) []string {
 		return nil
 	}
 	var tags []string
-	for _, t := range strings.Split(s, ",") {
+	for t := range strings.SplitSeq(s, ",") {
 		t = strings.TrimSpace(t)
 		if t != "" {
 			tags = append(tags, t)

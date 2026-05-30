@@ -276,7 +276,7 @@ func (s *Store) ExpandGraph(seeds []string, maxHops int) ([]string, error) {
 	// Build seed VALUES clause and NOT IN placeholders
 	valuesClauses := make([]string, len(seeds))
 	notInPlaceholders := make([]string, len(seeds))
-	args := make([]interface{}, 0, len(seeds)*2+1)
+	args := make([]any, 0, len(seeds)*2+1)
 
 	for i, seed := range seeds {
 		valuesClauses[i] = "(?)"

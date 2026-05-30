@@ -251,7 +251,9 @@ lucidvault mcp --http :8080
 | `grep_vault` | Search for exact terms (scoped to wiki/notes/raw) |
 | `read_note` | Read a personal note |
 | `read_raw` | Read original source content (fallback) |
-| `related_notes` | Get linked pages from a wiki note |
+| `related_notes` | Get bidirectional related pages (outbound, inbound, both) |
+| `vault_overview` | Get vault stats: page counts, edge count, top tags, metadata |
+| `expand_graph` | Expand seed slugs by traversing edges up to N hops |
 | `add_bookmark` | Add a URL to the inbox for pipeline processing |
 | `add_note` | Create a personal note in the knowledge base |
 | `update_wiki` | Update a section of a wiki page (preserves other sections) |

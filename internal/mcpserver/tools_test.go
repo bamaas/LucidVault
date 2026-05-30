@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -880,6 +881,240 @@ func TestHandleAddBookmark_overwrite(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// related_notes (bidirectional with store)
+// ---------------------------------------------------------------------------
+
+func TestHandleRelatedNotes_Bidirectional(t *testing.T) {
+	v, _ := setupTestVault(t)
+	db := newTestStoreForMCP(t)
+
+	// Build edges: kubernetes-networking -> gitops (outbound)
+	//              kubernetes-networking -> notes/aks-thoughts (outbound)
+	//              gitops -> kubernetes-networking (inbound to k8s-networking)
+	edges := []store.Edge{
+		{FromSlug: "kubernetes-networking", ToSlug: "gitops", Type: "wikilink"},
+		{FromSlug: "kubernetes-networking", ToSlug: "notes/aks-thoughts", Type: "wikilink"},
+		{FromSlug: "gitops", ToSlug: "kubernetes-networking", Type: "wikilink"},
+	}
+	if err := db.RebuildEdges("wikilink", edges); err != nil {
+		t.Fatalf("RebuildEdges: %v", err)
+	}
+
+	results, err := HandleRelatedNotes(v, "kubernetes-networking", db)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	bySlug := make(map[string]RelatedEntry)
+	for _, r := range results {
+		bySlug[r.Slug] = r
+	}
+
+	// gitops: outbound (k8s-networking -> gitops) AND inbound (gitops -> k8s-networking) = "both"
+	if entry, ok := bySlug["gitops"]; !ok {
+		t.Error("expected gitops in results")
+	} else {
+		if entry.Direction != "both" {
+			t.Errorf("gitops direction = %q, want %q", entry.Direction, "both")
+		}
+		if !entry.Exists {
+			t.Error("gitops should exist")
+		}
+	}
+
+	// notes/aks-thoughts: outbound only
+	if entry, ok := bySlug["notes/aks-thoughts"]; !ok {
+		t.Error("expected notes/aks-thoughts in results")
+	} else {
+		if entry.Direction != "outbound" {
+			t.Errorf("notes/aks-thoughts direction = %q, want %q", entry.Direction, "outbound")
+		}
+		if !entry.Exists {
+			t.Error("notes/aks-thoughts should exist")
+		}
+	}
+}
+
+func TestHandleRelatedNotes_InboundOnly(t *testing.T) {
+	v, _ := setupTestVault(t)
+	db := newTestStoreForMCP(t)
+
+	// Only inbound: gitops -> kubernetes-networking
+	edges := []store.Edge{
+		{FromSlug: "gitops", ToSlug: "kubernetes-networking", Type: "wikilink"},
+	}
+	if err := db.RebuildEdges("wikilink", edges); err != nil {
+		t.Fatalf("RebuildEdges: %v", err)
+	}
+
+	results, err := HandleRelatedNotes(v, "kubernetes-networking", db)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d: %+v", len(results), results)
+	}
+	if results[0].Slug != "gitops" {
+		t.Errorf("expected slug gitops, got %q", results[0].Slug)
+	}
+	if results[0].Direction != "inbound" {
+		t.Errorf("direction = %q, want %q", results[0].Direction, "inbound")
+	}
+}
+
+func TestHandleRelatedNotes_NoEdges(t *testing.T) {
+	v, _ := setupTestVault(t)
+	db := newTestStoreForMCP(t)
+
+	results, err := HandleRelatedNotes(v, "kubernetes-networking", db)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Errorf("expected 0 results, got %d: %+v", len(results), results)
+	}
+}
+
+func TestHandleRelatedNotes_FallbackWithoutStore(t *testing.T) {
+	v, _ := setupTestVault(t)
+
+	// Without store, should fall back to wikilink parsing (forward only).
+	results, err := HandleRelatedNotes(v, "kubernetes-networking")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should find links from the wiki page content.
+	if len(results) < 3 {
+		t.Fatalf("expected at least 3 related entries from wikilinks, got %d: %+v", len(results), results)
+	}
+
+	// All fallback entries should be "outbound".
+	for _, r := range results {
+		if r.Direction != "outbound" {
+			t.Errorf("fallback entry %q has direction %q, want %q", r.Slug, r.Direction, "outbound")
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// vault_overview
+// ---------------------------------------------------------------------------
+
+func TestHandleVaultOverview(t *testing.T) {
+	t.Run("populated vault", func(t *testing.T) {
+		v, _ := setupTestVault(t)
+		db := newTestStoreForMCP(t)
+
+		// Add some edges.
+		edges := []store.Edge{
+			{FromSlug: "kubernetes-networking", ToSlug: "gitops", Type: "wikilink"},
+			{FromSlug: "gitops", ToSlug: "kubernetes-networking", Type: "wikilink"},
+		}
+		if err := db.RebuildEdges("wikilink", edges); err != nil {
+			t.Fatalf("RebuildEdges: %v", err)
+		}
+
+		overview, err := HandleVaultOverview(v, db)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if overview.WikiCount != 2 {
+			t.Errorf("WikiCount = %d, want 2", overview.WikiCount)
+		}
+		if overview.RawCount != 1 {
+			t.Errorf("RawCount = %d, want 1", overview.RawCount)
+		}
+		if overview.NoteCount != 1 {
+			t.Errorf("NoteCount = %d, want 1", overview.NoteCount)
+		}
+		if overview.EdgeCount != 2 {
+			t.Errorf("EdgeCount = %d, want 2", overview.EdgeCount)
+		}
+		if !overview.HasSoul {
+			t.Error("expected HasSoul to be true")
+		}
+		if overview.LastUpdated != "2024-01-15" {
+			t.Errorf("LastUpdated = %q, want %q", overview.LastUpdated, "2024-01-15")
+		}
+
+		// Top tags: kubernetes appears in 3 index entries, networking in 1, etc.
+		if len(overview.TopTags) == 0 {
+			t.Fatal("expected at least one top tag")
+		}
+		// kubernetes should be the top tag (appears in 3 index entries).
+		if overview.TopTags[0] != "kubernetes" {
+			t.Errorf("TopTags[0] = %q, want %q", overview.TopTags[0], "kubernetes")
+		}
+	})
+
+	t.Run("empty vault", func(t *testing.T) {
+		dir := t.TempDir()
+		v := vault.New(dir)
+
+		overview, err := HandleVaultOverview(v, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if overview.WikiCount != 0 {
+			t.Errorf("WikiCount = %d, want 0", overview.WikiCount)
+		}
+		if overview.RawCount != 0 {
+			t.Errorf("RawCount = %d, want 0", overview.RawCount)
+		}
+		if overview.NoteCount != 0 {
+			t.Errorf("NoteCount = %d, want 0", overview.NoteCount)
+		}
+		if overview.EdgeCount != 0 {
+			t.Errorf("EdgeCount = %d, want 0", overview.EdgeCount)
+		}
+		if overview.HasSoul {
+			t.Error("expected HasSoul to be false")
+		}
+		if len(overview.TopTags) != 0 {
+			t.Errorf("expected empty TopTags, got %v", overview.TopTags)
+		}
+	})
+
+	t.Run("tag counting from index", func(t *testing.T) {
+		v, _ := setupTestVault(t)
+
+		overview, err := HandleVaultOverview(v, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// From testIndexContent:
+		// kubernetes appears in: kubernetes-networking, gitops, notes/aks-thoughts = 3 times
+		// networking appears in: kubernetes-networking = 1 time
+		// cni appears in: kubernetes-networking = 1 time
+		// gitops appears in: gitops = 1 time
+		// argocd appears in: gitops = 1 time
+		// azure appears in: notes/aks-thoughts = 1 time
+		expectedTags := map[string]bool{
+			"kubernetes": true,
+			"networking": true,
+			"cni":        true,
+			"gitops":     true,
+			"argocd":     true,
+			"azure":      true,
+		}
+		for _, tag := range overview.TopTags {
+			if !expectedTags[tag] {
+				t.Errorf("unexpected tag %q in TopTags", tag)
+			}
+		}
+		if len(overview.TopTags) != 6 {
+			t.Errorf("expected 6 top tags, got %d: %v", len(overview.TopTags), overview.TopTags)
+		}
+	})
+}
+
 // --- HandleExpandGraph ---
 
 func newTestStoreForMCP(t *testing.T) *store.Store {
@@ -925,12 +1160,24 @@ func TestHandleExpandGraph(t *testing.T) {
 func TestHandleExpandGraph_DefaultHops(t *testing.T) {
 	db := newTestStoreForMCP(t)
 
-	// hops=0 should default to 2
-	result, err := HandleExpandGraph(db, []string{"nonexistent"}, 0)
+	// Build graph: a->b->c->d. With hops=0 defaulting to 2, seed "a"
+	// should reach b (hop1) and c (hop2) but NOT d (hop3).
+	edges := []store.Edge{
+		{FromSlug: "a", ToSlug: "b", Type: "wikilink"},
+		{FromSlug: "b", ToSlug: "c", Type: "wikilink"},
+		{FromSlug: "c", ToSlug: "d", Type: "wikilink"},
+	}
+	if err := db.RebuildEdges("wikilink", edges); err != nil {
+		t.Fatalf("RebuildEdges: %v", err)
+	}
+
+	result, err := HandleExpandGraph(db, []string{"a"}, 0)
 	if err != nil {
 		t.Fatalf("HandleExpandGraph: %v", err)
 	}
-	if len(result) != 0 {
-		t.Errorf("expected empty for nonexistent seed, got %v", result)
+	sort.Strings(result)
+	expected := []string{"b", "c"}
+	if fmt.Sprintf("%v", result) != fmt.Sprintf("%v", expected) {
+		t.Errorf("HandleExpandGraph with hops=0 (default 2) = %v, want %v", result, expected)
 	}
 }

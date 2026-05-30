@@ -991,12 +991,20 @@ func TestExpandGraph_CycleDoesNotHang(t *testing.T) {
 			t.Error("seed 'f' should not appear in results")
 		}
 	}
+	// Verify expected reachable nodes: f->a (hop1), a->b (hop2), b->{c,e} (hop3)
+	sort.Strings(result)
+	expected := []string{"a", "b", "c", "e"}
+	if fmt.Sprintf("%v", result) != fmt.Sprintf("%v", expected) {
+		t.Errorf("ExpandGraph([f], 3) = %v, want %v", result, expected)
+	}
 }
 
 func TestExpandGraph_SeedsExcluded(t *testing.T) {
 	s := newTestStore(t)
 	seedGraph(t, s)
 
+	// Seeds "a" and "b" excluded. Reachable: a->{b,f}, b->{a,c,e} at hop1;
+	// from c->{d}, from f->{a}, from e->{b} at hop2. Minus seeds: {c, d, e, f}
 	result, err := s.ExpandGraph([]string{"a", "b"}, 2)
 	if err != nil {
 		t.Fatalf("ExpandGraph: %v", err)
@@ -1005,5 +1013,10 @@ func TestExpandGraph_SeedsExcluded(t *testing.T) {
 		if slug == "a" || slug == "b" {
 			t.Errorf("seed %q should be excluded from results", slug)
 		}
+	}
+	sort.Strings(result)
+	expected := []string{"c", "d", "e", "f"}
+	if fmt.Sprintf("%v", result) != fmt.Sprintf("%v", expected) {
+		t.Errorf("ExpandGraph([a,b], 2) = %v, want %v", result, expected)
 	}
 }

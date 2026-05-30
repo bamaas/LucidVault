@@ -55,8 +55,8 @@ docker-compose.yml        — Full stack: LucidVault + LiveSync bridge + CouchDB
 - **`raindrop.SyncToInbox`** — `SyncToInbox(bookmarks, db, vaultPath) (int, error)`. Creates inbox files for new URLs (dedup via DB).
 - **`scraper.Scraper`** — `Scrape(ctx, url) (*Result, error)`. Uses Jina Reader; delegates YouTube URLs to `YouTubeClient` (Supadata).
 - **`enrich.Client`** — `Enrich(ctx, *EnrichInput) (string, error)`. Calls Ollama Cloud with retry logic. Returns wiki-formatted markdown. `SuggestTags(ctx, *TagInput) ([]string, error)` generates tags for notes.
-- **`vault.Vault`** — `WriteRaw()`, `WriteWiki()`, `UpdateIndex()`, `RemoveFromIndex()`. Manages file layout and `index.md`.
-- **`store.Store`** — SQLite-backed deduplication. Tracks processed bookmarks (by normalized URL) and note content hashes.
+- **`vault.Vault`** — `WriteRaw()`, `WriteWiki()`, `UpdateIndex()`, `RemoveFromIndex()`, `ScanWikiDir()`, `ScanRawDir()`, `ScanNotesDir()`. Manages file layout and `index.md`.
+- **`store.Store`** — SQLite-backed deduplication and graph. Tracks processed bookmarks (by normalized URL), note content hashes, and wiki-link edges (`GetOutboundEdges`, `GetInboundEdges`, `EdgeCount`, `ExpandGraph`).
 
 ## Build, Test & Lint
 
