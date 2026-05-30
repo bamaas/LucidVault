@@ -66,6 +66,9 @@ func TestGenerate_WithToolsAndStats(t *testing.T) {
 	if !strings.Contains(result, "slug") {
 		t.Error("missing parameter 'slug' in output")
 	}
+	if !strings.Contains(result, "*(required)*") {
+		t.Error("missing *(required)* markup for required parameters")
+	}
 
 	// Must contain vault stats section.
 	if !strings.Contains(result, "## Vault Statistics") {
@@ -96,14 +99,23 @@ func TestGenerate_EmptyTools(t *testing.T) {
 		t.Error("missing static template with empty tools")
 	}
 
-	// Tools section should exist but be empty or indicate none.
+	// Tools section should indicate no tools registered.
 	if !strings.Contains(result, "## Available MCP Tools") {
 		t.Error("missing MCP Tools section even with no tools")
 	}
+	if !strings.Contains(result, "No MCP tools registered.") {
+		t.Error("missing 'No MCP tools registered.' fallback message")
+	}
 
-	// Stats should still render.
+	// Stats should still render with correct counts.
 	if !strings.Contains(result, "## Vault Statistics") {
 		t.Error("missing Vault Statistics section")
+	}
+	if !strings.Contains(result, "| Wiki pages | 5 |") {
+		t.Error("missing correct wiki count in stats")
+	}
+	if !strings.Contains(result, "| Raw sources | 3 |") {
+		t.Error("missing correct raw count in stats")
 	}
 }
 
@@ -119,6 +131,18 @@ func TestGenerate_EmptyStats(t *testing.T) {
 	}
 	if !strings.Contains(result, "## Vault Statistics") {
 		t.Error("missing stats section")
+	}
+	// Zero-value stats should render zeros.
+	if !strings.Contains(result, "| Wiki pages | 0 |") {
+		t.Error("missing zero wiki count in stats")
+	}
+	// soul.md line should NOT appear when HasSoul is false.
+	if strings.Contains(result, "soul.md is present") {
+		t.Error("soul.md line should not appear when HasSoul is false")
+	}
+	// Top tags section should NOT appear when no tags.
+	if strings.Contains(result, "**Top tags:**") {
+		t.Error("top tags section should not appear when no tags exist")
 	}
 }
 
