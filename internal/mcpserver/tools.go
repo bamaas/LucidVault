@@ -5,9 +5,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"lucidvault/internal/store"
 	"lucidvault/internal/vault"
 )
 
@@ -31,9 +33,21 @@ type GrepResult struct {
 
 // RelatedEntry represents a linked page from related_notes.
 type RelatedEntry struct {
-	Slug   string `json:"slug"`
-	Title  string `json:"title"`
-	Exists bool   `json:"exists"`
+	Slug      string `json:"slug"`
+	Title     string `json:"title"`
+	Exists    bool   `json:"exists"`
+	Direction string `json:"direction"` // "outbound", "inbound", or "both"
+}
+
+// VaultOverview contains high-level vault statistics for agent orientation.
+type VaultOverview struct {
+	WikiCount   int      `json:"wiki_count"`
+	RawCount    int      `json:"raw_count"`
+	NoteCount   int      `json:"note_count"`
+	EdgeCount   int      `json:"edge_count"`
+	TopTags     []string `json:"top_tags"`
+	HasSoul     bool     `json:"has_soul"`
+	LastUpdated string   `json:"last_updated"`
 }
 
 // HandleGetSoul returns the content of soul.md.
@@ -58,7 +72,7 @@ func HandleSearchIndex(v *vault.Vault, query string) ([]IndexEntry, error) {
 	queryLower := strings.ToLower(query)
 	var results []IndexEntry
 
-	for _, line := range strings.Split(indexContent, "\n") {
+	for line := range strings.SplitSeq(indexContent, "\n") {
 		entry := ParseIndexEntry(line)
 		if entry == nil {
 			continue
@@ -193,24 +207,82 @@ func HandleReadRaw(v *vault.Vault, filename string) (string, error) {
 	return content, nil
 }
 
-// HandleRelatedNotes returns pages linked from the given wiki page.
-func HandleRelatedNotes(v *vault.Vault, slug string) ([]RelatedEntry, error) {
-	content, err := safeReadFile(v, "wiki/"+slug+".md")
-	if err != nil {
+// HandleRelatedNotes returns pages linked from and to the given wiki page using
+// bidirectional edge lookups from the store. Falls back to wikilink parsing when
+// no store is available.
+func HandleRelatedNotes(v *vault.Vault, slug string, db ...*store.Store) ([]RelatedEntry, error) {
+	// Verify the page exists.
+	if _, err := safeReadFile(v, "wiki/"+slug+".md"); err != nil {
 		return nil, fmt.Errorf("wiki page %q not found: %w", slug, err)
 	}
 
-	links := ParseWikiLinks(content)
+	// Track direction per related slug: outbound, inbound, or both.
+	type dirInfo struct {
+		outbound bool
+		inbound  bool
+	}
+	related := make(map[string]*dirInfo)
+
+	// Use store for bidirectional lookups if available.
+	var useStore *store.Store
+	if len(db) > 0 && db[0] != nil {
+		useStore = db[0]
+	}
+
+	if useStore != nil {
+		outEdges, err := useStore.GetOutboundEdges(slug)
+		if err != nil {
+			return nil, fmt.Errorf("getting outbound edges: %w", err)
+		}
+		for _, e := range outEdges {
+			if _, ok := related[e.ToSlug]; !ok {
+				related[e.ToSlug] = &dirInfo{}
+			}
+			related[e.ToSlug].outbound = true
+		}
+
+		inEdges, err := useStore.GetInboundEdges(slug)
+		if err != nil {
+			return nil, fmt.Errorf("getting inbound edges: %w", err)
+		}
+		for _, e := range inEdges {
+			if _, ok := related[e.FromSlug]; !ok {
+				related[e.FromSlug] = &dirInfo{}
+			}
+			related[e.FromSlug].inbound = true
+		}
+	} else {
+		// Fallback: parse wikilinks from wiki file content (forward only).
+		content, err := safeReadFile(v, "wiki/"+slug+".md")
+		if err != nil {
+			return nil, fmt.Errorf("reading wiki page %q: %w", slug, err)
+		}
+		links := ParseWikiLinks(content)
+		for _, link := range links {
+			related[link] = &dirInfo{outbound: true}
+		}
+	}
+
 	var results []RelatedEntry
-	for _, link := range links {
-		entry := RelatedEntry{Slug: link}
+	for relSlug, dir := range related {
+		direction := "outbound"
+		if dir.outbound && dir.inbound {
+			direction = "both"
+		} else if dir.inbound {
+			direction = "inbound"
+		}
+
+		entry := RelatedEntry{
+			Slug:      relSlug,
+			Direction: direction,
+		}
 
 		// Determine file path based on link type.
 		var relPath string
-		if strings.HasPrefix(link, "notes/") {
-			relPath = link + ".md"
+		if strings.HasPrefix(relSlug, "notes/") {
+			relPath = relSlug + ".md"
 		} else {
-			relPath = "wiki/" + link + ".md"
+			relPath = "wiki/" + relSlug + ".md"
 		}
 
 		entry.Exists = v.FileExists(relPath)
@@ -221,18 +293,107 @@ func HandleRelatedNotes(v *vault.Vault, slug string) ([]RelatedEntry, error) {
 			}
 		}
 		if entry.Title == "" {
-			// Use slug as fallback title.
-			parts := strings.Split(link, "/")
+			parts := strings.Split(relSlug, "/")
 			entry.Title = parts[len(parts)-1]
 		}
 
 		results = append(results, entry)
 	}
 
+	// Sort by slug for deterministic output.
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Slug < results[j].Slug
+	})
+
 	if results == nil {
 		results = []RelatedEntry{}
 	}
 	return results, nil
+}
+
+// HandleVaultOverview returns high-level vault statistics for agent orientation.
+func HandleVaultOverview(v *vault.Vault, db *store.Store) (*VaultOverview, error) {
+	overview := &VaultOverview{}
+
+	// Count wiki files.
+	wikiFiles, err := v.ScanWikiDir()
+	if err != nil {
+		return nil, fmt.Errorf("scanning wiki dir: %w", err)
+	}
+	overview.WikiCount = len(wikiFiles)
+
+	// Count raw files.
+	rawFiles, err := v.ScanRawDir()
+	if err != nil {
+		return nil, fmt.Errorf("scanning raw dir: %w", err)
+	}
+	overview.RawCount = len(rawFiles)
+
+	// Count notes.
+	noteFiles, err := v.ScanNotesDir()
+	if err != nil {
+		return nil, fmt.Errorf("scanning notes dir: %w", err)
+	}
+	overview.NoteCount = len(noteFiles)
+
+	// Edge count from store.
+	if db != nil {
+		count, err := db.EdgeCount()
+		if err != nil {
+			return nil, fmt.Errorf("counting edges: %w", err)
+		}
+		overview.EdgeCount = count
+	}
+
+	// Parse index.md for tags and last updated.
+	indexContent, err := v.ReadIndex()
+	if err != nil {
+		return nil, fmt.Errorf("reading index: %w", err)
+	}
+
+	tagFreq := make(map[string]int)
+	for line := range strings.SplitSeq(indexContent, "\n") {
+		if strings.HasPrefix(line, "Last updated:") {
+			overview.LastUpdated = strings.TrimSpace(strings.TrimPrefix(line, "Last updated:"))
+		}
+		entry := ParseIndexEntry(line)
+		if entry == nil {
+			continue
+		}
+		for _, tag := range entry.Tags {
+			tagFreq[tag]++
+		}
+	}
+
+	// Sort tags by frequency (desc), then alphabetically for ties.
+	type tagCount struct {
+		tag   string
+		count int
+	}
+	var tagCounts []tagCount
+	for tag, count := range tagFreq {
+		tagCounts = append(tagCounts, tagCount{tag, count})
+	}
+	sort.Slice(tagCounts, func(i, j int) bool {
+		if tagCounts[i].count != tagCounts[j].count {
+			return tagCounts[i].count > tagCounts[j].count
+		}
+		return tagCounts[i].tag < tagCounts[j].tag
+	})
+
+	topN := 10
+	if len(tagCounts) < topN {
+		topN = len(tagCounts)
+	}
+	overview.TopTags = make([]string, topN)
+	for i := 0; i < topN; i++ {
+		overview.TopTags[i] = tagCounts[i].tag
+	}
+
+	// Check soul.md existence.
+	overview.HasSoul = v.FileExists("soul.md")
+
+	return overview, nil
 }
 
 // HandleAddBookmark creates an inbox file for a URL to be processed by the pipeline.
@@ -290,7 +451,7 @@ func slugFromURL(rawURL string) string {
 	}
 
 	parts := []string{u.Hostname()}
-	for _, seg := range strings.Split(strings.Trim(u.Path, "/"), "/") {
+	for seg := range strings.SplitSeq(strings.Trim(u.Path, "/"), "/") {
 		if seg != "" {
 			parts = append(parts, seg)
 		}
@@ -339,4 +500,13 @@ func HandleAddNote(v *vault.Vault, title, content string, tags []string) (string
 	}
 
 	return filename, nil
+}
+
+// HandleExpandGraph expands seed slugs by traversing wiki-link edges up to N hops.
+// Returns deduplicated slugs reachable from seeds, excluding the seeds themselves.
+func HandleExpandGraph(db *store.Store, seeds []string, hops int) ([]string, error) {
+	if hops < 1 {
+		hops = 2
+	}
+	return db.ExpandGraph(seeds, hops)
 }

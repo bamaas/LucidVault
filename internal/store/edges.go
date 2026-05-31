@@ -258,6 +258,83 @@ func (s *Store) FindOrphans() ([]string, error) {
 	return orphans, nil
 }
 
+// ExpandGraph returns all slugs reachable from the seed slugs within the given
+// number of hops, using a recursive CTE over the edges table.
+// It traverses both directions (outbound and inbound edges).
+// Seeds themselves are excluded from results. maxHops is capped at 5.
+func (s *Store) ExpandGraph(seeds []string, maxHops int) ([]string, error) {
+	if len(seeds) == 0 {
+		return []string{}, nil
+	}
+	if maxHops > 5 {
+		maxHops = 5
+	}
+	if maxHops < 1 {
+		maxHops = 2
+	}
+
+	// Build seed VALUES clause and NOT IN placeholders
+	valuesClauses := make([]string, len(seeds))
+	notInPlaceholders := make([]string, len(seeds))
+	args := make([]any, 0, len(seeds)*2+1)
+
+	for i, seed := range seeds {
+		valuesClauses[i] = "(?)"
+		notInPlaceholders[i] = "?"
+		args = append(args, seed)
+	}
+
+	// Add maxHops parameter
+	args = append(args, maxHops)
+
+	// Add seeds again for the NOT IN clause
+	for _, seed := range seeds {
+		args = append(args, seed)
+	}
+
+	query := fmt.Sprintf(`
+		WITH RECURSIVE reachable(slug, depth) AS (
+			SELECT column1, 0
+			FROM (VALUES %s)
+			UNION
+			SELECT CASE
+				WHEN e.from_slug = r.slug THEN e.to_slug
+				ELSE e.from_slug
+			END, r.depth + 1
+			FROM edges e
+			JOIN reachable r ON (e.from_slug = r.slug OR e.to_slug = r.slug)
+			WHERE r.depth < ?
+		)
+		SELECT DISTINCT slug FROM reachable
+		WHERE slug NOT IN (%s)
+		AND depth > 0
+	`, strings.Join(valuesClauses, ", "), strings.Join(notInPlaceholders, ", "))
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("expanding graph from %v: %w", seeds, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, fmt.Errorf("scanning reachable slug: %w", err)
+		}
+		result = append(result, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating reachable rows: %w", err)
+	}
+
+	if result == nil {
+		result = []string{}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
 // slugFromWikiPath extracts the slug from a wiki path like "wiki/my-slug.md" -> "my-slug".
 func slugFromWikiPath(wikiPath string) string {
 	base := filepath.Base(wikiPath)

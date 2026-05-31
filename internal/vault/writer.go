@@ -101,6 +101,38 @@ func (v *Vault) ScanWikiDir() ([]string, error) {
 	return paths, nil
 }
 
+// ScanNotesDir returns a list of relative paths (e.g. "notes/foo.md")
+// for all .md files under the notes/ directory. Returns empty slice if notes/ doesn't exist.
+func (v *Vault) ScanNotesDir() ([]string, error) {
+	notesDir := filepath.Join(v.BasePath, "notes")
+	if _, err := os.Stat(notesDir); os.IsNotExist(err) {
+		return nil, nil
+	}
+
+	var paths []string
+	err := filepath.Walk(notesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != ".md" {
+			return nil
+		}
+		rel, err := filepath.Rel(v.BasePath, path)
+		if err != nil {
+			return fmt.Errorf("computing relative path: %w", err)
+		}
+		paths = append(paths, rel)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scanning notes directory: %w", err)
+	}
+	return paths, nil
+}
+
 func (v *Vault) FileExists(relPath string) bool {
 	absPath := filepath.Join(v.BasePath, relPath)
 	data, err := os.ReadFile(absPath)
