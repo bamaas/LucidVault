@@ -1,3 +1,9 @@
+## v0.20.2 (2026-05-31)
+
+### Fix
+
+- comprehensive codebase review — 30 bugs, edge cases, and safety issues (#66)
+
 ## v0.20.1 (2026-05-31)
 
 ### Fix
