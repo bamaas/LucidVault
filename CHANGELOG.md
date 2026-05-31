@@ -1,3 +1,9 @@
+## v0.20.1 (2026-05-31)
+
+### Fix
+
+- add targeted golang skill references to subagent config files (#65)
+
 ## v0.20.0 (2026-05-31)
 
 ### Feat
