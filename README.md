@@ -12,16 +12,10 @@ LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.m
 
 - **Inbox** — Drop a `.md` file with a URL into `inbox/` and it gets scraped, enriched, and added to your vault. Works standalone — no external service required
 - **Raindrop.io integration** — Optionally connect Raindrop.io to auto-feed bookmarks into the inbox. Backfills all existing bookmarks on first run
-- **YouTube transcripts** — YouTube URLs are automatically detected and their transcripts fetched via the [Supadata](https://supadata.ai) API, then enriched like any other page
 - **Enrich** — LLM (Ollama Cloud, free) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** — Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **MCP server** — Built-in MCP server exposes the vault as structured retrieval primitives for any AI client (Claude Code, Cursor, Windsurf, OpenClaw). Supports stdio and Streamable HTTP transports
-- **AGENTS.md** — Auto-generated vault instruction file with access rules, retrieval strategy, available MCP tools, and live vault statistics. Updated on startup and each poll cycle
-- **Resilient** — Falls back to basic metadata when scraping fails (paywalled sites, blocked content)
-- **Notes indexing** — Personal notes in `notes/` are automatically scanned and get a wiki copy in `wiki/` with tags. Notes without tags are auto-tagged via the LLM; notes with existing tags keep them as-is. The `index.md` points to the wiki copy for consistent retrieval
-- **Re-enrich** — Changed your enrichment prompt or model? Run with `--re-enrich` to re-process all bookmarks using existing raw content
-- **Re-fetch** — Run with `--re-fetch` to force re-syncing all bookmarks from external sources (e.g. Raindrop.io) to inbox, bypassing dedup. Items flow through the full pipeline (scrape + enrich), then exit
-- **Reprocess** — Want to re-scrape and re-enrich a URL? Drop it in `inbox/` again — it always gets processed
+- **Notes indexing** — Personal notes in `notes/` are automatically scanned and get a wiki copy in `wiki/` with tags. Notes without tags are auto-tagged via the LLM; notes with existing tags keep them as-is
 - **Multi-device sync** — Access your vault from any device (phone, tablet, laptop) using [Obsidian LiveSync](https://github.com/vrtmrz/obsidian-livesync). Self-hosted via CouchDB — zero LucidVault code changes needed
 
 ## Getting started
