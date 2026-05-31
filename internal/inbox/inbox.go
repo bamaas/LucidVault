@@ -3,6 +3,7 @@ package inbox
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,9 @@ func parseEntry(inboxDir string, entry os.DirEntry) (Item, bool) {
 	if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 		return Item{}, false
 	}
+	if entry.Type()&os.ModeSymlink != 0 {
+		return Item{}, false
+	}
 
 	absPath := filepath.Join(inboxDir, entry.Name())
 	data, err := os.ReadFile(absPath)
@@ -131,6 +135,10 @@ func extractURL(content string) string {
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
+			u, err := url.Parse(line)
+			if err != nil || u.Host == "" {
+				continue
+			}
 			return line
 		}
 	}
