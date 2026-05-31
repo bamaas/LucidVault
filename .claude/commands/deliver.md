@@ -10,12 +10,8 @@ If no argument given, look for plans in `docs/plans/` and ask the user which one
 
 ## Subagent model strategy
 
-This pipeline uses model tiering to balance cost and quality:
-- **Opus**: judgment-heavy agents (`test-reviewer`, `code-reviewer`) — defined in `.claude/agents/`
-- **Sonnet**: execution agents (`test-writer`, `implementer`, `test-fixer`, `review-fixer`) — defined in `.claude/agents/`
-- **Sonnet**: phase orchestrator subagents below — set `model: "sonnet"` on the Agent tool call
-
-The agent files in `.claude/agents/` already specify their model. Phase orchestrators should be spawned with `model: "sonnet"` since they just delegate to named agents.
+- **Named agents** (`test-writer`, `implementer`, `test-reviewer`, `code-reviewer`, `test-fixer`, `review-fixer`) carry their own model in `.claude/agents/` — do NOT set a model when spawning them by `subagent_type`.
+- **Phase orchestrators** (subagents that run `/implement`, `/test`, `/review`, `/pr`) have no agent file — spawn them with `model: "sonnet"`.
 
 ## Step 1 — Understand the plan and detect mode
 
