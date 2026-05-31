@@ -63,7 +63,7 @@ func Upsert(claudeMDPath, vaultPath string) error {
 		content += section + "\n"
 	}
 
-	if err := os.WriteFile(claudeMDPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(claudeMDPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", claudeMDPath, err)
 	}
 

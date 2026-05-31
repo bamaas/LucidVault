@@ -40,6 +40,7 @@ type config struct {
 }
 
 // pollCycleCount tracks the number of poll cycles for hygiene scheduling.
+// TODO: move to struct field when poll loop is refactored into a type.
 var pollCycleCount int
 
 func main() {
@@ -574,6 +575,7 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 		}
 
 		// Read note content for wiki copy
+		// TODO: cache content in NoteFile to avoid double read (Scan already reads for hashing)
 		absPath := filepath.Join(v.BasePath, nf.Path)
 		data, err := os.ReadFile(absPath)
 		if err != nil {
@@ -902,7 +904,7 @@ func runHygiene(db *store.Store, v *vault.Vault) {
 
 	// 1. Broken edges: remove edges where target file doesn't exist
 	broken, err := db.FindBrokenEdges(func(slug string) bool {
-		return v.FileExists("wiki/" + slug + ".md")
+		return v.FileHasContent("wiki/" + slug + ".md")
 	})
 	if err != nil {
 		slog.Error("hygiene: failed to find broken edges", "error", err)
@@ -1018,7 +1020,7 @@ func cleanRawWikiOrphans(v *vault.Vault) {
 
 	for _, rawPath := range rawFiles {
 		slug := strings.TrimSuffix(filepath.Base(rawPath), ".md")
-		if !v.FileExists("wiki/" + slug + ".md") {
+		if !v.FileHasContent("wiki/" + slug + ".md") {
 			if err := v.DeleteFile(rawPath); err != nil {
 				slog.Error("hygiene: failed to delete orphaned raw file", "path", rawPath, "error", err)
 			} else {
@@ -1037,7 +1039,7 @@ func cleanRawWikiOrphans(v *vault.Vault) {
 	for _, wikiPath := range wikiFiles {
 		slug := store.SlugFromWikiRelPath(wikiPath)
 		rawPath := "raw/" + slug + ".md"
-		if v.FileExists(rawPath) {
+		if v.FileHasContent(rawPath) {
 			continue
 		}
 
@@ -1081,14 +1083,6 @@ func generateAgentsMD(db *store.Store, v *vault.Vault) {
 	}
 	if written {
 		slog.Info("AGENTS.md updated")
-	}
-}
-
-// runPollCycleWithHygiene runs hygiene on every Nth poll cycle.
-func runPollCycleWithHygiene(cfg *config, db *store.Store, v *vault.Vault) {
-	pollCycleCount++
-	if cfg.hygieneInterval > 0 && pollCycleCount%cfg.hygieneInterval == 0 {
-		runHygiene(db, v)
 	}
 }
 
@@ -1142,17 +1136,18 @@ func parseAllIndexEntries(content string) map[string]hygieneIndexEntry {
 	return entries
 }
 
-// tagsEqual checks if two tag slices are equivalent (order-insensitive).
+// tagsEqual checks if two tag slices are equivalent (order-insensitive, duplicate-aware).
 func tagsEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	aMap := make(map[string]bool, len(a))
+	counts := make(map[string]int, len(a))
 	for _, t := range a {
-		aMap[t] = true
+		counts[t]++
 	}
 	for _, t := range b {
-		if !aMap[t] {
+		counts[t]--
+		if counts[t] < 0 {
 			return false
 		}
 	}

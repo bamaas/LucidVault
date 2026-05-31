@@ -161,7 +161,7 @@ func CollectStats(v *vault.Vault, db *store.Store) (VaultStats, error) {
 	}
 
 	// Check soul.md existence.
-	stats.HasSoul = v.FileExists("soul.md")
+	stats.HasSoul = v.FileHasContent("soul.md")
 
 	// Parse index.md for top tags.
 	indexContent, err := v.ReadIndex()
@@ -171,18 +171,12 @@ func CollectStats(v *vault.Vault, db *store.Store) (VaultStats, error) {
 
 	tagFreq := make(map[string]int)
 	for line := range strings.SplitSeq(indexContent, "\n") {
-		// Parse lines like: "- [[slug]] -- Title [tag1, tag2]"
-		bracketIdx := strings.LastIndex(line, " [")
-		if bracketIdx < 0 || !strings.HasPrefix(line, "- [[") {
+		entry := vault.ParseIndexEntry(line)
+		if entry == nil {
 			continue
 		}
-		tagStr := line[bracketIdx+2:]
-		tagStr = strings.TrimSuffix(tagStr, "]")
-		for t := range strings.SplitSeq(tagStr, ",") {
-			t = strings.TrimSpace(t)
-			if t != "" {
-				tagFreq[t]++
-			}
+		for _, t := range entry.Tags {
+			tagFreq[t]++
 		}
 	}
 

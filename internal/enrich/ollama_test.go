@@ -391,7 +391,7 @@ func TestBuildMinimalPage(t *testing.T) {
 
 	result := buildMinimalPage(input)
 
-	if !strings.Contains(result, `title: "Test Title"`) {
+	if !strings.Contains(result, `title: 'Test Title'`) {
 		t.Error("expected title in frontmatter")
 	}
 	if !strings.Contains(result, "## Summary") {

@@ -200,7 +200,7 @@ func (s *Store) FindOrphans() ([]string, error) {
 		if slug == "" {
 			continue
 		}
-		// Check if this slug has any edges at all
+		// TODO: optimize with set-based query to avoid N+1 (one COUNT per slug)
 		var edgeCount int
 		err := s.db.QueryRow(
 			"SELECT COUNT(*) FROM edges WHERE from_slug = ? OR to_slug = ?", slug, slug,
@@ -292,6 +292,9 @@ func (s *Store) ExpandGraph(seeds []string, maxHops int) ([]string, error) {
 		args = append(args, seed)
 	}
 
+	// TODO: For dense graphs, the CTE can explore exponentially since UNION deduplicates
+	// the final result but not intermediate paths. Consider iterative BFS with visited set
+	// if performance becomes an issue.
 	query := fmt.Sprintf(`
 		WITH RECURSIVE reachable(slug, depth) AS (
 			SELECT column1, 0

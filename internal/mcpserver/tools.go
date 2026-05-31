@@ -285,7 +285,7 @@ func HandleRelatedNotes(v *vault.Vault, slug string, db ...*store.Store) ([]Rela
 			relPath = "wiki/" + relSlug + ".md"
 		}
 
-		entry.Exists = v.FileExists(relPath)
+		entry.Exists = v.FileHasContent(relPath)
 		if entry.Exists {
 			fileContent, err := v.ReadFile(relPath)
 			if err == nil {
@@ -391,12 +391,13 @@ func HandleVaultOverview(v *vault.Vault, db *store.Store) (*VaultOverview, error
 	}
 
 	// Check soul.md existence.
-	overview.HasSoul = v.FileExists("soul.md")
+	overview.HasSoul = v.FileHasContent("soul.md")
 
 	return overview, nil
 }
 
 // HandleAddBookmark creates an inbox file for a URL to be processed by the pipeline.
+// Note: files with the same slug are silently overwritten (intentional — dedup by slug).
 func HandleAddBookmark(v *vault.Vault, rawURL, title string, tags []string) (string, error) {
 	if rawURL == "" {
 		return "", fmt.Errorf("url is required")
@@ -505,8 +506,14 @@ func HandleAddNote(v *vault.Vault, title, content string, tags []string) (string
 // HandleExpandGraph expands seed slugs by traversing wiki-link edges up to N hops.
 // Returns deduplicated slugs reachable from seeds, excluding the seeds themselves.
 func HandleExpandGraph(db *store.Store, seeds []string, hops int) ([]string, error) {
+	if db == nil {
+		return nil, fmt.Errorf("expanding graph: store is not available")
+	}
 	if hops < 1 {
 		hops = 2
+	}
+	if hops > 5 {
+		hops = 5
 	}
 	return db.ExpandGraph(seeds, hops)
 }

@@ -99,7 +99,7 @@ func formatInboxFile(bm Bookmark) string {
 	if len(bm.Tags) > 0 {
 		b.WriteString("tags:\n")
 		for _, tag := range bm.Tags {
-			fmt.Fprintf(&b, "  - %s\n", tag)
+			fmt.Fprintf(&b, "  - %q\n", tag)
 		}
 	}
 	b.WriteString("---\n\n")

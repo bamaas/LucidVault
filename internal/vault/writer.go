@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,10 +15,23 @@ var slugRe = regexp.MustCompile(`[^a-z0-9-]`)
 
 type Vault struct {
 	BasePath string
+	indexMu  sync.Mutex // protects concurrent read-modify-write on index.md
 }
 
 func New(basePath string) *Vault {
 	return &Vault{BasePath: basePath}
+}
+
+// safePath validates that rel resolves to a path under BasePath,
+// preventing path traversal attacks.
+func (v *Vault) safePath(rel string) (string, error) {
+	abs := filepath.Join(v.BasePath, rel)
+	abs = filepath.Clean(abs)
+	base := filepath.Clean(v.BasePath)
+	if abs != base && !strings.HasPrefix(abs, base+string(filepath.Separator)) {
+		return "", fmt.Errorf("path traversal attempt: %s", rel)
+	}
+	return abs, nil
 }
 
 func (v *Vault) Init() error {
@@ -133,7 +147,9 @@ func (v *Vault) ScanNotesDir() ([]string, error) {
 	return paths, nil
 }
 
-func (v *Vault) FileExists(relPath string) bool {
+// FileHasContent returns true if the file at relPath exists and contains
+// non-whitespace content. It reads the entire file to check.
+func (v *Vault) FileHasContent(relPath string) bool {
 	absPath := filepath.Join(v.BasePath, relPath)
 	data, err := os.ReadFile(absPath)
 	if err != nil {
@@ -143,7 +159,10 @@ func (v *Vault) FileExists(relPath string) bool {
 }
 
 func (v *Vault) ReadFile(relPath string) (string, error) {
-	absPath := filepath.Join(v.BasePath, relPath)
+	absPath, err := v.safePath(relPath)
+	if err != nil {
+		return "", err
+	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return "", fmt.Errorf("reading file %s: %w", relPath, err)
@@ -151,9 +170,11 @@ func (v *Vault) ReadFile(relPath string) (string, error) {
 	return string(data), nil
 }
 
-
 func (v *Vault) DeleteFile(relPath string) error {
-	absPath := filepath.Join(v.BasePath, relPath)
+	absPath, err := v.safePath(relPath)
+	if err != nil {
+		return err
+	}
 	if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("deleting file %s: %w", relPath, err)
 	}
@@ -162,7 +183,10 @@ func (v *Vault) DeleteFile(relPath string) error {
 
 func (v *Vault) WriteRaw(filename, content string) (string, error) {
 	relPath := filepath.Join("raw", filename)
-	absPath := filepath.Join(v.BasePath, relPath)
+	absPath, err := v.safePath(relPath)
+	if err != nil {
+		return "", err
+	}
 	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("writing raw file %s: %w", relPath, err)
 	}
@@ -171,7 +195,10 @@ func (v *Vault) WriteRaw(filename, content string) (string, error) {
 
 func (v *Vault) WriteWiki(filename, content string) (string, error) {
 	relPath := filepath.Join("wiki", filename)
-	absPath := filepath.Join(v.BasePath, relPath)
+	absPath, err := v.safePath(relPath)
+	if err != nil {
+		return "", err
+	}
 	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("writing wiki file %s: %w", relPath, err)
 	}
@@ -201,6 +228,9 @@ func (v *Vault) ReadSoul() (string, error) {
 }
 
 func (v *Vault) UpdateIndex(slug, title string, tags []string) error {
+	v.indexMu.Lock()
+	defer v.indexMu.Unlock()
+
 	indexPath := filepath.Join(v.BasePath, "index.md")
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
@@ -217,10 +247,8 @@ func (v *Vault) UpdateIndex(slug, title string, tags []string) error {
 		}
 	}
 
-	tagStr := ""
-	if len(tags) > 0 {
-		tagStr = " [" + strings.Join(tags, ", ") + "]"
-	}
+	// Always write tag brackets so parseIndexEntry can match every line.
+	tagStr := " [" + strings.Join(tags, ", ") + "]"
 
 	entry := fmt.Sprintf("- [[%s]] — %s%s\n", slug, sanitizeMarkdown(title), tagStr)
 	content += entry
@@ -235,6 +263,9 @@ func (v *Vault) UpdateIndex(slug, title string, tags []string) error {
 }
 
 func (v *Vault) RemoveFromIndex(slug string) error {
+	v.indexMu.Lock()
+	defer v.indexMu.Unlock()
+
 	indexPath := filepath.Join(v.BasePath, "index.md")
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
@@ -329,6 +360,11 @@ var utmParams = map[string]bool{
 func NormalizeURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
+		return rawURL
+	}
+
+	// Reject non-HTTP(S) schemes to avoid processing unexpected protocols.
+	if u.Scheme != "http" && u.Scheme != "https" {
 		return rawURL
 	}
 

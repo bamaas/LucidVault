@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -46,6 +47,11 @@ func (s *Scraper) SetYouTubeClient(yt *YouTubeClient) { s.youtube = yt }
 func (s *Scraper) Scrape(ctx context.Context, targetURL string) (*Result, error) {
 	if s.youtube != nil && IsYouTubeURL(targetURL) {
 		return s.youtube.FetchTranscript(ctx, targetURL)
+	}
+
+	u, err := url.Parse(targetURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, fmt.Errorf("scraping %s: invalid URL scheme", targetURL)
 	}
 
 	jinaURL := s.baseURL + targetURL

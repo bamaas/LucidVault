@@ -29,13 +29,20 @@ func Scan(vaultPath string) ([]NoteFile, error) {
 
 	err := filepath.WalkDir(notesDir, func(absPath string, d os.DirEntry, err error) error {
 		if err != nil {
-			// Skip unreadable directories instead of aborting the entire scan
+			// Fail if the notes directory itself is unreadable; skip subdirectories.
+			if absPath == notesDir {
+				return err
+			}
 			return nil
 		}
 		if d.IsDir() {
+			// Skip symlinked directories to avoid reading files outside the vault
+			if d.Type()&os.ModeSymlink != 0 {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		// Skip symlinks to avoid reading files outside the vault
+		// Skip symlinked files to avoid reading files outside the vault
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
@@ -107,7 +114,7 @@ func ParseFrontmatter(content string) []string {
 	lines := strings.Split(frontmatter, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed != line && trimmed != "" {
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
 			// Line has leading whitespace — it's a nested key, skip it
 			continue
 		}
