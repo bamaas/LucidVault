@@ -11,46 +11,19 @@ Repeat the following steps until the tester agent returns no actionable feedback
 
 ### Step 1 — Spawn a tester agent
 
-Spawn a subagent with the following instructions:
+Spawn a `test-reviewer` agent (subagent_type: `test-reviewer`) with prompt:
 
-> You are a senior Go engineer doing a thorough test review. Re-read CLAUDE.md
-> before starting. Review the current feature spec and all existing tests for
-> the code in scope.
->
-> Check for:
-> - Missing test cases (happy path, edge cases, error cases)
-> - Incorrect or weak assertions
-> - Tests that don't actually verify behavior (false greens)
-> - Missing table-driven tests where applicable
-> - Untested error handling paths
-> - Coverage gaps on critical logic
->
-> Return a structured list of missing or broken tests with:
-> - File and line reference
-> - Severity: critical / major / minor
-> - Clear description of what is missing or wrong
-> - Suggested test case or fix
->
-> You may skip trivial issues (e.g., style nitpicks in test helpers) if they
-> don't affect correctness or coverage.
->
-> If coverage and quality are acceptable, respond with exactly: "LGTM"
+> Review the current feature spec and all existing tests for the code in scope.
+> When done, return your structured findings or "LGTM".
 
 ### Step 2 — Apply fixes (subagent)
 
 - If the tester responded with "LGTM": stop the loop and report success.
-- Otherwise, spawn a subagent with the following instructions:
+- Otherwise, spawn a `test-fixer` agent (subagent_type: `test-fixer`) with prompt:
 
-> You are a senior Go engineer writing and fixing tests. Re-read CLAUDE.md
-> before starting. You have been given a list of test quality issues to fix.
+> Fix the following test quality issues. This is test round N.
 >
-> Process each issue by severity (critical first, then major, then minor).
-> Write or fix the tests, then run `mise run test` and `mise run lint` to
-> confirm everything passes.
->
-> When done, report: what tests you wrote/fixed, and confirm tests and lint pass.
-> Run /commit. Append the round number to the description:
-> `test(<scope>): <description> (test round N)`
+> [paste the tester's full issue list here]
 
 Pass the tester's full issue list to this subagent.
 
