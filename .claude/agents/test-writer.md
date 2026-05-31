@@ -16,6 +16,9 @@ Write tests based purely on the spec — inputs, expected outputs, error cases.
 - Do NOT look at existing implementation details to shape your tests
 - Use table-driven tests where applicable
 - Cover happy path, edge cases, and error cases
-- Follow test conventions from CLAUDE.md and `.claude/skills/golang/`
+- Read and follow these skills before writing tests:
+  - `.claude/skills/golang-testing/` — test patterns, table-driven tests, test helpers
+  - `.claude/skills/golang-stretchr-testify/` — assert/require/mock/suite usage
+  - `.claude/skills/golang-err-handling/` — error wrapping, sentinel errors, errors.Is/As
 
 When done, report what test files and cases you wrote.

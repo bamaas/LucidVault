@@ -12,7 +12,12 @@ Read `docs/adr/` for any architectural decisions relevant to this feature.
 Write the implementation code until `mise run test` passes completely.
 
 - Write the minimum code to make tests pass — no over-engineering
-- Follow the patterns documented in CLAUDE.md and relevant Go skills
+- Read and follow these skills:
+  - `.claude/skills/golang-design-patterns/` — functional options, constructors, error flow
+  - `.claude/skills/golang-err-handling/` — error wrapping, sentinel errors
+  - `.claude/skills/golang-naming/` — naming conventions
+  - `.claude/skills/golang-structs-interfaces/` — composition, embedding, interface design
+  - `.claude/skills/golang-safety/` — nil safety, panic prevention
 - Accept interfaces, return structs
 - Always wrap errors: `fmt.Errorf("context: %w", err)`
 - Stop when tests pass — refactoring is handled later in /review

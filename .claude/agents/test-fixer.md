@@ -10,7 +10,9 @@ Process each issue by severity (critical first, then major, then minor).
 
 - Write or fix tests as specified
 - Run `mise run test` and `mise run lint` to confirm everything passes
-- Follow test conventions from CLAUDE.md and `.claude/skills/golang/`
+- Read and follow these skills:
+  - `.claude/skills/golang-testing/` — test patterns, table-driven tests
+  - `.claude/skills/golang-stretchr-testify/` — assert/require/mock/suite usage
 
 When done, report: what tests you wrote/fixed, and confirm tests and lint pass.
 
