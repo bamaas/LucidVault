@@ -8,6 +8,15 @@ The user provides a plan path as argument: $ARGUMENTS
 
 If no argument given, look for plans in `docs/plans/` and ask the user which one to deliver.
 
+## Subagent model strategy
+
+This pipeline uses model tiering to balance cost and quality:
+- **Opus**: judgment-heavy agents (`test-reviewer`, `code-reviewer`) — defined in `.claude/agents/`
+- **Sonnet**: execution agents (`test-writer`, `implementer`, `test-fixer`, `review-fixer`) — defined in `.claude/agents/`
+- **Sonnet**: phase orchestrator subagents below — set `model: "sonnet"` on the Agent tool call
+
+The agent files in `.claude/agents/` already specify their model. Phase orchestrators should be spawned with `model: "sonnet"` since they just delegate to named agents.
+
 ## Step 1 — Understand the plan and detect mode
 
 - Read the plan file at the given path.
@@ -20,10 +29,10 @@ If no argument given, look for plans in `docs/plans/` and ask the user which one
 
 ### Single mode
 
-Spawn a subagent with these instructions:
+Spawn a subagent (model: sonnet) with these instructions:
 > Run /implement with plan path: [path to plan file]. This handles the full TDD
-> cycle: pull latest from main, write failing tests via a nested subagent
-> (spec-only), implement via another subagent, lint, document, and commit.
+> cycle: pull latest from main, write failing tests via the `test-writer` agent,
+> implement via the `implementer` agent, lint, document, and commit.
 >
 > When done, report: what was implemented, what tests were written, and what
 > commits were created.
@@ -32,22 +41,19 @@ Spawn a subagent with these instructions:
 
 For each sub-plan in order (01, 02, 03, ...):
 
-1. **Implement** — Spawn a subagent:
+1. **Implement** — Spawn a subagent (model: sonnet):
    > Run /implement with plan path: [path to sub-plan file]. This handles the full
-   > TDD cycle: pull latest from main, write failing tests via a nested subagent
-   > (spec-only), implement via another subagent, lint, document, and commit.
-   >
-   > When done, report: what was implemented, what tests were written, and what
-   > commits were created.
+   > TDD cycle. When done, report: what was implemented, what tests were written,
+   > and what commits were created.
 
-2. **Test quality** — Spawn a subagent:
+2. **Test quality** — Spawn a subagent (model: sonnet):
    > Run /test iteratively to verify test quality, coverage, and catch false greens.
    > Focus on the code changed in this sub-plan.
    >
    > When done, report: rounds completed, issues found and fixed, any intentionally
    > skipped gaps and why.
 
-3. **Review** — Spawn a subagent:
+3. **Review** — Spawn a subagent (model: sonnet):
    > Run /review iteratively until the code is clean. Focus on the code changed in
    > this sub-plan.
    >
@@ -62,7 +68,7 @@ After all sub-plans complete: skip to Step 5 (PR).
 
 ## Step 3 — Test quality (single mode only)
 
-Spawn a subagent with these instructions:
+Spawn a subagent (model: sonnet) with these instructions:
 > Run /test iteratively to verify test quality, coverage, and catch false greens.
 >
 > When done, report: rounds completed, issues found and fixed, any intentionally
@@ -70,7 +76,7 @@ Spawn a subagent with these instructions:
 
 ## Step 4 — Review (single mode only)
 
-Spawn a subagent with these instructions:
+Spawn a subagent (model: sonnet) with these instructions:
 > Run /review iteratively until the code is clean.
 >
 > When done, report: rounds completed, issues found and fixed, any intentionally
@@ -78,7 +84,7 @@ Spawn a subagent with these instructions:
 
 ## Step 5 — PR
 
-Spawn a subagent with these instructions:
+Spawn a subagent (model: sonnet) with these instructions:
 > Run /pr to push the branch and open a PR with auto-merge enabled.
 >
 > When done, report: PR URL, title, and whether auto-merge was set.

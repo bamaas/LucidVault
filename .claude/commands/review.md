@@ -9,46 +9,20 @@ Repeat the following steps until the reviewer agent returns no actionable feedba
 
 ### Step 1 — Spawn a reviewer agent
 
-Spawn a subagent with the following instructions:
+Spawn a `code-reviewer` agent (subagent_type: `code-reviewer`) with prompt:
 
-> You are a senior Go engineer doing a thorough code review. Re-read CLAUDE.md
-> before starting. Review all staged/uncommitted changes and recently modified files.
->
-> Check for:
-> - Correctness and logic errors
-> - Go idioms and conventions
-> - Error handling (always `fmt.Errorf("context: %w", err)`)
-> - Security issues
-> - Performance concerns
-> - Test coverage gaps
-> - Naming and readability
-> - Adherence to design principles in CLAUDE.md (KISS, minimal impact, separation of concerns)
->
-> Return a structured list of issues with:
-> - File and line reference
-> - Severity: critical / major / minor / trivial
-> - Clear description of the problem
-> - Suggested fix
->
-> You may skip trivial issues (e.g., style nitpicks) if they don't affect
-> correctness or maintainability. If all remaining issues are trivial or
-> intentionally out-of-scope, respond with exactly: "LGTM"
+> Review all staged/uncommitted changes and recently modified files. Focus on the
+> code changed in the current feature. When done, return your structured findings
+> or "LGTM".
 
 ### Step 2 — Apply fixes (subagent)
 
 - If the reviewer responded with "LGTM": stop the loop and report success.
-- Otherwise, spawn a subagent with the following instructions:
+- Otherwise, spawn a `review-fixer` agent (subagent_type: `review-fixer`) with prompt:
 
-> You are a senior Go engineer applying code review fixes. Re-read CLAUDE.md
-> before starting. You have been given a list of review issues to fix.
+> Fix the following code review issues. This is review round N.
 >
-> Process each issue by severity (critical first, then major, then minor).
-> Apply the fixes, then run `mise run test` and `mise run lint` to confirm
-> nothing is broken.
->
-> When done, report: what you fixed, and confirm tests and lint pass.
-> Run /commit. Append the round number to the description:
-> `fix(<scope>): <description> (review round N)`
+> [paste the reviewer's full issue list here]
 
 Pass the reviewer's full issue list to this subagent.
 
