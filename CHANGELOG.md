@@ -1,3 +1,15 @@
+## v0.20.0 (2026-05-31)
+
+### Feat
+
+- add agent retrieval MCP tools and AGENTS.md generation (#63)
+
+## v0.19.0 (2026-05-31)
+
+### Feat
+
+- add subagent config files with model tiering for deliver pipeline (#64)
+
 ## v0.18.0 (2026-05-30)
 
 ### Feat
