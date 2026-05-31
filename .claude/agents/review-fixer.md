@@ -10,7 +10,11 @@ Process each issue by severity (critical first, then major, then minor).
 
 - Apply the fixes as specified
 - Run `mise run test` and `mise run lint` to confirm nothing is broken
-- Follow patterns documented in CLAUDE.md and relevant Go skills
+- Read and follow these skills:
+  - `.claude/skills/golang-design-patterns/` — idiomatic patterns, error flow
+  - `.claude/skills/golang-err-handling/` — error wrapping, sentinel errors
+  - `.claude/skills/golang-naming/` — naming conventions
+  - `.claude/skills/golang-safety/` — nil safety, panic prevention
 
 When done, report: what you fixed, and confirm tests and lint pass.
 
