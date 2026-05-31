@@ -93,23 +93,24 @@ func HandleUpdateWiki(v *vault.Vault, db *store.Store, slug, section, content st
 // Returns a DeleteResult with dangling references.
 // File mutations are wrapped in WithFileLock (D4).
 func HandleDeletePage(v *vault.Vault, db *store.Store, slug string) (*DeleteResult, error) {
-	// D12: Collect inbound edges BEFORE any deletion.
-	if !v.FileExists("wiki/" + slug + ".md") {
-		return nil, fmt.Errorf("wiki page %q not found", slug)
-	}
+	var danglingRefs []string
 
-	inbound, err := db.GetInboundEdges(slug)
-	if err != nil {
-		return nil, fmt.Errorf("collecting inbound edges for %q: %w", slug, err)
-	}
+	// All checks and mutations inside the lock to avoid TOCTOU races.
+	err := db.WithFileLock(func() error {
+		// D12: Collect inbound edges BEFORE any deletion.
+		if !v.FileHasContent("wiki/" + slug + ".md") {
+			return fmt.Errorf("wiki page %q not found", slug)
+		}
 
-	danglingRefs := make([]string, 0, len(inbound))
-	for _, e := range inbound {
-		danglingRefs = append(danglingRefs, e.FromSlug)
-	}
+		inbound, err := db.GetInboundEdges(slug)
+		if err != nil {
+			return fmt.Errorf("collecting inbound edges for %q: %w", slug, err)
+		}
 
-	// File mutations inside the lock.
-	err = db.WithFileLock(func() error {
+		danglingRefs = make([]string, 0, len(inbound))
+		for _, e := range inbound {
+			danglingRefs = append(danglingRefs, e.FromSlug)
+		}
 		// Delete wiki file.
 		if err := v.DeleteFile("wiki/" + slug + ".md"); err != nil {
 			return fmt.Errorf("deleting wiki file %q: %w", slug, err)
@@ -224,7 +225,7 @@ func parseSections(body string) []sectionBlock {
 // splitFrontmatter separates YAML frontmatter from the body.
 // Returns the frontmatter (including --- delimiters and trailing newline) and the body.
 func splitFrontmatter(content string) (string, string) {
-	if !strings.HasPrefix(content, "---") {
+	if !strings.HasPrefix(content, "---\n") && content != "---" {
 		return "", content
 	}
 

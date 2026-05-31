@@ -46,7 +46,9 @@ func (v *Vault) UpdateRelatedSection(relPath string, newLinks []string) error {
 		}
 	}
 
-	// Find footer index (--- followed by *Source:)
+	// Find footer index (--- followed by *Source:).
+	// Assumes the YAML frontmatter closing delimiter at the top of the file
+	// will NOT be followed by a "*Source:" line, so this won't false-match.
 	footerIdx := -1
 	for i := 0; i < len(lines)-1; i++ {
 		if strings.TrimSpace(lines[i]) == "---" && strings.HasPrefix(strings.TrimSpace(lines[i+1]), "*Source:") {

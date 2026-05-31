@@ -82,26 +82,40 @@ func (s *Store) migrate() error {
 	// Add wiki_path column to notes table (idempotent — ignores if already exists)
 	_, _ = s.db.Exec(`ALTER TABLE notes ADD COLUMN wiki_path TEXT NOT NULL DEFAULT ''`)
 
-	// Deduplicate url_normalized before creating unique index (keeps newest row).
-	// Exclude NULL values to avoid grouping unrelated rows.
-	_, err = s.db.Exec(`
-		DELETE FROM bookmarks WHERE url_normalized IS NOT NULL AND id NOT IN (
-			SELECT MAX(id) FROM bookmarks WHERE url_normalized IS NOT NULL GROUP BY url_normalized
-		)
-	`)
-	if err != nil {
-		return fmt.Errorf("deduplicating bookmarks: %w", err)
+	// Read current schema version to avoid running destructive migrations on every startup.
+	var version int
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("reading user_version: %w", err)
 	}
 
-	// Add unique index on url_normalized for upsert support.
-	// Drop the old non-unique index first, then create unique one.
-	_, err = s.db.Exec(`
-		DROP INDEX IF EXISTS idx_bookmarks_url_normalized;
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_bookmarks_url_normalized ON bookmarks(url_normalized);
-	`)
-	if err != nil {
-		return fmt.Errorf("creating unique url index: %w", err)
+	if version < 1 {
+		// Deduplicate url_normalized before creating unique index (keeps newest row).
+		// Exclude NULL values to avoid grouping unrelated rows.
+		_, err = s.db.Exec(`
+			DELETE FROM bookmarks WHERE url_normalized IS NOT NULL AND id NOT IN (
+				SELECT MAX(id) FROM bookmarks WHERE url_normalized IS NOT NULL GROUP BY url_normalized
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("deduplicating bookmarks: %w", err)
+		}
+
+		// Add unique index on url_normalized for upsert support.
+		// Drop the old non-unique index first, then create unique one.
+		_, err = s.db.Exec(`
+			DROP INDEX IF EXISTS idx_bookmarks_url_normalized;
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_bookmarks_url_normalized ON bookmarks(url_normalized);
+		`)
+		if err != nil {
+			return fmt.Errorf("creating unique url index: %w", err)
+		}
+
+		// Mark migration as complete so dedup does not run again.
+		if _, err := s.db.Exec("PRAGMA user_version = 1"); err != nil {
+			return fmt.Errorf("setting user_version: %w", err)
+		}
 	}
+
 	return nil
 }
 
@@ -241,5 +255,8 @@ func (s *Store) ListNotes() ([]NoteRecord, error) {
 }
 
 func (s *Store) Close() error {
-	return s.db.Close()
+	if err := s.db.Close(); err != nil {
+		return fmt.Errorf("closing database: %w", err)
+	}
+	return nil
 }

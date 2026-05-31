@@ -111,6 +111,10 @@ func (yt *YouTubeClient) FetchTranscript(ctx context.Context, videoURL string) (
 func (yt *YouTubeClient) pollJob(ctx context.Context, jobID string) (*Result, error) {
 	endpoint := fmt.Sprintf("%s/v1/transcript/%s", yt.baseURL, url.PathEscape(jobID))
 
+	// Tolerate transient HTTP errors (5xx, 429) up to a limit before giving up.
+	transientErrors := 0
+	const maxTransientErrors = 3
+
 	for range maxPollAttempts {
 		select {
 		case <-ctx.Done():
@@ -136,6 +140,12 @@ func (yt *YouTubeClient) pollJob(ctx context.Context, jobID string) (*Result, er
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+				transientErrors++
+				if transientErrors <= maxTransientErrors {
+					continue
+				}
+			}
 			return &Result{OK: false}, fmt.Errorf("supadata poll returned %d for job %s: %s", resp.StatusCode, jobID, string(body))
 		}
 

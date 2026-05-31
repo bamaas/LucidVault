@@ -343,19 +343,26 @@ func TestRunPollCycle_RunsHygieneAtInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate poll cycles — hygiene should run on Nth cycle
-	cfg := &config{hygieneInterval: 2}
+	// Simulate poll cycles — hygiene should run on Nth cycle.
+	// Uses the same scheduling logic as runPollCycle (step 4).
+	hygieneInterval := 2
+	pollCycleCount = 0
 
 	// Cycle 1: no hygiene yet
-	pollCycleCount = 0
-	runPollCycleWithHygiene(cfg, db, v)
+	pollCycleCount++
+	if hygieneInterval > 0 && pollCycleCount%hygieneInterval == 0 {
+		runHygiene(db, v)
+	}
 	count, _ := db.EdgeCount()
 	if count == 0 {
 		t.Error("expected broken edge to survive first cycle (hygiene not yet triggered)")
 	}
 
 	// Cycle 2: hygiene runs
-	runPollCycleWithHygiene(cfg, db, v)
+	pollCycleCount++
+	if hygieneInterval > 0 && pollCycleCount%hygieneInterval == 0 {
+		runHygiene(db, v)
+	}
 	count, _ = db.EdgeCount()
 	if count != 0 {
 		t.Errorf("expected broken edge to be cleaned on 2nd cycle, got %d edges", count)

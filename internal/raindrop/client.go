@@ -60,9 +60,11 @@ func NewClient(token string) *Client {
 // sort=created). Deduplication against already-processed bookmarks is handled
 // by the caller via the database.
 func (c *Client) FetchBookmarks(ctx context.Context) ([]Bookmark, error) {
+	const maxPages = 200
+
 	var allBookmarks []Bookmark
 
-	for page := 0; ; page++ {
+	for page := 0; page < maxPages; page++ {
 		url := fmt.Sprintf("%s/raindrops/0?sort=created&page=%d&perpage=25", baseURL, page)
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
@@ -95,10 +97,17 @@ func (c *Client) FetchBookmarks(ctx context.Context) ([]Bookmark, error) {
 		}
 
 		for _, item := range result.Items {
+			// Direct conversion works because Bookmark and raindropBookmark share
+			// identical fields. If fields diverge, the compiler will catch it.
 			allBookmarks = append(allBookmarks, Bookmark(item))
 		}
 
 		slog.Info("fetched raindrop page", "page", page, "items", len(result.Items), "total", len(allBookmarks))
+
+	}
+
+	if len(allBookmarks) >= maxPages*25 {
+		slog.Warn("raindrop pagination reached max page limit, results may be incomplete", "maxPages", maxPages, "total", len(allBookmarks))
 	}
 
 	return allBookmarks, nil

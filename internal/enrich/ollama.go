@@ -90,6 +90,7 @@ func (c *Client) Enrich(ctx context.Context, input *EnrichInput) (string, error)
 	case <-time.After(time.Duration(c.delayMs) * time.Millisecond):
 	}
 
+	// TODO: extract shared retry-with-backoff helper to reduce duplication
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		result, statusCode, err := c.callAPI(ctx, prompt)
 		if err == nil {
@@ -150,6 +151,7 @@ func (c *Client) SuggestTags(ctx context.Context, input *TagInput) ([]string, er
 	case <-time.After(time.Duration(c.delayMs) * time.Millisecond):
 	}
 
+	// TODO: extract shared retry-with-backoff helper to reduce duplication
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		result, statusCode, err := c.callAPI(ctx, prompt)
 		if err == nil {
@@ -347,8 +349,10 @@ func buildMinimalPage(input *EnrichInput) string {
 	}
 	var b strings.Builder
 	b.WriteString("---\n")
-	fmt.Fprintf(&b, "title: %q\n", title)
-	fmt.Fprintf(&b, "source: %q\n", input.URL)
+	safeTitle := strings.ReplaceAll(title, "'", "''")
+	fmt.Fprintf(&b, "title: '%s'\n", safeTitle)
+	safeSource := strings.ReplaceAll(input.URL, "'", "''")
+	fmt.Fprintf(&b, "source: '%s'\n", safeSource)
 	fmt.Fprintf(&b, "date_saved: %s\n", input.DateSaved)
 	b.WriteString("tags:\n")
 	for _, t := range input.UserTags {

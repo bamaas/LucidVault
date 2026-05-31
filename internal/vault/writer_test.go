@@ -155,7 +155,7 @@ func TestDeleteFile_NonExistent(t *testing.T) {
 	}
 }
 
-func TestFileExists_Present(t *testing.T) {
+func TestFileHasContent_Present(t *testing.T) {
 	dir := t.TempDir()
 	v := New(dir)
 
@@ -168,21 +168,21 @@ func TestFileExists_Present(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !v.FileExists(relPath) {
-		t.Error("expected FileExists to return true for existing file with content")
+	if !v.FileHasContent(relPath) {
+		t.Error("expected FileHasContent to return true for existing file with content")
 	}
 }
 
-func TestFileExists_Missing(t *testing.T) {
+func TestFileHasContent_Missing(t *testing.T) {
 	dir := t.TempDir()
 	v := New(dir)
 
-	if v.FileExists("wiki/nonexistent.md") {
-		t.Error("expected FileExists to return false for missing file")
+	if v.FileHasContent("wiki/nonexistent.md") {
+		t.Error("expected FileHasContent to return false for missing file")
 	}
 }
 
-func TestFileExists_Empty(t *testing.T) {
+func TestFileHasContent_Empty(t *testing.T) {
 	dir := t.TempDir()
 	v := New(dir)
 
@@ -194,8 +194,8 @@ func TestFileExists_Empty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if v.FileExists(relPath) {
-		t.Error("expected FileExists to return false for empty file")
+	if v.FileHasContent(relPath) {
+		t.Error("expected FileHasContent to return false for empty file")
 	}
 }
 
@@ -368,7 +368,7 @@ func TestScanNotesDir_NoNotesDir(t *testing.T) {
 	}
 }
 
-func TestFileExists_WhitespaceOnly(t *testing.T) {
+func TestFileHasContent_WhitespaceOnly(t *testing.T) {
 	dir := t.TempDir()
 	v := New(dir)
 
@@ -380,7 +380,7 @@ func TestFileExists_WhitespaceOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if v.FileExists(relPath) {
-		t.Error("expected FileExists to return false for whitespace-only file")
+	if v.FileHasContent(relPath) {
+		t.Error("expected FileHasContent to return false for whitespace-only file")
 	}
 }
