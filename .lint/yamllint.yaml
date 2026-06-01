@@ -4,6 +4,8 @@ extends: default
 ignore:
   - ".claude/skills/"
   - ".claude/cc-skills-golang/"
+  - "worktrees/**"
+  - ".lean-ctx/**"
 
 rules:
   document-start: disable

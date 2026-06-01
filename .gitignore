@@ -10,3 +10,5 @@ test-vault/
 .ignore
 tasks/
 plan.md
+worktrees/
+.lean-ctx/
