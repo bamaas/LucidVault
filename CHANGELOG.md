@@ -1,3 +1,9 @@
+## v0.20.3 (2026-06-01)
+
+### Fix
+
+- docker-compose file user mapping (#69)
+
 ## v0.20.2 (2026-05-31)
 
 ### Fix
