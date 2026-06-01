@@ -18,8 +18,9 @@ services:
       - OLLAMA_MODEL=${OLLAMA_MODEL:-}
       - POLL_INTERVAL=${POLL_INTERVAL:-}
     volumes:
-      - vault:/vault
+      - ./vault:/vault
       - db:/data
+    user: "1000:1000"
     depends_on:
       - couchdb
     restart: unless-stopped
@@ -46,6 +47,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  vault:
   db:
   couchdb_data:
