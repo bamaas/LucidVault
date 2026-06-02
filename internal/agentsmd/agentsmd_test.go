@@ -85,6 +85,57 @@ func TestGenerate_WithToolsAndStats(t *testing.T) {
 	}
 }
 
+func TestGenerate_RetrievalInstructionSections(t *testing.T) {
+	// These static sections must render regardless of dynamic content,
+	// so assert with empty tools and zero-value stats.
+	result := Generate(nil, VaultStats{})
+
+	// Section 1 -- Query Expansion.
+	if !strings.Contains(result, "## Query Expansion") {
+		t.Error("missing '## Query Expansion' section")
+	}
+	// Synonym / abbreviation guidance (e.g. k8s -> kubernetes).
+	if !strings.Contains(result, "k8s") || !strings.Contains(result, "kubernetes") {
+		t.Error("missing synonym/abbreviation guidance (k8s -> kubernetes) in Query Expansion")
+	}
+	// Personalization via soul.md.
+	if !strings.Contains(result, "soul.md") {
+		t.Error("missing soul.md personalization guidance in Query Expansion")
+	}
+	// Lateral terms via tags and wikilinks.
+	if !strings.Contains(result, "[[wikilinks]]") {
+		t.Error("missing lateral-term ([[wikilinks]]) guidance in Query Expansion")
+	}
+
+	// Section 2 -- Source Attribution.
+	if !strings.Contains(result, "## Source Attribution") {
+		t.Error("missing '## Source Attribution' section")
+	}
+	// Must cover vault, model knowledge, and web origins.
+	if !strings.Contains(result, "Vault") {
+		t.Error("missing vault origin guidance in Source Attribution")
+	}
+	if !strings.Contains(result, "Model knowledge") {
+		t.Error("missing model-knowledge origin guidance in Source Attribution")
+	}
+	if !strings.Contains(result, "Web search") {
+		t.Error("missing web-search origin guidance in Source Attribution")
+	}
+
+	// Section 3 -- Web Search.
+	if !strings.Contains(result, "## Web Search") {
+		t.Error("missing '## Web Search' section")
+	}
+	// Vault-first guidance.
+	if !strings.Contains(result, "vault") {
+		t.Error("missing vault-first guidance in Web Search")
+	}
+	// Cite URLs guidance.
+	if !strings.Contains(result, "URL") {
+		t.Error("missing 'cite URLs' guidance in Web Search")
+	}
+}
+
 func TestGenerate_EmptyTools(t *testing.T) {
 	stats := VaultStats{
 		WikiCount: 5,
