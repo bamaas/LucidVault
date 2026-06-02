@@ -69,6 +69,42 @@ func TestHostGuard(t *testing.T) {
 			host:       "lucidvault-mcp",
 			wantStatus: http.StatusOK,
 		},
+		{
+			name:       "ipv6 literal with port passes",
+			allowed:    []string{"::1"},
+			host:       "[::1]:8080",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "ipv6 literal without port passes",
+			allowed:    []string{"::1"},
+			host:       "[::1]",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "foreign ipv6 literal blocked",
+			allowed:    []string{"::1"},
+			host:       "[2001:db8::1]:8080",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "malformed ipv6 literal without closing bracket blocked",
+			allowed:    []string{"::1"},
+			host:       "[::1",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "case-insensitive host match passes",
+			allowed:    []string{"localhost"},
+			host:       "LOCALHOST",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "whitespace-only allowlist entries disable guard",
+			allowed:    []string{"  ", ""},
+			host:       "anything.example.com",
+			wantStatus: http.StatusOK,
+		},
 	}
 
 	for _, tt := range tests {
@@ -83,6 +119,29 @@ func TestHostGuard(t *testing.T) {
 					tt.host, tt.allowed, rec.Code, tt.wantStatus)
 			}
 		})
+	}
+}
+
+// TestStripPort verifies host/port splitting across bare hosts, host:port,
+// IPv6 literals (with and without port), and the empty-string edge case.
+func TestStripPort(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{in: "", want: ""},
+		{in: "localhost", want: "localhost"},
+		{in: "localhost:8080", want: "localhost"},
+		{in: "127.0.0.1:8080", want: "127.0.0.1"},
+		{in: "[::1]", want: "::1"},
+		{in: "[::1]:8080", want: "::1"},
+		{in: "[2001:db8::1]:443", want: "2001:db8::1"},
+		{in: "[::1", want: "[::1"}, // malformed: no closing bracket → returned as-is
+	}
+	for _, tt := range tests {
+		if got := stripPort(tt.in); got != tt.want {
+			t.Errorf("stripPort(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
 
@@ -120,6 +179,52 @@ func TestNewServer(t *testing.T) {
 				i, serverNames[i], staticNames[i])
 		}
 	}
+}
+
+// TestNewServer_NilStore verifies NewServer's documented contract that, when the
+// store is nil, the write/graph tools requiring it (update_wiki, expand_graph,
+// delete_page) are NOT registered, while all store-independent tools remain.
+func TestNewServer_NilStore(t *testing.T) {
+	v := vault.New(t.TempDir())
+
+	s := NewServer(v, nil)
+	if s == nil {
+		t.Fatal("NewServer returned nil")
+	}
+
+	registered := s.ListTools()
+
+	// Tools gated behind a non-nil store must be absent.
+	storeGated := []string{"update_wiki", "expand_graph", "delete_page"}
+	for _, name := range storeGated {
+		if _, ok := registered[name]; ok {
+			t.Errorf("tool %q should not be registered when store is nil", name)
+		}
+	}
+
+	// Every other tool from the static list must still be present.
+	for _, tool := range RegisteredTools() {
+		if isStoreGated(tool.Name, storeGated) {
+			continue
+		}
+		if _, ok := registered[tool.Name]; !ok {
+			t.Errorf("store-independent tool %q missing when store is nil", tool.Name)
+		}
+	}
+
+	// Sanity: the only difference from the full set is exactly the gated tools.
+	if got, want := len(registered), len(RegisteredTools())-len(storeGated); got != want {
+		t.Errorf("nil-store tool count: got %d, want %d", got, want)
+	}
+}
+
+func isStoreGated(name string, gated []string) bool {
+	for _, g := range gated {
+		if name == g {
+			return true
+		}
+	}
+	return false
 }
 
 // TestServeHTTP_CleanShutdown verifies that cancelling the context returns nil
@@ -176,8 +281,9 @@ func TestServeHTTP_BindFailure(t *testing.T) {
 	}
 }
 
-// TestServeHTTP_ServesRequests verifies the running server answers HTTP requests
-// (an unguarded foreign host is rejected when an allowlist is set).
+// TestServeHTTP_HostGuardIntegration verifies the running HTTP server applies
+// the Host-guard end-to-end: a foreign Host header is rejected with 403 when an
+// allowlist is configured.
 func TestServeHTTP_HostGuardIntegration(t *testing.T) {
 	v := vault.New(t.TempDir())
 	db := newTestStoreForMCP(t)
