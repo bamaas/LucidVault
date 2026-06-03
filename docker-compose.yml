@@ -17,6 +17,12 @@ services:
       - SUPADATA_API_KEY=${SUPADATA_API_KEY:-}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-}
       - POLL_INTERVAL=${POLL_INTERVAL:-}
+      # Expose MCP over HTTP in-process (empty = off). See README "Exposing MCP".
+      - MCP_HTTP_ADDR=${MCP_HTTP_ADDR:-}
+      - MCP_ALLOWED_HOST=${MCP_ALLOWED_HOST:-}
+    # ports:
+    #   # Loopback-only — never bind 0.0.0.0 for MCP. Uncomment with MCP_HTTP_ADDR=:8080.
+    #   - "127.0.0.1:8080:8080"
     volumes:
       - ./vault:/vault
       - db:/data
