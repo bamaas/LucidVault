@@ -1,3 +1,9 @@
+## v0.22.1 (2026-06-03)
+
+### Fix
+
+- **agentsmd**: require the original source URL in vault citations (#74)
+
 ## v0.22.0 (2026-06-03)
 
 ### Feat
