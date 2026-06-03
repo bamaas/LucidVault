@@ -37,6 +37,8 @@ type config struct {
 	forceReEnrich   bool
 	forceReFetch    bool
 	hygieneInterval int
+	mcpHTTPAddr     string
+	mcpAllowedHosts []string
 }
 
 // pollCycleCount tracks the number of poll cycles for hygiene scheduling.
@@ -152,6 +154,22 @@ func main() {
 		slog.Info("shutdown signal received, finishing current item...", "signal", sig)
 		cancel()
 	}()
+
+	// Serve MCP over HTTP in-process, sharing the pipeline's store and vault.
+	// Skipped for one-shot modes (--re-enrich / --re-fetch) which exit quickly.
+	if cfg.mcpHTTPAddr != "" && !cfg.forceReEnrich && !cfg.forceReFetch {
+		mcpSrv := mcpserver.NewServer(v, db)
+		slog.Info("starting in-process MCP HTTP server",
+			"addr", cfg.mcpHTTPAddr,
+			"allowed_hosts", cfg.mcpAllowedHosts,
+		)
+		go func() {
+			if err := mcpserver.ServeHTTP(ctx, mcpSrv, cfg.mcpHTTPAddr, cfg.mcpAllowedHosts); err != nil {
+				slog.Error("mcp http server failed", "error", err)
+				cancel() // a bind failure must not leave a half-running daemon
+			}
+		}()
+	}
 
 	slog.Info("starting lucidvault",
 		"poll_interval", cfg.pollInterval,
@@ -761,19 +779,47 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 		}
 		hygieneInterval = n
 	}
+
+	// MCP_HTTP_ADDR empty → in-process MCP server disabled (default).
+	mcpHTTPAddr := os.Getenv("MCP_HTTP_ADDR")
+	mcpAllowedHosts := parseAllowedHosts(os.LookupEnv("MCP_ALLOWED_HOST"))
+
 	return &config{
-		raindropToken:  raindropToken,
-		ollamaAPIKey:   apiKey,
-		ollamaModel:    model,
-		vaultPath:      vaultPath,
-		pollInterval:   pollInterval,
-		enrichDelayMs:  enrichDelayMs,
-		enrichRetries:  enrichRetries,
-		supadataAPIKey: supadataAPIKey,
-		forceReEnrich:  forceReEnrich,
+		raindropToken:   raindropToken,
+		ollamaAPIKey:    apiKey,
+		ollamaModel:     model,
+		vaultPath:       vaultPath,
+		pollInterval:    pollInterval,
+		enrichDelayMs:   enrichDelayMs,
+		enrichRetries:   enrichRetries,
+		supadataAPIKey:  supadataAPIKey,
+		forceReEnrich:   forceReEnrich,
 		forceReFetch:    forceReFetch,
 		hygieneInterval: hygieneInterval,
+		mcpHTTPAddr:     mcpHTTPAddr,
+		mcpAllowedHosts: mcpAllowedHosts,
 	}, nil
+}
+
+// parseAllowedHosts resolves the MCP Host-guard allowlist from MCP_ALLOWED_HOST.
+//   - unset (present=false)        → default localhost,127.0.0.1
+//   - "*" or empty-after-trim      → nil (guard disabled; rely on network policy)
+//   - comma-separated otherwise    → trimmed, non-empty entries
+func parseAllowedHosts(value string, present bool) []string {
+	if !present {
+		return []string{"localhost", "127.0.0.1"}
+	}
+	if strings.TrimSpace(value) == "" || strings.TrimSpace(value) == "*" {
+		return nil
+	}
+	var hosts []string
+	for _, h := range strings.Split(value, ",") {
+		h = strings.TrimSpace(h)
+		if h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
 }
 
 // resolveContainerPath finds the actual mount point for a given host path by

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -15,9 +17,13 @@ import (
 	"lucidvault/internal/vault"
 )
 
-// Run starts the MCP server. If httpAddr is non-empty, it serves Streamable HTTP
-// on that address; otherwise it uses stdio transport.
-// dbPath is the path to the SQLite database for write operations (edges, bookmarks, notes).
+// Run starts the standalone MCP server (the `lucidvault mcp` subcommand). If
+// httpAddr is non-empty, it serves Streamable HTTP on that address with a
+// localhost Host-guard; otherwise it uses stdio transport. dbPath is the path
+// to the SQLite database for write operations (edges, bookmarks, notes).
+//
+// For the in-process server that runs alongside the pipeline, use NewServer +
+// ServeHTTP directly with a shared *store.Store and *vault.Vault.
 func Run(vaultPath, httpAddr, dbPath string) {
 	v := vault.New(vaultPath)
 
@@ -31,18 +37,14 @@ func Run(vaultPath, httpAddr, dbPath string) {
 		defer func() { _ = db.Close() }()
 	}
 
-	s := server.NewMCPServer(
-		"lucidvault",
-		"1.0.0",
-		server.WithToolCapabilities(false),
-	)
-
-	registerTools(s, v, db)
+	s := NewServer(v, db)
 
 	if httpAddr != "" {
-		httpServer := server.NewStreamableHTTPServer(s)
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
 		log.Printf("LucidVault MCP server listening on %s", httpAddr)
-		if err := httpServer.Start(httpAddr); err != nil {
+		// Standalone HTTP defaults to a localhost-only Host-guard.
+		if err := ServeHTTP(ctx, s, httpAddr, []string{"localhost", "127.0.0.1"}); err != nil {
 			log.Fatalf("MCP HTTP server error: %v", err)
 		}
 	} else {

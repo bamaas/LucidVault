@@ -137,6 +137,8 @@ Environment variables configure the service. CLI flags control one-off operation
 | `ENRICH_MAX_RETRIES` | No | `3` | Max retries on API failure |
 | `SUPADATA_API_KEY` | No | — | [Supadata](https://supadata.ai) API key for YouTube transcript extraction. When set, YouTube URLs are routed to Supadata instead of Jina. |
 | `HYGIENE_INTERVAL` | No | `10` | Run vault hygiene (broken edge cleanup, index sync, raw/wiki consistency) every Nth poll cycle |
+| `MCP_HTTP_ADDR` | No | — | Serve the MCP server over HTTP in-process with the pipeline (e.g. `:8080`). Empty disables it. See [Exposing MCP over HTTP](#exposing-mcp-over-http). |
+| `MCP_ALLOWED_HOST` | No | `localhost,127.0.0.1` | Comma-separated Host-header allowlist (DNS-rebinding guard). `*` or empty disables the guard — needed in Kubernetes. |
 | `CLAUDE_MD_PATH` | No | `/CLAUDE.md` | Path to CLAUDE.md for Claude Code integration (override only if needed) |
 
 ### CLI flags
@@ -269,6 +271,23 @@ lucidvault mcp --http :8080
   }
 }
 ```
+
+#### Exposing MCP over HTTP
+
+The standalone `lucidvault mcp` subcommand is a short-lived process. To serve MCP continuously for an always-on client (e.g. OpenWebUI), run the HTTP server **in-process** alongside the pipeline by setting `MCP_HTTP_ADDR`. Both share one SQLite connection pool — there is no second container and no move off SQLite, which keeps writes safe (a single process touching a single volume sidesteps SQLite's unreliable locking over networked filesystems).
+
+Set `MCP_HTTP_ADDR=:8080` and the running daemon will additionally answer MCP requests on port 8080.
+
+**Local Docker** — publish the port on loopback only and rely on the Host-header guard (DNS-rebinding defense). In `docker-compose.yml`, uncomment the loopback port publish:
+
+```yaml
+    ports:
+      - "127.0.0.1:8080:8080"
+```
+
+Leave `MCP_ALLOWED_HOST` at its default (`localhost,127.0.0.1`). Never bind `0.0.0.0`.
+
+**Kubernetes** — run LucidVault as a single Deployment (RWO PVC) and expose MCP via a **ClusterIP Service** (never an Ingress). Restrict access with a NetworkPolicy allowing ingress only from the client pod (e.g. OpenWebUI). Because the request `Host` is then the Service DNS name, either add that name to `MCP_ALLOWED_HOST` or disable the guard with `MCP_ALLOWED_HOST=*` and rely on the NetworkPolicy. (No k8s manifests ship in this repo yet — this is guidance only.)
 
 ## Tech stack
 
