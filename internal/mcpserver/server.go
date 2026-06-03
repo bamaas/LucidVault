@@ -24,7 +24,7 @@ import (
 //
 // For the in-process server that runs alongside the pipeline, use NewServer +
 // ServeHTTP directly with a shared *store.Store and *vault.Vault.
-func Run(vaultPath, httpAddr, dbPath string) {
+func Run(vaultPath, httpAddr, dbPath string, readTools bool) {
 	v := vault.New(vaultPath)
 
 	var db *store.Store
@@ -37,7 +37,7 @@ func Run(vaultPath, httpAddr, dbPath string) {
 		defer func() { _ = db.Close() }()
 	}
 
-	s := NewServer(v, db)
+	s := NewServer(v, db, readTools)
 
 	if httpAddr != "" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -54,124 +54,129 @@ func Run(vaultPath, httpAddr, dbPath string) {
 	}
 }
 
-func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store) {
-	// get_soul — Always
-	s.AddTool(mcp.NewTool("get_soul",
-		mcp.WithDescription("Read the user's profile (soul.md). Contains identity, interests, and preferences. Read this first to understand who you're helping."),
-	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		content, err := HandleGetSoul(v)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		return mcp.NewToolResultText(content), nil
-	})
+func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readTools bool) {
+	// Read tools duplicate direct filesystem access and are gated behind
+	// MCP_READ_TOOLS (off by default) so filesystem-capable agents read the
+	// vault natively. Graph traversal and write tools (below) are always on.
+	if readTools {
+		// get_soul — reads soul.md
+		s.AddTool(mcp.NewTool("get_soul",
+			mcp.WithDescription("Read the user's profile (soul.md). Contains identity, interests, and preferences. Read this first to understand who you're helping."),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			content, err := HandleGetSoul(v)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(content), nil
+		})
 
-	// search_index — Discovery
-	s.AddTool(mcp.NewTool("search_index",
-		mcp.WithDescription("Search the knowledge base index for topics, titles, and tags. Use this first for topic discovery before reading full pages. Returns lightweight references, not full content."),
-		mcp.WithString("query",
-			mcp.Required(),
-			mcp.Description("Search keywords"),
-		),
-	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		query := req.GetString("query", "")
-		if query == "" {
-			return mcp.NewToolResultError("query is required"), nil
-		}
-		results, err := HandleSearchIndex(v, query)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		data, err := json.Marshal(results)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("marshalling results: %v", err)), nil
-		}
-		return mcp.NewToolResultText(string(data)), nil
-	})
+		// search_index — Discovery
+		s.AddTool(mcp.NewTool("search_index",
+			mcp.WithDescription("Search the knowledge base index for topics, titles, and tags. Use this first for topic discovery before reading full pages. Returns lightweight references, not full content."),
+			mcp.WithString("query",
+				mcp.Required(),
+				mcp.Description("Search keywords"),
+			),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			query := req.GetString("query", "")
+			if query == "" {
+				return mcp.NewToolResultError("query is required"), nil
+			}
+			results, err := HandleSearchIndex(v, query)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			data, err := json.Marshal(results)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("marshalling results: %v", err)), nil
+			}
+			return mcp.NewToolResultText(string(data)), nil
+		})
 
-	// read_wiki — Primary
-	s.AddTool(mcp.NewTool("read_wiki",
-		mcp.WithDescription("Read a curated wiki page. These are LLM-enriched summaries with key takeaways, tags, and links. Preferred source of knowledge — use before falling back to raw sources."),
-		mcp.WithString("slug",
-			mcp.Required(),
-			mcp.Description("Wiki page slug (from search_index results)"),
-		),
-	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		slug := req.GetString("slug", "")
-		if slug == "" {
-			return mcp.NewToolResultError("slug is required"), nil
-		}
-		content, err := HandleReadWiki(v, slug)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		return mcp.NewToolResultText(content), nil
-	})
+		// read_wiki — Primary
+		s.AddTool(mcp.NewTool("read_wiki",
+			mcp.WithDescription("Read a curated wiki page. These are LLM-enriched summaries with key takeaways, tags, and links. Preferred source of knowledge — use before falling back to raw sources."),
+			mcp.WithString("slug",
+				mcp.Required(),
+				mcp.Description("Wiki page slug (from search_index results)"),
+			),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			slug := req.GetString("slug", "")
+			if slug == "" {
+				return mcp.NewToolResultError("slug is required"), nil
+			}
+			content, err := HandleReadWiki(v, slug)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(content), nil
+		})
 
-	// grep_vault — Search
-	s.AddTool(mcp.NewTool("grep_vault",
-		mcp.WithDescription("Search for exact terms across the vault. Useful for CLI flags, config keys, API names, error messages, and specific technical terms. Scoped to specific sections."),
-		mcp.WithString("query",
-			mcp.Required(),
-			mcp.Description("Search pattern"),
-		),
-		mcp.WithString("scope",
-			mcp.Description("Section to search: wiki (default), notes, raw, or all"),
-		),
-	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		query := req.GetString("query", "")
-		if query == "" {
-			return mcp.NewToolResultError("query is required"), nil
-		}
-		scope := req.GetString("scope", "wiki")
-		results, err := HandleGrepVault(v, query, scope)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		data, err := json.Marshal(results)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("marshalling results: %v", err)), nil
-		}
-		return mcp.NewToolResultText(string(data)), nil
-	})
+		// grep_vault — Search
+		s.AddTool(mcp.NewTool("grep_vault",
+			mcp.WithDescription("Search for exact terms across the vault. Useful for CLI flags, config keys, API names, error messages, and specific technical terms. Scoped to specific sections."),
+			mcp.WithString("query",
+				mcp.Required(),
+				mcp.Description("Search pattern"),
+			),
+			mcp.WithString("scope",
+				mcp.Description("Section to search: wiki (default), notes, raw, or all"),
+			),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			query := req.GetString("query", "")
+			if query == "" {
+				return mcp.NewToolResultError("query is required"), nil
+			}
+			scope := req.GetString("scope", "wiki")
+			results, err := HandleGrepVault(v, query, scope)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			data, err := json.Marshal(results)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("marshalling results: %v", err)), nil
+			}
+			return mcp.NewToolResultText(string(data)), nil
+		})
 
-	// read_note — Secondary
-	s.AddTool(mcp.NewTool("read_note",
-		mcp.WithDescription("Read a personal note. These contain the user's own thoughts, reflections, and working notes. Use after wiki pages for personal context."),
-		mcp.WithString("path",
-			mcp.Required(),
-			mcp.Description("Note path relative to vault (e.g. notes/aks-thoughts.md)"),
-		),
-	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		path := req.GetString("path", "")
-		if path == "" {
-			return mcp.NewToolResultError("path is required"), nil
-		}
-		content, err := HandleReadNote(v, path)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		return mcp.NewToolResultText(content), nil
-	})
+		// read_note — Secondary
+		s.AddTool(mcp.NewTool("read_note",
+			mcp.WithDescription("Read a personal note. These contain the user's own thoughts, reflections, and working notes. Use after wiki pages for personal context."),
+			mcp.WithString("path",
+				mcp.Required(),
+				mcp.Description("Note path relative to vault (e.g. notes/aks-thoughts.md)"),
+			),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			path := req.GetString("path", "")
+			if path == "" {
+				return mcp.NewToolResultError("path is required"), nil
+			}
+			content, err := HandleReadNote(v, path)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(content), nil
+		})
 
-	// read_raw — Fallback
-	s.AddTool(mcp.NewTool("read_raw",
-		mcp.WithDescription("Read the original scraped source content. These files are verbose and token-expensive. Only use when wiki summaries and notes don't provide enough detail."),
-		mcp.WithString("filename",
-			mcp.Required(),
-			mcp.Description("Raw filename (e.g. 2024-01-15-kubernetes-networking.md)"),
-		),
-	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		filename := req.GetString("filename", "")
-		if filename == "" {
-			return mcp.NewToolResultError("filename is required"), nil
-		}
-		content, err := HandleReadRaw(v, filename)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		return mcp.NewToolResultText(content), nil
-	})
+		// read_raw — Fallback
+		s.AddTool(mcp.NewTool("read_raw",
+			mcp.WithDescription("Read the original scraped source content. These files are verbose and token-expensive. Only use when wiki summaries and notes don't provide enough detail."),
+			mcp.WithString("filename",
+				mcp.Required(),
+				mcp.Description("Raw filename (e.g. 2024-01-15-kubernetes-networking.md)"),
+			),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			filename := req.GetString("filename", "")
+			if filename == "" {
+				return mcp.NewToolResultError("filename is required"), nil
+			}
+			content, err := HandleReadRaw(v, filename)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(content), nil
+		})
+	} // end gated read tools (get_soul..read_raw)
 
 	// related_notes — Navigation (bidirectional via edges table)
 	s.AddTool(mcp.NewTool("related_notes",
@@ -196,20 +201,22 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store) {
 		return mcp.NewToolResultText(string(data)), nil
 	})
 
-	// vault_overview — Orientation
-	s.AddTool(mcp.NewTool("vault_overview",
-		mcp.WithDescription("Get a high-level overview of the vault: page counts, edge count, top tags, and metadata. Use this for orientation before diving into specific queries."),
-	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		overview, err := HandleVaultOverview(v, db)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		data, err := json.Marshal(overview)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("marshalling overview: %v", err)), nil
-		}
-		return mcp.NewToolResultText(string(data)), nil
-	})
+	// vault_overview — Orientation (gated read tool)
+	if readTools {
+		s.AddTool(mcp.NewTool("vault_overview",
+			mcp.WithDescription("Get a high-level overview of the vault: page counts, edge count, top tags, and metadata. Use this for orientation before diving into specific queries."),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			overview, err := HandleVaultOverview(v, db)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			data, err := json.Marshal(overview)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("marshalling overview: %v", err)), nil
+			}
+			return mcp.NewToolResultText(string(data)), nil
+		})
+	} // end gated read tool (vault_overview)
 
 	// add_bookmark — Write
 	s.AddTool(mcp.NewTool("add_bookmark",
@@ -357,62 +364,79 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store) {
 	}
 }
 
-// RegisteredTools returns metadata for all registered MCP tools.
-// This is a static list matching the tools defined in registerTools.
-func RegisteredTools() []agentsmd.ToolInfo {
-	return []agentsmd.ToolInfo{
-		{
-			Name:        "get_soul",
-			Description: "Read the user's profile (soul.md). Contains identity, interests, and preferences.",
-		},
-		{
-			Name:        "search_index",
-			Description: "Search the knowledge base index for topics, titles, and tags.",
-			Parameters: []agentsmd.ParamInfo{
-				{Name: "query", Description: "Search keywords", Required: true},
+// RegisteredTools returns metadata for the MCP tools registered for the given
+// read-tool state, matching the tools defined in registerTools. Callers must
+// pass the same readTools value used for NewServer/registerTools so AGENTS.md
+// documents exactly the tools the server exposes.
+//
+// It assumes a non-nil store — the only configuration used in practice, since
+// both the in-process server and the `mcp` subcommand always open the DB. The
+// store-gated tools (update_wiki, expand_graph, delete_page) are therefore
+// always listed.
+func RegisteredTools(readTools bool) []agentsmd.ToolInfo {
+	var tools []agentsmd.ToolInfo
+
+	// Gated read tools — see registerTools / MCP_READ_TOOLS.
+	if readTools {
+		tools = append(tools,
+			agentsmd.ToolInfo{
+				Name:        "get_soul",
+				Description: "Read the user's profile (soul.md). Contains identity, interests, and preferences.",
 			},
-		},
-		{
-			Name:        "read_wiki",
-			Description: "Read a curated wiki page (LLM-enriched summary with key takeaways, tags, and links).",
-			Parameters: []agentsmd.ParamInfo{
-				{Name: "slug", Description: "Wiki page slug (from search_index results)", Required: true},
+			agentsmd.ToolInfo{
+				Name:        "search_index",
+				Description: "Search the knowledge base index for topics, titles, and tags.",
+				Parameters: []agentsmd.ParamInfo{
+					{Name: "query", Description: "Search keywords", Required: true},
+				},
 			},
-		},
-		{
-			Name:        "grep_vault",
-			Description: "Search for exact terms across the vault. Scoped to specific sections.",
-			Parameters: []agentsmd.ParamInfo{
-				{Name: "query", Description: "Search pattern", Required: true},
-				{Name: "scope", Description: "Section to search: wiki (default), notes, raw, or all"},
+			agentsmd.ToolInfo{
+				Name:        "read_wiki",
+				Description: "Read a curated wiki page (LLM-enriched summary with key takeaways, tags, and links).",
+				Parameters: []agentsmd.ParamInfo{
+					{Name: "slug", Description: "Wiki page slug (from search_index results)", Required: true},
+				},
 			},
-		},
-		{
-			Name:        "read_note",
-			Description: "Read a personal note (user's own thoughts, reflections, and working notes).",
-			Parameters: []agentsmd.ParamInfo{
-				{Name: "path", Description: "Note path relative to vault (e.g. notes/aks-thoughts.md)", Required: true},
+			agentsmd.ToolInfo{
+				Name:        "grep_vault",
+				Description: "Search for exact terms across the vault. Scoped to specific sections.",
+				Parameters: []agentsmd.ParamInfo{
+					{Name: "query", Description: "Search pattern", Required: true},
+					{Name: "scope", Description: "Section to search: wiki (default), notes, raw, or all"},
+				},
 			},
-		},
-		{
-			Name:        "read_raw",
-			Description: "Read the original scraped source content. Verbose and token-expensive.",
-			Parameters: []agentsmd.ParamInfo{
-				{Name: "filename", Description: "Raw filename (e.g. 2024-01-15-kubernetes-networking.md)", Required: true},
+			agentsmd.ToolInfo{
+				Name:        "read_note",
+				Description: "Read a personal note (user's own thoughts, reflections, and working notes).",
+				Parameters: []agentsmd.ParamInfo{
+					{Name: "path", Description: "Note path relative to vault (e.g. notes/aks-thoughts.md)", Required: true},
+				},
 			},
-		},
-		{
+			agentsmd.ToolInfo{
+				Name:        "read_raw",
+				Description: "Read the original scraped source content. Verbose and token-expensive.",
+				Parameters: []agentsmd.ParamInfo{
+					{Name: "filename", Description: "Raw filename (e.g. 2024-01-15-kubernetes-networking.md)", Required: true},
+				},
+			},
+			agentsmd.ToolInfo{
+				Name:        "vault_overview",
+				Description: "Get a high-level overview of the vault: page counts, edge count, top tags, and metadata.",
+			},
+		)
+	}
+
+	// Always-on: graph traversal (not reconstructable from a single file read)
+	// and all writes.
+	tools = append(tools,
+		agentsmd.ToolInfo{
 			Name:        "related_notes",
 			Description: "Get pages related to a wiki page using bidirectional edge traversal.",
 			Parameters: []agentsmd.ParamInfo{
 				{Name: "slug", Description: "Wiki page slug to find relations for", Required: true},
 			},
 		},
-		{
-			Name:        "vault_overview",
-			Description: "Get a high-level overview of the vault: page counts, edge count, top tags, and metadata.",
-		},
-		{
+		agentsmd.ToolInfo{
 			Name:        "expand_graph",
 			Description: "Expand seed slugs by traversing wiki-link edges up to N hops.",
 			Parameters: []agentsmd.ParamInfo{
@@ -420,7 +444,7 @@ func RegisteredTools() []agentsmd.ToolInfo {
 				{Name: "hops", Description: "Max traversal depth (1-5, default 2)"},
 			},
 		},
-		{
+		agentsmd.ToolInfo{
 			Name:        "add_bookmark",
 			Description: "Add a URL to the inbox for processing by the pipeline.",
 			Parameters: []agentsmd.ParamInfo{
@@ -429,7 +453,7 @@ func RegisteredTools() []agentsmd.ToolInfo {
 				{Name: "tags", Description: "Comma-separated tags for categorization"},
 			},
 		},
-		{
+		agentsmd.ToolInfo{
 			Name:        "add_note",
 			Description: "Create a personal note in the knowledge base.",
 			Parameters: []agentsmd.ParamInfo{
@@ -438,7 +462,7 @@ func RegisteredTools() []agentsmd.ToolInfo {
 				{Name: "tags", Description: "Comma-separated tags. If omitted, the pipeline will auto-tag."},
 			},
 		},
-		{
+		agentsmd.ToolInfo{
 			Name:        "update_wiki",
 			Description: "Update a section of a wiki page. Preserves frontmatter and other sections.",
 			Parameters: []agentsmd.ParamInfo{
@@ -447,14 +471,16 @@ func RegisteredTools() []agentsmd.ToolInfo {
 				{Name: "content", Description: "New markdown content for the section", Required: true},
 			},
 		},
-		{
+		agentsmd.ToolInfo{
 			Name:        "delete_page",
 			Description: "Delete a vault page and all its artifacts (wiki, raw, index entry, edges, DB record).",
 			Parameters: []agentsmd.ParamInfo{
 				{Name: "slug", Description: "Wiki page slug to delete", Required: true},
 			},
 		},
-	}
+	)
+
+	return tools
 }
 
 // parseTags splits a comma-separated tag string into a slice.
