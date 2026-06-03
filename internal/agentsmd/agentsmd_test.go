@@ -174,6 +174,35 @@ func TestGenerate_RetrievalInstructionSections(t *testing.T) {
 	}
 }
 
+// TestGenerate_RetrievalStrategyEmphasizesAgentJudgment verifies the Retrieval
+// Strategy section frames retrieval as agent-driven reasoning -- direct file
+// access first, MCP read tools as optional accelerators -- rather than a rigid
+// mandatory tool-calling sequence.
+func TestGenerate_RetrievalStrategyEmphasizesAgentJudgment(t *testing.T) {
+	result := Generate(nil, VaultStats{})
+
+	rs := sectionBody(result, "## Retrieval Strategy")
+	if rs == "" {
+		t.Fatal("missing '## Retrieval Strategy' section")
+	}
+	// The agent should be told it is not a fixed pipeline and should adapt.
+	if !strings.Contains(rs, "not a fixed search pipeline") {
+		t.Error("missing 'agent, not a fixed pipeline' framing in Retrieval Strategy")
+	}
+	// Direct file access should be framed as the primary path.
+	if !strings.Contains(rs, "Direct file access is your primary tool") {
+		t.Error("missing direct-file-access-first framing in Retrieval Strategy")
+	}
+	// MCP read tools should be framed as optional, not mandatory.
+	if !strings.Contains(rs, "optional accelerators") {
+		t.Error("missing 'MCP tools are optional accelerators' framing in Retrieval Strategy")
+	}
+	// The write-through-MCP invariant must remain a hard rule even as reads loosen.
+	if !strings.Contains(rs, "never edit\nfiles directly") && !strings.Contains(rs, "never edit files directly") {
+		t.Error("missing write-through-MCP hard-rule reminder in Retrieval Strategy")
+	}
+}
+
 func TestGenerate_EmptyTools(t *testing.T) {
 	stats := VaultStats{
 		WikiCount: 5,
