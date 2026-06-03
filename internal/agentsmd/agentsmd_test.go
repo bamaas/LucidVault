@@ -85,6 +85,124 @@ func TestGenerate_WithToolsAndStats(t *testing.T) {
 	}
 }
 
+// sectionBody returns the markdown body of the section introduced by the given
+// "## Header", spanning from that header up to (but not including) the next
+// level-2 heading. It returns "" if the header is absent. Scoping assertions to
+// a section's own body prevents a phrase that also appears elsewhere in
+// AGENTS.md (e.g. "Vault" in "Vault Access Rules") from masking a regression
+// in the section under test.
+func sectionBody(doc, header string) string {
+	start := strings.Index(doc, header)
+	if start < 0 {
+		return ""
+	}
+	rest := doc[start+len(header):]
+	if next := strings.Index(rest, "\n## "); next >= 0 {
+		return rest[:next]
+	}
+	return rest
+}
+
+func TestGenerate_RetrievalInstructionSections(t *testing.T) {
+	// These static sections must render regardless of dynamic content,
+	// so assert with empty tools and zero-value stats.
+	result := Generate(nil, VaultStats{})
+
+	// Section 1 -- Query Expansion. Assertions are scoped to the section body
+	// so that phrases shared with other sections (soul.md, [[wikilinks]]) still
+	// catch a regression inside Query Expansion specifically.
+	qe := sectionBody(result, "## Query Expansion")
+	if qe == "" {
+		t.Error("missing '## Query Expansion' section")
+	}
+	// Synonym / abbreviation guidance (e.g. k8s -> kubernetes).
+	if !strings.Contains(qe, "k8s") || !strings.Contains(qe, "kubernetes") {
+		t.Error("missing synonym/abbreviation guidance (k8s -> kubernetes) in Query Expansion")
+	}
+	// Personalization via soul.md.
+	if !strings.Contains(qe, "soul.md") {
+		t.Error("missing soul.md personalization guidance in Query Expansion")
+	}
+	// Lateral terms via tags and wikilinks.
+	if !strings.Contains(qe, "[[wikilinks]]") {
+		t.Error("missing lateral-term ([[wikilinks]]) guidance in Query Expansion")
+	}
+
+	// Section 2 -- Source Attribution.
+	sa := sectionBody(result, "## Source Attribution")
+	if sa == "" {
+		t.Error("missing '## Source Attribution' section")
+	}
+	// Must cover vault, model knowledge, and web origins -- scoped to the
+	// section so the bare word "Vault" elsewhere cannot mask a deleted bullet.
+	if !strings.Contains(sa, "Vault") {
+		t.Error("missing vault origin guidance in Source Attribution")
+	}
+	if !strings.Contains(sa, "Model knowledge") {
+		t.Error("missing model-knowledge origin guidance in Source Attribution")
+	}
+	if !strings.Contains(sa, "Web search") {
+		t.Error("missing web-search origin guidance in Source Attribution")
+	}
+	// Sources must be returned as clickable hyperlinks so the owner can open the
+	// full website later -- not just bare slugs or plain-text URLs.
+	if !strings.Contains(sa, "hyperlink") {
+		t.Error("missing clickable-hyperlink guidance in Source Attribution")
+	}
+	// The markdown link form should be shown so the agent knows the expected shape.
+	if !strings.Contains(sa, "[title](url)") {
+		t.Error("missing markdown link-form example in Source Attribution")
+	}
+	// When the vault has nothing on the topic, the agent must say so explicitly
+	// rather than silently answering from elsewhere.
+	if !strings.Contains(sa, "No vault match") {
+		t.Error("missing empty-vault disclosure guidance in Source Attribution")
+	}
+
+	// Section 3 -- Web Search.
+	ws := sectionBody(result, "## Web Search")
+	if ws == "" {
+		t.Error("missing '## Web Search' section")
+	}
+	// Vault-first guidance, scoped to the section body.
+	if !strings.Contains(ws, "vault") {
+		t.Error("missing vault-first guidance in Web Search")
+	}
+	// Cite URLs guidance.
+	if !strings.Contains(ws, "URL") {
+		t.Error("missing 'cite URLs' guidance in Web Search")
+	}
+}
+
+// TestGenerate_RetrievalStrategyEmphasizesAgentJudgment verifies the Retrieval
+// Strategy section frames retrieval as agent-driven reasoning -- direct file
+// access first, MCP read tools as optional accelerators -- rather than a rigid
+// mandatory tool-calling sequence.
+func TestGenerate_RetrievalStrategyEmphasizesAgentJudgment(t *testing.T) {
+	result := Generate(nil, VaultStats{})
+
+	rs := sectionBody(result, "## Retrieval Strategy")
+	if rs == "" {
+		t.Fatal("missing '## Retrieval Strategy' section")
+	}
+	// The agent should be told it is not a fixed pipeline and should adapt.
+	if !strings.Contains(rs, "not a fixed search pipeline") {
+		t.Error("missing 'agent, not a fixed pipeline' framing in Retrieval Strategy")
+	}
+	// Direct file access should be framed as the primary path.
+	if !strings.Contains(rs, "Direct file access is your primary tool") {
+		t.Error("missing direct-file-access-first framing in Retrieval Strategy")
+	}
+	// MCP read tools should be framed as optional, not mandatory.
+	if !strings.Contains(rs, "optional accelerators") {
+		t.Error("missing 'MCP tools are optional accelerators' framing in Retrieval Strategy")
+	}
+	// The write-through-MCP invariant must remain a hard rule even as reads loosen.
+	if !strings.Contains(rs, "never edit\nfiles directly") && !strings.Contains(rs, "never edit files directly") {
+		t.Error("missing write-through-MCP hard-rule reminder in Retrieval Strategy")
+	}
+}
+
 func TestGenerate_EmptyTools(t *testing.T) {
 	stats := VaultStats{
 		WikiCount: 5,
