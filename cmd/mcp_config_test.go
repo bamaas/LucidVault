@@ -15,6 +15,50 @@ func unsetenv(t *testing.T, key string) error {
 	return os.Unsetenv(key)
 }
 
+// TestLoadConfig_MCPReadTools verifies MCP_READ_TOOLS parsing: disabled by
+// default (native-first retrieval — agents read the vault directly), and
+// enabled only when set to a truthy value.
+func TestLoadConfig_MCPReadTools(t *testing.T) {
+	t.Setenv("OLLAMA_API_KEY", "test")
+	t.Setenv("VAULT_PATH", "/tmp/test")
+
+	tests := []struct {
+		name string
+		env  string
+		set  bool
+		want bool
+	}{
+		{name: "unset defaults off", set: false, want: false},
+		{name: "empty is off", env: "", set: true, want: false},
+		{name: "true enables", env: "true", set: true, want: true},
+		{name: "1 enables", env: "1", set: true, want: true},
+		{name: "false stays off", env: "false", set: true, want: false},
+		{name: "garbage stays off", env: "nope", set: true, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.set {
+				t.Setenv("MCP_READ_TOOLS", tt.env)
+			} else {
+				t.Setenv("MCP_READ_TOOLS", "")
+				if err := unsetenv(t, "MCP_READ_TOOLS"); err != nil {
+					t.Fatalf("unsetenv: %v", err)
+				}
+			}
+
+			cfg, err := loadConfig(false, false)
+			if err != nil {
+				t.Fatalf("loadConfig: %v", err)
+			}
+			if cfg.mcpReadTools != tt.want {
+				t.Errorf("MCP_READ_TOOLS=%q (set=%v): mcpReadTools=%v, want %v",
+					tt.env, tt.set, cfg.mcpReadTools, tt.want)
+			}
+		})
+	}
+}
+
 // TestLoadConfig_MCPHTTPAddr verifies MCP_HTTP_ADDR parsing: empty by default,
 // honoured when set.
 func TestLoadConfig_MCPHTTPAddr(t *testing.T) {

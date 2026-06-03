@@ -99,6 +99,7 @@ mise run lint:commits          # Check commit message (used by commit-msg hook)
 - `HYGIENE_INTERVAL` — (optional, default: 10) Run vault hygiene every Nth poll cycle
 - `MCP_HTTP_ADDR` — (optional, default: empty/off) Serve the MCP server over HTTP in-process with the pipeline (e.g. `:8080`), sharing the same `*store.Store` and `*vault.Vault`. The MCP server can run in-process — no second container or process — which keeps SQLite writes safe.
 - `MCP_ALLOWED_HOST` — (optional, default: `localhost,127.0.0.1`) Comma-separated Host-header allowlist for the in-process MCP server; `*` or empty disables the guard (for Kubernetes ClusterIP + NetworkPolicy)
+- `MCP_READ_TOOLS` — (optional, default: `false`) Expose the duplicate MCP content-read tools (`read_wiki`, `search_index`, `grep_vault`, `read_note`, `read_raw`, `vault_overview`, `get_soul`). Off by default so filesystem-capable agents read the vault directly (native-first retrieval, see `docs/adr/023-native-first-retrieval-read-tool-gating.md`); enable only for clients without filesystem access. Graph (`related_notes`, `expand_graph`) and write tools are always registered.
 
 ## Deployment
 

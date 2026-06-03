@@ -139,6 +139,7 @@ Environment variables configure the service. CLI flags control one-off operation
 | `HYGIENE_INTERVAL` | No | `10` | Run vault hygiene (broken edge cleanup, index sync, raw/wiki consistency) every Nth poll cycle |
 | `MCP_HTTP_ADDR` | No | — | Serve the MCP server over HTTP in-process with the pipeline (e.g. `:8080`). Empty disables it. See [Exposing MCP over HTTP](#exposing-mcp-over-http). |
 | `MCP_ALLOWED_HOST` | No | `localhost,127.0.0.1` | Comma-separated Host-header allowlist (DNS-rebinding guard). `*` or empty disables the guard — needed in Kubernetes. |
+| `MCP_READ_TOOLS` | No | `false` | Expose the duplicate MCP content-read tools (`read_wiki`, `search_index`, `grep_vault`, `read_note`, `read_raw`, `vault_overview`, `get_soul`). Off by default so filesystem-capable agents read the vault directly; enable for clients that reach the vault only over MCP (no filesystem access). Graph and write tools are always available. |
 | `CLAUDE_MD_PATH` | No | `/CLAUDE.md` | Path to CLAUDE.md for Claude Code integration (override only if needed) |
 
 ### CLI flags

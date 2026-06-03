@@ -151,7 +151,7 @@ func TestNewServer(t *testing.T) {
 	v := vault.New(t.TempDir())
 	db := newTestStoreForMCP(t)
 
-	s := NewServer(v, db)
+	s := NewServer(v, db, true)
 	if s == nil {
 		t.Fatal("NewServer returned nil")
 	}
@@ -164,13 +164,13 @@ func TestNewServer(t *testing.T) {
 	sort.Strings(serverNames)
 
 	var staticNames []string
-	for _, tool := range RegisteredTools() {
+	for _, tool := range RegisteredTools(true) {
 		staticNames = append(staticNames, tool.Name)
 	}
 	sort.Strings(staticNames)
 
 	if len(serverNames) != len(staticNames) {
-		t.Fatalf("tool count mismatch: NewServer has %d, RegisteredTools() has %d\nserver: %v\nstatic: %v",
+		t.Fatalf("tool count mismatch: NewServer has %d, RegisteredTools(true) has %d\nserver: %v\nstatic: %v",
 			len(serverNames), len(staticNames), serverNames, staticNames)
 	}
 	for i := range serverNames {
@@ -187,7 +187,7 @@ func TestNewServer(t *testing.T) {
 func TestNewServer_NilStore(t *testing.T) {
 	v := vault.New(t.TempDir())
 
-	s := NewServer(v, nil)
+	s := NewServer(v, nil, true)
 	if s == nil {
 		t.Fatal("NewServer returned nil")
 	}
@@ -203,7 +203,7 @@ func TestNewServer_NilStore(t *testing.T) {
 	}
 
 	// Every other tool from the static list must still be present.
-	for _, tool := range RegisteredTools() {
+	for _, tool := range RegisteredTools(true) {
 		if isStoreGated(tool.Name, storeGated) {
 			continue
 		}
@@ -213,7 +213,7 @@ func TestNewServer_NilStore(t *testing.T) {
 	}
 
 	// Sanity: the only difference from the full set is exactly the gated tools.
-	if got, want := len(registered), len(RegisteredTools())-len(storeGated); got != want {
+	if got, want := len(registered), len(RegisteredTools(true))-len(storeGated); got != want {
 		t.Errorf("nil-store tool count: got %d, want %d", got, want)
 	}
 }
@@ -232,7 +232,7 @@ func isStoreGated(name string, gated []string) bool {
 func TestServeHTTP_CleanShutdown(t *testing.T) {
 	v := vault.New(t.TempDir())
 	db := newTestStoreForMCP(t)
-	s := NewServer(v, db)
+	s := NewServer(v, db, true)
 
 	addr := freeAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -262,7 +262,7 @@ func TestServeHTTP_CleanShutdown(t *testing.T) {
 func TestServeHTTP_BindFailure(t *testing.T) {
 	v := vault.New(t.TempDir())
 	db := newTestStoreForMCP(t)
-	s := NewServer(v, db)
+	s := NewServer(v, db, true)
 
 	// Occupy a port so the bind fails.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -287,7 +287,7 @@ func TestServeHTTP_BindFailure(t *testing.T) {
 func TestServeHTTP_HostGuardIntegration(t *testing.T) {
 	v := vault.New(t.TempDir())
 	db := newTestStoreForMCP(t)
-	s := NewServer(v, db)
+	s := NewServer(v, db, true)
 
 	addr := freeAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())

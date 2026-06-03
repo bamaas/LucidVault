@@ -39,6 +39,7 @@ type config struct {
 	hygieneInterval int
 	mcpHTTPAddr     string
 	mcpAllowedHosts []string
+	mcpReadTools    bool
 }
 
 // pollCycleCount tracks the number of poll cycles for hygiene scheduling.
@@ -158,7 +159,7 @@ func main() {
 	// Serve MCP over HTTP in-process, sharing the pipeline's store and vault.
 	// Skipped for one-shot modes (--re-enrich / --re-fetch) which exit quickly.
 	if cfg.mcpHTTPAddr != "" && !cfg.forceReEnrich && !cfg.forceReFetch {
-		mcpSrv := mcpserver.NewServer(v, db)
+		mcpSrv := mcpserver.NewServer(v, db, cfg.mcpReadTools)
 		slog.Info("starting in-process MCP HTTP server",
 			"addr", cfg.mcpHTTPAddr,
 			"allowed_hosts", cfg.mcpAllowedHosts,
@@ -233,7 +234,7 @@ func runPollCycle(ctx context.Context, cfg *config, rd *raindrop.Client, sc *scr
 	}
 
 	// Step 5: Generate AGENTS.md
-	generateAgentsMD(db, v)
+	generateAgentsMD(db, v, cfg.mcpReadTools)
 }
 
 func syncRaindropToInbox(ctx context.Context, rd *raindrop.Client, db *store.Store, v *vault.Vault, force bool) {
@@ -784,6 +785,11 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 	mcpHTTPAddr := os.Getenv("MCP_HTTP_ADDR")
 	mcpAllowedHosts := parseAllowedHosts(os.LookupEnv("MCP_ALLOWED_HOST"))
 
+	// MCP_READ_TOOLS off by default → the content-read MCP tools that duplicate
+	// direct filesystem access are omitted, so filesystem-capable agents read
+	// the vault natively. Enable for clients that reach the vault only over MCP.
+	mcpReadTools := parseBoolEnv("MCP_READ_TOOLS")
+
 	return &config{
 		raindropToken:   raindropToken,
 		ollamaAPIKey:    apiKey,
@@ -798,7 +804,15 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 		hygieneInterval: hygieneInterval,
 		mcpHTTPAddr:     mcpHTTPAddr,
 		mcpAllowedHosts: mcpAllowedHosts,
+		mcpReadTools:    mcpReadTools,
 	}, nil
+}
+
+// parseBoolEnv reads a boolean environment variable, returning false when the
+// variable is unset, empty, or not parseable as a bool.
+func parseBoolEnv(key string) bool {
+	v, err := strconv.ParseBool(os.Getenv(key))
+	return err == nil && v
 }
 
 // parseAllowedHosts resolves the MCP Host-guard allowlist from MCP_ALLOWED_HOST.
@@ -941,7 +955,7 @@ func runMCP(args []string) {
 		vaultPath = "/vault"
 	}
 	dbPath := filepath.Join(vaultPath, ".lucidvault.db")
-	mcpserver.Run(vaultPath, *httpAddr, dbPath)
+	mcpserver.Run(vaultPath, *httpAddr, dbPath, parseBoolEnv("MCP_READ_TOOLS"))
 }
 
 // runHygiene orchestrates all hygiene steps.
@@ -1111,15 +1125,17 @@ func cleanRawWikiOrphans(v *vault.Vault) {
 	}
 }
 
-// generateAgentsMD generates AGENTS.md in the vault root with MCP tool docs and vault stats.
-func generateAgentsMD(db *store.Store, v *vault.Vault) {
+// generateAgentsMD generates AGENTS.md in the vault root with MCP tool docs and
+// vault stats. readTools must match the in-process server's MCP_READ_TOOLS
+// setting so the documented tools match the ones actually exposed.
+func generateAgentsMD(db *store.Store, v *vault.Vault, readTools bool) {
 	stats, err := agentsmd.CollectStats(v, db)
 	if err != nil {
 		slog.Warn("failed to collect vault stats for AGENTS.md", "error", err)
 		return
 	}
 
-	tools := mcpserver.RegisteredTools()
+	tools := mcpserver.RegisteredTools(readTools)
 	content := agentsmd.Generate(tools, stats)
 
 	written, err := agentsmd.WriteIfChanged(v.BasePath, content)

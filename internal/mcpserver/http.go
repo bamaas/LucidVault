@@ -17,17 +17,20 @@ import (
 // finish after the context is cancelled.
 const shutdownTimeout = 10 * time.Second
 
-// NewServer builds an MCP server and registers all tools against the given
-// vault and store. The store may be nil; in that case the write/graph tools
-// that require it are not registered. The returned server is transport-agnostic
+// NewServer builds an MCP server and registers tools against the given vault
+// and store. The store may be nil; in that case the write/graph tools that
+// require it are not registered. When readTools is false (the default), the
+// content-read tools that duplicate direct filesystem access are omitted so
+// filesystem-capable agents read the vault natively; set it true for clients
+// that reach the vault only over MCP. The returned server is transport-agnostic
 // — callers wire it to stdio (ServeStdio) or HTTP (ServeHTTP).
-func NewServer(v *vault.Vault, db *store.Store) *server.MCPServer {
+func NewServer(v *vault.Vault, db *store.Store, readTools bool) *server.MCPServer {
 	s := server.NewMCPServer(
 		"lucidvault",
 		"1.0.0",
 		server.WithToolCapabilities(false),
 	)
-	registerTools(s, v, db)
+	registerTools(s, v, db, readTools)
 	return s
 }
 

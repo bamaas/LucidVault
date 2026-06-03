@@ -25,13 +25,16 @@ searched).
 3. Check `notes/`; read `raw/` only when a summary lacks detail (raw can be large).
 4. Follow `[[wikilinks]]` to reach connections a search wouldn't surface.
 
-**MCP read tools are optional accelerators, not a required step** -- reach for them
-only when they do something direct access can't do cheaply:
+**MCP read tools are optional accelerators, not a required step** -- and the
+content-read ones are often disabled (read those files directly instead). Only the
+tools listed under **Available MCP Tools** below are actually callable; if a tool
+named here is absent there, read the vault directly. Reach for an accelerator only
+when it does something direct access can't do cheaply:
 
-- `search_index` -- quick structured slug/title/tag lookup.
 - `related_notes` / `expand_graph` -- bidirectional / multi-hop graph traversal
-  that is tedious to reconstruct by hand-following links.
-- `vault_overview` -- vault stats and orientation.
+  that is tedious to reconstruct by hand-following links (always available).
+- `search_index` -- quick structured slug/title/tag lookup *(only if listed below)*.
+- `vault_overview` -- vault stats and orientation *(only if listed below)*.
 
 Pick the cheapest path that answers the question: a precise factual query may need a
 single grep; a vague or exploratory one rewards browsing, link-following, and graph
