@@ -1,3 +1,9 @@
+## v0.20.4 (2026-06-03)
+
+### Fix
+
+- **deps**: pin go toolchain to 1.25.11 for stdlib security fixes (#72)
+
 ## v0.20.3 (2026-06-01)
 
 ### Fix
