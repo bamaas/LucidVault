@@ -1,3 +1,9 @@
+## v0.21.0 (2026-06-03)
+
+### Feat
+
+- **agentsmd**: agent-driven retrieval, source attribution & query expansion guidance (#71)
+
 ## v0.20.4 (2026-06-03)
 
 ### Fix
