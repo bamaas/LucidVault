@@ -50,6 +50,9 @@ open the full website later. For blended answers, attribute each part separately
   No link to invent; do not fabricate one.
 - **Web search** -- give the result as a `[title](url)` hyperlink (and name the
   provider). Prefer the canonical page URL over a redirect.
+- **No vault match** -- if the vault has no relevant content on the topic, say so
+  explicitly before answering from web search or model knowledge (e.g. "Nothing in
+  your vault covers this -- answering from the web").
 
 ## Web Search
 

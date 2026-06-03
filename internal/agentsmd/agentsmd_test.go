@@ -153,6 +153,11 @@ func TestGenerate_RetrievalInstructionSections(t *testing.T) {
 	if !strings.Contains(sa, "[title](url)") {
 		t.Error("missing markdown link-form example in Source Attribution")
 	}
+	// When the vault has nothing on the topic, the agent must say so explicitly
+	// rather than silently answering from elsewhere.
+	if !strings.Contains(sa, "No vault match") {
+		t.Error("missing empty-vault disclosure guidance in Source Attribution")
+	}
 
 	// Section 3 -- Web Search.
 	ws := sectionBody(result, "## Web Search")
