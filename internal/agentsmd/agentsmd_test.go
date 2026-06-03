@@ -144,6 +144,15 @@ func TestGenerate_RetrievalInstructionSections(t *testing.T) {
 	if !strings.Contains(sa, "Web search") {
 		t.Error("missing web-search origin guidance in Source Attribution")
 	}
+	// Sources must be returned as clickable hyperlinks so the owner can open the
+	// full website later -- not just bare slugs or plain-text URLs.
+	if !strings.Contains(sa, "hyperlink") {
+		t.Error("missing clickable-hyperlink guidance in Source Attribution")
+	}
+	// The markdown link form should be shown so the agent knows the expected shape.
+	if !strings.Contains(sa, "[title](url)") {
+		t.Error("missing markdown link-form example in Source Attribution")
+	}
 
 	// Section 3 -- Web Search.
 	ws := sectionBody(result, "## Web Search")

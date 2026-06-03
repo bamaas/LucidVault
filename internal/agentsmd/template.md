@@ -38,12 +38,18 @@ Broaden every query before searching -- a single literal phrasing hurts recall:
 
 ## Source Attribution
 
-Always state where each piece of an answer came from. For blended answers,
-attribute each part separately:
+Always state where each piece of an answer came from, and return every external
+source as a **clickable markdown hyperlink** -- `[title](url)` -- so the owner can
+open the full website later. For blended answers, attribute each part separately:
 
-- **Vault** -- cite the exact file path or wiki slug (e.g. `wiki/raft-consensus.md`).
+- **Vault** -- cite the wiki slug or file path (e.g. `wiki/raft-consensus.md`), and
+  also surface the page's original web source as a hyperlink. Each wiki page records
+  it in `source:` frontmatter and a `*Source: [title](url)*` footer line -- reuse
+  that link directly rather than reconstructing it.
 - **Model knowledge** -- say so explicitly ("from my own knowledge, not the vault").
-- **Web search** -- cite the source URL (and provider).
+  No link to invent; do not fabricate one.
+- **Web search** -- give the result as a `[title](url)` hyperlink (and name the
+  provider). Prefer the canonical page URL over a redirect.
 
 ## Web Search
 
