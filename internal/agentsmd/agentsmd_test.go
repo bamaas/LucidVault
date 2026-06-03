@@ -158,6 +158,12 @@ func TestGenerate_RetrievalInstructionSections(t *testing.T) {
 	if !strings.Contains(sa, "No vault match") {
 		t.Error("missing empty-vault disclosure guidance in Source Attribution")
 	}
+	// A vault answer MUST include the page's original source URL (from `source:`
+	// frontmatter), not just the wiki slug/path -- the owner needs the link to the
+	// real website. The guidance must make that mandatory, not optional.
+	if !strings.Contains(sa, "required") {
+		t.Error("Source Attribution must make the original source URL required for vault answers, not an optional add-on to the wiki path")
+	}
 
 	// Section 3 -- Web Search.
 	ws := sectionBody(result, "## Web Search")

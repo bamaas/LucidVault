@@ -65,10 +65,12 @@ Always state where each piece of an answer came from, and return every external
 source as a **clickable markdown hyperlink** -- `[title](url)` -- so the owner can
 open the full website later. For blended answers, attribute each part separately:
 
-- **Vault** -- cite the wiki slug or file path (e.g. `wiki/raft-consensus.md`), and
-  also surface the page's original web source as a hyperlink. Each wiki page records
-  it in `source:` frontmatter and a `*Source: [title](url)*` footer line -- reuse
-  that link directly rather than reconstructing it.
+- **Vault** -- you are **required** to include the page's original source as a
+  clickable `[title](url)` hyperlink so the owner can open the real website. This is
+  never optional, and a bare wiki slug/path is not enough on its own. Take the URL
+  verbatim from the page's `source:` frontmatter (or its `*Source: [title](url)*`
+  footer line) -- reuse it, don't reconstruct it. You may add the wiki path (e.g.
+  `wiki/raft-consensus.md`) after the link, but the original URL must always appear.
 - **Model knowledge** -- say so explicitly ("from my own knowledge, not the vault").
   No link to invent; do not fabricate one.
 - **Web search** -- give the result as a `[title](url)` hyperlink (and name the
