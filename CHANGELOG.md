@@ -1,3 +1,9 @@
+## v0.22.0 (2026-06-03)
+
+### Feat
+
+- **mcp**: gate duplicate read tools behind MCP_READ_TOOLS (native-first retrieval) (#73)
+
 ## v0.21.0 (2026-06-03)
 
 ### Feat
