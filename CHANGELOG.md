@@ -1,3 +1,9 @@
+## v0.23.0 (2026-06-04)
+
+### Feat
+
+- agent web search strategy (configurable AGENT_WEB_SEARCH_STRATEGY) + CLAUDE.md pointer (#75)
+
 ## v0.22.1 (2026-06-03)
 
 ### Fix
