@@ -40,6 +40,12 @@ Domain glossary for LucidVault. Pure terminology — no implementation details.
 
 **Content Hash**: A hash of a note's content stored in the database. Used to detect changes — only notes with changed content are re-enriched.
 
+## Retrieval
+
+**Agent Web Search**: Web search performed by the AI agent using its *own* configured search capability. LucidVault does not perform, proxy, or provide web search — it only instructs the agent how to use whatever search tool the agent already has.
+
+**Web Search Strategy**: The vault's instruction to the agent (carried in AGENTS.md) on whether and when to use Agent Web Search relative to the vault, and how to rank and attribute results. The curated vault is weighted above web results by default, though recency can override for time-sensitive questions. Configurable, and can be turned off entirely.
+
 ## Infrastructure
 
 **LiveSync**: Obsidian LiveSync, a community plugin that synchronizes vaults across devices via CouchDB replication. Handled entirely at the infrastructure layer — zero application code changes.

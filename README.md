@@ -98,7 +98,7 @@ LucidVault polls every 5 minutes. Drop `.md` files containing URLs into `inbox/`
 
 ## Optional: Claude Code integration
 
-To let LucidVault inject a retrieval strategy into your Claude Code config, add the `CLAUDE.md` bind-mount:
+To let LucidVault point Claude Code at your vault's `AGENTS.md` (which carries the retrieval strategy), add the `CLAUDE.md` bind-mount:
 
 ```bash
 touch ~/.claude/CLAUDE.md  # ensure the file exists before mounting
@@ -140,6 +140,7 @@ Environment variables configure the service. CLI flags control one-off operation
 | `MCP_HTTP_ADDR` | No | — | Serve the MCP server over HTTP in-process with the pipeline (e.g. `:8080`). Empty disables it. See [Exposing MCP over HTTP](#exposing-mcp-over-http). |
 | `MCP_ALLOWED_HOST` | No | `localhost,127.0.0.1` | Comma-separated Host-header allowlist (DNS-rebinding guard). `*` or empty disables the guard — needed in Kubernetes. |
 | `MCP_READ_TOOLS` | No | `false` | Expose the duplicate MCP content-read tools (`read_wiki`, `search_index`, `grep_vault`, `read_note`, `read_raw`, `vault_overview`, `get_soul`). Off by default so filesystem-capable agents read the vault directly; enable for clients that reach the vault only over MCP (no filesystem access). Graph and write tools are always available. |
+| `AGENT_WEB_SEARCH_STRATEGY` | No | `fallback` | How the generated `AGENTS.md` tells an agent to use its **own** web search relative to the vault: `off` (no web-search guidance), `fallback` (only when the vault lacks coverage), `time-sensitive` (also for latest/current/news/price/date questions), `immediately` (web + vault in parallel for any substantive question). LucidVault never provides a web search; the prose names no provider. Unknown values fall back to `fallback`. |
 | `CLAUDE_MD_PATH` | No | `/CLAUDE.md` | Path to CLAUDE.md for Claude Code integration (override only if needed) |
 
 ### CLI flags
@@ -212,18 +213,18 @@ vault/
 
 ## Querying your vault with Claude Code
 
-When `~/.claude/CLAUDE.md` is bind-mounted into the container, LucidVault upserts a retrieval strategy section into it at startup.
+When `~/.claude/CLAUDE.md` is bind-mounted into the container, LucidVault upserts a small pointer section into it at startup: the vault's absolute path plus an instruction to read the vault's `AGENTS.md` and follow it. The full retrieval strategy, file layout, citation rules, and web-search guidance live in `AGENTS.md` (regenerated every poll cycle), so the two never drift.
 
-Claude Code is instructed to:
+`AGENTS.md` instructs the agent to:
 
 1. Read `soul.md` first to tailor responses to the user's background
 2. Grep `index.md` for keywords — never read the full index
 3. Read matching `wiki/` pages (enriched summaries)
 4. Search `notes/` by keyword for personal context
 5. Fall back to `raw/` only if wiki and notes lack detail (large files)
-6. Offer to fetch a URL as a last resort, either one found in a vault page or provided by the user
+6. Cite every source as a clickable `[title](url)` link (vault pages → their original source URL)
 
-It will never scan entire directories, and will not search the web unprompted.
+Whether — and how aggressively — the agent reaches for its **own** web search is controlled by `AGENT_WEB_SEARCH_STRATEGY` (see the configuration table). LucidVault never provides or names a web-search provider; it only instructs the agent how to use the one it already has.
 
 ### MCP server
 

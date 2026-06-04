@@ -40,7 +40,7 @@ func TestGenerate_WithToolsAndStats(t *testing.T) {
 		},
 	}
 
-	result := Generate(tools, stats)
+	result := Generate(tools, stats, StrategyFallback)
 
 	// Must contain static template content.
 	if !strings.Contains(result, "Vault Access Rules") {
@@ -105,8 +105,9 @@ func sectionBody(doc, header string) string {
 
 func TestGenerate_RetrievalInstructionSections(t *testing.T) {
 	// These static sections must render regardless of dynamic content,
-	// so assert with empty tools and zero-value stats.
-	result := Generate(nil, VaultStats{})
+	// so assert with empty tools and zero-value stats. Use the default
+	// fallback strategy so the Web Search section is emitted.
+	result := Generate(nil, VaultStats{}, StrategyFallback)
 
 	// Section 1 -- Query Expansion. Assertions are scoped to the section body
 	// so that phrases shared with other sections (soul.md, [[wikilinks]]) still
@@ -185,7 +186,7 @@ func TestGenerate_RetrievalInstructionSections(t *testing.T) {
 // access first, MCP read tools as optional accelerators -- rather than a rigid
 // mandatory tool-calling sequence.
 func TestGenerate_RetrievalStrategyEmphasizesAgentJudgment(t *testing.T) {
-	result := Generate(nil, VaultStats{})
+	result := Generate(nil, VaultStats{}, StrategyFallback)
 
 	rs := sectionBody(result, "## Retrieval Strategy")
 	if rs == "" {
@@ -216,7 +217,7 @@ func TestGenerate_EmptyTools(t *testing.T) {
 		NoteCount: 1,
 	}
 
-	result := Generate(nil, stats)
+	result := Generate(nil, stats, StrategyFallback)
 
 	// Static template must still render.
 	if !strings.Contains(result, "Vault Access Rules") {
@@ -248,7 +249,7 @@ func TestGenerate_EmptyStats(t *testing.T) {
 		{Name: "get_soul", Description: "Read soul.md"},
 	}
 
-	result := Generate(tools, VaultStats{})
+	result := Generate(tools, VaultStats{}, StrategyFallback)
 
 	if !strings.Contains(result, "get_soul") {
 		t.Error("missing tool in output with empty stats")
