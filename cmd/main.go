@@ -26,17 +26,17 @@ import (
 )
 
 type config struct {
-	raindropToken   string
-	ollamaAPIKey    string
-	ollamaModel     string
-	vaultPath       string
-	pollInterval    time.Duration
-	enrichDelayMs   int
-	enrichRetries   int
-	supadataAPIKey  string
-	forceReEnrich   bool
-	forceReFetch    bool
-	hygieneInterval int
+	raindropToken     string
+	ollamaAPIKey      string
+	ollamaModel       string
+	vaultPath         string
+	pollInterval      time.Duration
+	enrichDelayMs     int
+	enrichRetries     int
+	supadataAPIKey    string
+	forceReEnrich     bool
+	forceReFetch      bool
+	hygieneInterval   int
 	mcpHTTPAddr       string
 	mcpAllowedHosts   []string
 	mcpReadTools      bool
@@ -801,17 +801,17 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 	}
 
 	return &config{
-		raindropToken:   raindropToken,
-		ollamaAPIKey:    apiKey,
-		ollamaModel:     model,
-		vaultPath:       vaultPath,
-		pollInterval:    pollInterval,
-		enrichDelayMs:   enrichDelayMs,
-		enrichRetries:   enrichRetries,
-		supadataAPIKey:  supadataAPIKey,
-		forceReEnrich:   forceReEnrich,
-		forceReFetch:    forceReFetch,
-		hygieneInterval: hygieneInterval,
+		raindropToken:     raindropToken,
+		ollamaAPIKey:      apiKey,
+		ollamaModel:       model,
+		vaultPath:         vaultPath,
+		pollInterval:      pollInterval,
+		enrichDelayMs:     enrichDelayMs,
+		enrichRetries:     enrichRetries,
+		supadataAPIKey:    supadataAPIKey,
+		forceReEnrich:     forceReEnrich,
+		forceReFetch:      forceReFetch,
+		hygieneInterval:   hygieneInterval,
 		mcpHTTPAddr:       mcpHTTPAddr,
 		mcpAllowedHosts:   mcpAllowedHosts,
 		mcpReadTools:      mcpReadTools,

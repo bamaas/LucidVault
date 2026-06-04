@@ -30,9 +30,9 @@ func assertNoProvider(t *testing.T, doc string) {
 // warn on an unknown non-empty value.
 func TestParseWebSearchStrategy(t *testing.T) {
 	tests := []struct {
-		in      string
-		want    WebSearchStrategy
-		wantOK  bool
+		in     string
+		want   WebSearchStrategy
+		wantOK bool
 	}{
 		{in: "off", want: StrategyOff, wantOK: true},
 		{in: "fallback", want: StrategyFallback, wantOK: true},
