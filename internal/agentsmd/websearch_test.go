@@ -74,12 +74,13 @@ func TestGenerate_StrategyOff_OmitsAllWebSearch(t *testing.T) {
 	}
 
 	// Source Attribution must still render (it covers vault + model knowledge),
-	// but its web-search bullet is gone.
+	// but its web-search bullet is gone. (Match the bullet marker, not a bare
+	// "web" -- legitimate prose like "website" must not trip the assertion.)
 	sa := sectionBody(result, "## Source Attribution")
 	if sa == "" {
 		t.Fatal("off mode should still emit the '## Source Attribution' section")
 	}
-	if strings.Contains(strings.ToLower(sa), "web") {
+	if strings.Contains(sa, "**Web search**") {
 		t.Error("off mode must omit the web-search bullet from Source Attribution")
 	}
 

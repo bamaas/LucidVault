@@ -26,9 +26,9 @@ Captured during `/grill-with-docs`. Full reasoning in the ADRs.
   requiring the original source URL (#74). This feature makes the strategy
   *configurable* and adds a trust-vs-recency rule.
 - **Deployment is native-first** (`MCP_READ_TOOLS=false`, in-process MCP on
-  `127.0.0.1:8080`): Hermes reads vault files directly and uses MCP only for graph
-  + writes. The strategy must therefore govern "native vault reads + the agent's
-  own web search," naming no MCP tool.
+  `127.0.0.1:8080`): Hermes reads vault files directly and uses MCP only for
+  graph and writes. The strategy must therefore govern "native vault reads + the
+  agent's own web search," naming no MCP tool.
 - **Companion change** (ADR-025, **separate commit**): reduce the injected
   `CLAUDE.md` section to a pointer ("vault at `<abs path>`; read its `AGENTS.md`
   and follow it"), eliminating the static retrieval-strategy duplicate that would
@@ -37,6 +37,7 @@ Captured during `/grill-with-docs`. Full reasoning in the ADRs.
 ## Scope
 
 ### In scope
+
 - New env var `AGENT_WEB_SEARCH_STRATEGY`: `off` | `fallback` | `time-sensitive` |
   `immediately`. Default `fallback`.
 - `AGENTS.md` generator emits the mode-appropriate `## Web Search` section, plus
@@ -46,6 +47,7 @@ Captured during `/grill-with-docs`. Full reasoning in the ADRs.
 - Companion (separate commit): CLAUDE.md injection → pointer (ADR-025).
 
 ### Out of scope
+
 - Any `search_web` MCP tool, Tavily/other client, or new Go dependency.
 - Changing the scraper/acquisition layer (Jina Reader stays — ADR-005). The
   "evaluate fastCRW / topic-driven source discovery" idea is parked as a separate
@@ -70,6 +72,7 @@ changes. No provider is ever named.
   template's 'you are an agent, use judgment' framing.)
 
 Shared rules appended in every non-`off` mode:
+
 - Weight the curated vault (wiki pages) **above** web results by default (higher
   trust). **But** when the question is time-sensitive and a web result is newer than
   the matching wiki page, lead with the web result and flag the vault page as

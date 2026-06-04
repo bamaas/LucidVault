@@ -49,13 +49,25 @@ type TagCount struct {
 }
 
 // Generate produces the full AGENTS.md content from the static template,
-// dynamic MCP tool listings, and vault statistics.
-func Generate(tools []ToolInfo, stats VaultStats) string {
+// dynamic MCP tool listings, and vault statistics. The web-search strategy
+// controls the `## Web Search` section and the Source Attribution web bullet;
+// StrategyOff omits both so AGENTS.md carries no web-search guidance (ADR-024).
+func Generate(tools []ToolInfo, stats VaultStats, strategy WebSearchStrategy) string {
 	var b strings.Builder
 
 	// Static template.
 	b.WriteString(staticTemplate)
 	b.WriteString("\n")
+
+	// Source Attribution (web bullet conditional on strategy).
+	b.WriteString(sourceAttributionSection(strategy))
+	b.WriteString("\n")
+
+	// Web Search (mode-specific; omitted entirely when off).
+	if section := webSearchSection(strategy); section != "" {
+		b.WriteString(section)
+		b.WriteString("\n")
+	}
 
 	// Dynamic: Available MCP Tools.
 	b.WriteString("## Available MCP Tools\n\n")

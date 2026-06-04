@@ -37,9 +37,10 @@ type config struct {
 	forceReEnrich   bool
 	forceReFetch    bool
 	hygieneInterval int
-	mcpHTTPAddr     string
-	mcpAllowedHosts []string
-	mcpReadTools    bool
+	mcpHTTPAddr       string
+	mcpAllowedHosts   []string
+	mcpReadTools      bool
+	webSearchStrategy agentsmd.WebSearchStrategy
 }
 
 // pollCycleCount tracks the number of poll cycles for hygiene scheduling.
@@ -234,7 +235,7 @@ func runPollCycle(ctx context.Context, cfg *config, rd *raindrop.Client, sc *scr
 	}
 
 	// Step 5: Generate AGENTS.md
-	generateAgentsMD(db, v, cfg.mcpReadTools)
+	generateAgentsMD(db, v, cfg.mcpReadTools, cfg.webSearchStrategy)
 }
 
 func syncRaindropToInbox(ctx context.Context, rd *raindrop.Client, db *store.Store, v *vault.Vault, force bool) {
@@ -790,6 +791,15 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 	// the vault natively. Enable for clients that reach the vault only over MCP.
 	mcpReadTools := parseBoolEnv("MCP_READ_TOOLS")
 
+	// AGENT_WEB_SEARCH_STRATEGY controls the AGENTS.md web-search guidance.
+	// Unknown/empty falls back to the default; an unknown non-empty value warns.
+	rawStrategy := os.Getenv("AGENT_WEB_SEARCH_STRATEGY")
+	webSearchStrategy, ok := agentsmd.ParseWebSearchStrategy(rawStrategy)
+	if !ok && rawStrategy != "" {
+		slog.Warn("unknown AGENT_WEB_SEARCH_STRATEGY; falling back to default",
+			"value", rawStrategy, "default", string(webSearchStrategy))
+	}
+
 	return &config{
 		raindropToken:   raindropToken,
 		ollamaAPIKey:    apiKey,
@@ -802,9 +812,10 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 		forceReEnrich:   forceReEnrich,
 		forceReFetch:    forceReFetch,
 		hygieneInterval: hygieneInterval,
-		mcpHTTPAddr:     mcpHTTPAddr,
-		mcpAllowedHosts: mcpAllowedHosts,
-		mcpReadTools:    mcpReadTools,
+		mcpHTTPAddr:       mcpHTTPAddr,
+		mcpAllowedHosts:   mcpAllowedHosts,
+		mcpReadTools:      mcpReadTools,
+		webSearchStrategy: webSearchStrategy,
 	}, nil
 }
 
@@ -1128,7 +1139,7 @@ func cleanRawWikiOrphans(v *vault.Vault) {
 // generateAgentsMD generates AGENTS.md in the vault root with MCP tool docs and
 // vault stats. readTools must match the in-process server's MCP_READ_TOOLS
 // setting so the documented tools match the ones actually exposed.
-func generateAgentsMD(db *store.Store, v *vault.Vault, readTools bool) {
+func generateAgentsMD(db *store.Store, v *vault.Vault, readTools bool, strategy agentsmd.WebSearchStrategy) {
 	stats, err := agentsmd.CollectStats(v, db)
 	if err != nil {
 		slog.Warn("failed to collect vault stats for AGENTS.md", "error", err)
@@ -1136,7 +1147,7 @@ func generateAgentsMD(db *store.Store, v *vault.Vault, readTools bool) {
 	}
 
 	tools := mcpserver.RegisteredTools(readTools)
-	content := agentsmd.Generate(tools, stats)
+	content := agentsmd.Generate(tools, stats, strategy)
 
 	written, err := agentsmd.WriteIfChanged(v.BasePath, content)
 	if err != nil {
