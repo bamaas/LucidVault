@@ -161,7 +161,7 @@ func HandleDeletePage(v *vault.Vault, db *store.Store, slug string) (*DeleteResu
 // edges (superset of HandleUpdateWiki's Related-only edge sync).
 // File mutations are wrapped in WithFileLock (D4).
 func HandleEditPage(v *vault.Vault, db *store.Store, slug, body string) error {
-	if body == "" {
+	if strings.TrimSpace(body) == "" {
 		return fmt.Errorf("content is required")
 	}
 

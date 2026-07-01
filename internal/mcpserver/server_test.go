@@ -1,9 +1,15 @@
 package mcpserver
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"lucidvault/internal/agentsmd"
@@ -32,6 +38,7 @@ var alwaysOnToolNames = []string{
 	"update_wiki",
 	"expand_graph",
 	"delete_page",
+	"edit_page",
 }
 
 func toolNameSet(tools []agentsmd.ToolInfo) map[string]struct{} {
@@ -143,4 +150,155 @@ func TestServerOmitsReadToolsWhenDisabled(t *testing.T) {
 			t.Errorf("server missing always-on tool %q", name)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// edit_page — driven through the real server (M1)
+// ---------------------------------------------------------------------------
+//
+// The tests below dispatch a genuine JSON-RPC "tools/call" message through
+// server.MCPServer.HandleMessage, exercising the full registerTools closure
+// (argument extraction, the slug/content guards, the HandleEditPage
+// error->ToolResultError mapping, and the success string), not just the
+// underlying HandleEditPage function tested in write_tools_test.go.
+
+// callToolThroughServer builds a JSON-RPC "tools/call" request for the named
+// tool and dispatches it via s.HandleMessage, returning the resulting
+// *mcp.CallToolResult. It fails the test if the call errors at the transport
+// level (i.e. anything other than a tool-level CallToolResult, such as an
+// unknown tool or unparsable request).
+func callToolThroughServer(t *testing.T, s *server.MCPServer, name string, args map[string]any) *mcp.CallToolResult {
+	t.Helper()
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      name,
+			"arguments": args,
+		},
+	}
+	raw, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("marshalling tool call request: %v", err)
+	}
+
+	resp := s.HandleMessage(context.Background(), raw)
+
+	switch r := resp.(type) {
+	case mcp.JSONRPCResponse:
+		result, ok := r.Result.(*mcp.CallToolResult)
+		if !ok {
+			t.Fatalf("unexpected result type %T for tool %q", r.Result, name)
+		}
+		return result
+	case mcp.JSONRPCError:
+		t.Fatalf("tool %q call failed at transport level: %s", name, r.Error.Message)
+	default:
+		t.Fatalf("unexpected response type %T for tool %q", resp, name)
+	}
+	return nil
+}
+
+// resultText extracts the text of a CallToolResult's first content item,
+// failing the test if the result has no text content.
+func resultText(t *testing.T, result *mcp.CallToolResult) string {
+	t.Helper()
+	if len(result.Content) == 0 {
+		t.Fatalf("tool result has no content")
+	}
+	tc, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("tool result content is not text: %T", result.Content[0])
+	}
+	return tc.Text
+}
+
+// TestEditPageTool_ThroughServer drives the edit_page tool through a real
+// server.MCPServer, pinning: the success path (result text + actual file
+// mutation), the empty-slug guard, the empty-content guard, and that a
+// HandleEditPage error (nonexistent slug) surfaces as a tool-level
+// ToolResultError rather than a transport-level error.
+func TestEditPageTool_ThroughServer(t *testing.T) {
+	tmpDir := t.TempDir()
+	for _, sub := range []string{"wiki", "raw", "notes"} {
+		if err := os.MkdirAll(filepath.Join(tmpDir, sub), 0o755); err != nil {
+			t.Fatalf("creating %s dir: %v", sub, err)
+		}
+	}
+	v := vault.New(tmpDir)
+	db := newTestStoreForMCP(t)
+
+	page := "---\ntitle: \"Server Test\"\ntags: []\n---\n\n## Summary\nOriginal.\n"
+	pagePath := filepath.Join(tmpDir, "wiki/server-edit-test.md")
+	if err := os.WriteFile(pagePath, []byte(page), 0o644); err != nil {
+		t.Fatalf("writing wiki page: %v", err)
+	}
+
+	s := server.NewMCPServer("lucidvault-test", "0.0.0", server.WithToolCapabilities(false))
+	registerTools(s, v, db, false)
+
+	t.Run("success", func(t *testing.T) {
+		result := callToolThroughServer(t, s, "edit_page", map[string]any{
+			"slug":    "server-edit-test",
+			"content": "## Rewritten\nNew body.\n",
+		})
+		if result.IsError {
+			t.Fatalf("expected success, got error result: %s", resultText(t, result))
+		}
+		if want, got := "wiki/server-edit-test.md updated successfully.", resultText(t, result); got != want {
+			t.Errorf("result text = %q, want %q", got, want)
+		}
+
+		content, err := os.ReadFile(pagePath)
+		if err != nil {
+			t.Fatalf("reading wiki page: %v", err)
+		}
+		if !strings.Contains(string(content), "## Rewritten") {
+			t.Errorf("wiki file should contain new body after edit_page, got:\n%s", string(content))
+		}
+		if strings.Contains(string(content), "Original.") {
+			t.Errorf("wiki file should not contain old body after edit_page, got:\n%s", string(content))
+		}
+	})
+
+	t.Run("empty slug returns tool error", func(t *testing.T) {
+		result := callToolThroughServer(t, s, "edit_page", map[string]any{
+			"slug":    "",
+			"content": "content",
+		})
+		if !result.IsError {
+			t.Fatalf("expected error result for empty slug")
+		}
+		if text := resultText(t, result); !strings.Contains(text, "slug is required") {
+			t.Errorf("expected error text to contain %q, got %q", "slug is required", text)
+		}
+	})
+
+	t.Run("empty content returns tool error", func(t *testing.T) {
+		result := callToolThroughServer(t, s, "edit_page", map[string]any{
+			"slug":    "server-edit-test",
+			"content": "",
+		})
+		if !result.IsError {
+			t.Fatalf("expected error result for empty content")
+		}
+		if text := resultText(t, result); !strings.Contains(text, "content is required") {
+			t.Errorf("expected error text to contain %q, got %q", "content is required", text)
+		}
+	})
+
+	t.Run("HandleEditPage error surfaces as tool error, not transport error", func(t *testing.T) {
+		result := callToolThroughServer(t, s, "edit_page", map[string]any{
+			"slug":    "does-not-exist",
+			"content": "## Body\nSome content.\n",
+		})
+		if !result.IsError {
+			t.Fatalf("expected error result for nonexistent slug")
+		}
+		if text := resultText(t, result); text == "" {
+			t.Errorf("expected a non-empty error message for nonexistent slug")
+		}
+	})
 }

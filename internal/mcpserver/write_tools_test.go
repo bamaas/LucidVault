@@ -757,6 +757,72 @@ func TestSplitFrontmatter_NoFrontmatter(t *testing.T) {
 	}
 }
 
+// TestSplitFrontmatter_ExactlyDelimiter covers content that is exactly "---"
+// with nothing else. There's no room for a body-separating newline or a
+// closing delimiter, so this must be treated as no-frontmatter: the whole
+// content is returned as the body.
+func TestSplitFrontmatter_ExactlyDelimiter(t *testing.T) {
+	content := "---"
+	fm, body := splitFrontmatter(content)
+	if fm != "" {
+		t.Errorf("expected empty frontmatter for bare %q, got:\n%q", content, fm)
+	}
+	if body != content {
+		t.Errorf("expected body to be the whole content for bare %q, got:\n%q", content, body)
+	}
+}
+
+// TestSplitFrontmatter_UnterminatedFrontmatter covers an opening "---\n" with
+// no matching closing "---". Malformed/unterminated frontmatter must be
+// treated as no-frontmatter (frontmatter == "", body == the whole content)
+// rather than silently truncating or misparsing the content.
+func TestSplitFrontmatter_UnterminatedFrontmatter(t *testing.T) {
+	content := "---\ntitle: Unterminated\nno closing delimiter below\nmore body text\n"
+	fm, body := splitFrontmatter(content)
+	if fm != "" {
+		t.Errorf("expected empty frontmatter for unterminated frontmatter, got:\n%q", fm)
+	}
+	if body != content {
+		t.Errorf("expected body to be the whole content for unterminated frontmatter, got:\n%q", body)
+	}
+}
+
+// TestHandleEditPage_MalformedFrontmatterTreatedAsBody pins the integration
+// behavior for a wiki page whose leading "---" is never closed: since
+// splitFrontmatter treats this as no-frontmatter, HandleEditPage does not
+// preserve any part of the original content (frontmatter-looking or not) —
+// consistent with its documented no-frontmatter case (see
+// TestHandleEditPage_NoFrontmatterDoesNotFabricateIt) — and does not fabricate
+// a frontmatter block for the new body either.
+func TestHandleEditPage_MalformedFrontmatterTreatedAsBody(t *testing.T) {
+	page := "---\ntitle: Unterminated\nno closing delimiter below\nOriginal content.\n"
+	v, db, dir := setupWriteTestVault(t)
+	if err := os.WriteFile(filepath.Join(dir, "wiki/malformed-fm.md"), []byte(page), 0o644); err != nil {
+		t.Fatalf("writing wiki page: %v", err)
+	}
+
+	err := HandleEditPage(v, db, "malformed-fm", "## Rewritten\nNew content.\n")
+	if err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "wiki/malformed-fm.md"))
+	if err != nil {
+		t.Fatalf("reading wiki page: %v", err)
+	}
+	s := string(content)
+
+	if strings.HasPrefix(s, "---") {
+		t.Errorf("edit_page must not fabricate frontmatter for a page with unterminated frontmatter, got:\n%s", s)
+	}
+	if !strings.Contains(s, "## Rewritten") {
+		t.Errorf("expected new body content, got:\n%s", s)
+	}
+	if strings.Contains(s, "Original content.") || strings.Contains(s, "Unterminated") {
+		t.Errorf("old (unparsed) content should be replaced, got:\n%s", s)
+	}
+}
+
 func TestUpsertFrontmatterField_AddsNew(t *testing.T) {
 	fm := "---\ntitle: Test\ntags: []\n---\n"
 	result := upsertFrontmatterField(fm, "last_updated", "2024-06-01")
@@ -1119,6 +1185,89 @@ func TestHandleEditPage_EmptyContentReturnsError(t *testing.T) {
 	}
 	if string(content) != wikiPageForEditPage {
 		t.Errorf("wiki page should be unchanged after a rejected empty-content call, got:\n%s", string(content))
+	}
+}
+
+func TestHandleEditPage_WhitespaceOnlyContentReturnsError(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	err := HandleEditPage(v, db, slug, "\n\n  \n")
+	if err == nil {
+		t.Fatalf("expected error for whitespace-only content")
+	}
+
+	// The existing page must be left untouched: a whitespace-only body must
+	// not sneak past the empty-content guard and silently wipe the page.
+	content, readErr := os.ReadFile(filepath.Join(dir, "wiki/edit-page-test.md"))
+	if readErr != nil {
+		t.Fatalf("reading wiki page: %v", readErr)
+	}
+	if string(content) != wikiPageForEditPage {
+		t.Errorf("wiki page should be unchanged after a rejected whitespace-only call, got:\n%s", string(content))
+	}
+}
+
+func TestHandleEditPage_AllWikilinksRemovedClearsEdges(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	// Seed edges via the handler itself, from a body with 2+ wikilinks.
+	seedBody := "## Summary\nReferences [[link-a]] and [[link-b]].\n"
+	if err := HandleEditPage(v, db, slug, seedBody); err != nil {
+		t.Fatalf("HandleEditPage (seed): %v", err)
+	}
+	seeded, err := db.GetOutboundEdges(slug)
+	if err != nil {
+		t.Fatalf("getting outbound edges after seed: %v", err)
+	}
+	if len(seeded) != 2 {
+		t.Fatalf("expected 2 seeded edges, got %d: %v", len(seeded), seeded)
+	}
+
+	// Edit again with a body containing no wikilinks at all.
+	noLinksBody := "## Summary\nNo links here anymore.\n"
+	if err := HandleEditPage(v, db, slug, noLinksBody); err != nil {
+		t.Fatalf("HandleEditPage (clear): %v", err)
+	}
+
+	edges, err := db.GetOutboundEdges(slug)
+	if err != nil {
+		t.Fatalf("getting outbound edges after clear: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 outbound edges after removing all wikilinks, got %d: %v", len(edges), edges)
+	}
+}
+
+func TestHandleEditPage_WikilinksInCodeBlockAreNotEdges(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	newBody := "## Summary\nSee [[real-link]] for details.\n\n" +
+		"```\nExample: [[should-not-link]]\n```\n"
+
+	if err := HandleEditPage(v, db, slug, newBody); err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	edges, err := db.GetOutboundEdges(slug)
+	if err != nil {
+		t.Fatalf("getting outbound edges: %v", err)
+	}
+
+	got := make(map[string]bool)
+	for _, e := range edges {
+		got[e.ToSlug] = true
+	}
+	if !got["real-link"] {
+		t.Errorf("expected edge to real-link, got edges: %v", edges)
+	}
+	if got["should-not-link"] {
+		t.Errorf("wikilink inside a fenced code block must not become an edge, got edges: %v", edges)
+	}
+	if len(edges) != 1 {
+		t.Errorf("expected exactly 1 outbound edge, got %d: %v", len(edges), edges)
 	}
 }
 

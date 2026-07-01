@@ -328,7 +328,7 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readToo
 				return mcp.NewToolResultError("slug is required"), nil
 			}
 			content := req.GetString("content", "")
-			if content == "" {
+			if strings.TrimSpace(content) == "" {
 				return mcp.NewToolResultError("content is required"), nil
 			}
 			if err := HandleEditPage(v, db, slug, content); err != nil {
