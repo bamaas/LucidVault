@@ -256,6 +256,7 @@ lucidvault mcp --http :8080
 | `add_bookmark` | Add a URL to the inbox for pipeline processing |
 | `add_note` | Create a personal note in the knowledge base |
 | `update_wiki` | Update a section of a wiki page (preserves other sections) |
+| `edit_page` | Replace the whole body of a wiki page (preserves frontmatter, re-syncs edges) |
 | `delete_page` | Delete a page and all artifacts (returns dangling refs) |
 
 **Claude Code configuration** (`~/.claude/settings.json`):
