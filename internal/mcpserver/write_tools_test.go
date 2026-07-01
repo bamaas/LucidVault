@@ -757,6 +757,72 @@ func TestSplitFrontmatter_NoFrontmatter(t *testing.T) {
 	}
 }
 
+// TestSplitFrontmatter_ExactlyDelimiter covers content that is exactly "---"
+// with nothing else. There's no room for a body-separating newline or a
+// closing delimiter, so this must be treated as no-frontmatter: the whole
+// content is returned as the body.
+func TestSplitFrontmatter_ExactlyDelimiter(t *testing.T) {
+	content := "---"
+	fm, body := splitFrontmatter(content)
+	if fm != "" {
+		t.Errorf("expected empty frontmatter for bare %q, got:\n%q", content, fm)
+	}
+	if body != content {
+		t.Errorf("expected body to be the whole content for bare %q, got:\n%q", content, body)
+	}
+}
+
+// TestSplitFrontmatter_UnterminatedFrontmatter covers an opening "---\n" with
+// no matching closing "---". Malformed/unterminated frontmatter must be
+// treated as no-frontmatter (frontmatter == "", body == the whole content)
+// rather than silently truncating or misparsing the content.
+func TestSplitFrontmatter_UnterminatedFrontmatter(t *testing.T) {
+	content := "---\ntitle: Unterminated\nno closing delimiter below\nmore body text\n"
+	fm, body := splitFrontmatter(content)
+	if fm != "" {
+		t.Errorf("expected empty frontmatter for unterminated frontmatter, got:\n%q", fm)
+	}
+	if body != content {
+		t.Errorf("expected body to be the whole content for unterminated frontmatter, got:\n%q", body)
+	}
+}
+
+// TestHandleEditPage_MalformedFrontmatterTreatedAsBody pins the integration
+// behavior for a wiki page whose leading "---" is never closed: since
+// splitFrontmatter treats this as no-frontmatter, HandleEditPage does not
+// preserve any part of the original content (frontmatter-looking or not) —
+// consistent with its documented no-frontmatter case (see
+// TestHandleEditPage_NoFrontmatterDoesNotFabricateIt) — and does not fabricate
+// a frontmatter block for the new body either.
+func TestHandleEditPage_MalformedFrontmatterTreatedAsBody(t *testing.T) {
+	page := "---\ntitle: Unterminated\nno closing delimiter below\nOriginal content.\n"
+	v, db, dir := setupWriteTestVault(t)
+	if err := os.WriteFile(filepath.Join(dir, "wiki/malformed-fm.md"), []byte(page), 0o644); err != nil {
+		t.Fatalf("writing wiki page: %v", err)
+	}
+
+	err := HandleEditPage(v, db, "malformed-fm", "## Rewritten\nNew content.\n")
+	if err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "wiki/malformed-fm.md"))
+	if err != nil {
+		t.Fatalf("reading wiki page: %v", err)
+	}
+	s := string(content)
+
+	if strings.HasPrefix(s, "---") {
+		t.Errorf("edit_page must not fabricate frontmatter for a page with unterminated frontmatter, got:\n%s", s)
+	}
+	if !strings.Contains(s, "## Rewritten") {
+		t.Errorf("expected new body content, got:\n%s", s)
+	}
+	if strings.Contains(s, "Original content.") || strings.Contains(s, "Unterminated") {
+		t.Errorf("old (unparsed) content should be replaced, got:\n%s", s)
+	}
+}
+
 func TestUpsertFrontmatterField_AddsNew(t *testing.T) {
 	fm := "---\ntitle: Test\ntags: []\n---\n"
 	result := upsertFrontmatterField(fm, "last_updated", "2024-06-01")
@@ -838,5 +904,457 @@ func TestHandleUpdateWiki_NonRelatedDoesNotSyncEdges(t *testing.T) {
 	}
 	if len(edges) != 1 || edges[0].ToSlug != "existing-link" {
 		t.Errorf("edges should be unchanged after non-Related update, got: %v", edges)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleEditPage
+// ---------------------------------------------------------------------------
+//
+// edit_page replaces the ENTIRE body of an existing wiki page in one call
+// (superset of update_wiki, which is scoped to a single ## section). See
+// docs/plans/plan-edit-page-mcp-tool.md. Frontmatter (title, source, tags,
+// created) is system-owned: the tool preserves it verbatim and only bumps
+// last_updated. All [[wikilinks]] in the new body — anywhere, not just under
+// a "Related" heading — are re-derived as edges via db.UpsertEdgesFrom,
+// replacing the slug's full outbound edge set.
+
+const wikiPageForEditPage = `---
+title: "Edit Page Test"
+source: "https://example.com/edit-test"
+created: 2024-01-10
+tags:
+  - test
+  - edit
+---
+
+# Edit Page Test
+
+## Summary
+Original summary content.
+
+## Key Takeaways
+- Point one
+- Point two
+
+## Related
+- [[old-link-a]] — Old A
+- [[old-link-b]] — Old B
+`
+
+// writeEditPageFixture writes wikiPageForEditPage (or a custom page) to
+// wiki/edit-page-test.md and returns its slug.
+func writeEditPageFixture(t *testing.T, dir, page string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "wiki/edit-page-test.md"), []byte(page), 0o644); err != nil {
+		t.Fatalf("writing wiki page fixture: %v", err)
+	}
+	return "edit-page-test"
+}
+
+func TestHandleEditPage_ReplacesWholeBody(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	newBody := "## Overview\nCompletely rewritten page.\n\n## Details\nMore new content.\n"
+	if err := HandleEditPage(v, db, slug, newBody); err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "wiki/edit-page-test.md"))
+	if err != nil {
+		t.Fatalf("reading wiki page: %v", err)
+	}
+	s := string(content)
+
+	// New body content is present verbatim.
+	if !strings.Contains(s, "## Overview") {
+		t.Errorf("expected new '## Overview' heading, got:\n%s", s)
+	}
+	if !strings.Contains(s, "Completely rewritten page.") {
+		t.Errorf("expected new body content, got:\n%s", s)
+	}
+	if !strings.Contains(s, "## Details") {
+		t.Errorf("expected new '## Details' heading, got:\n%s", s)
+	}
+
+	// Old sections are entirely gone — this is a whole-body replace, not a
+	// section-scoped merge.
+	for _, old := range []string{"## Summary", "Original summary content.", "## Key Takeaways", "- Point one", "## Related", "old-link-a"} {
+		if strings.Contains(s, old) {
+			t.Errorf("old body content %q should be gone after edit_page, got:\n%s", old, s)
+		}
+	}
+}
+
+func TestHandleEditPage_PreservesFrontmatterAndBumpsLastUpdated(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	page := `---
+title: "Edit Page Test"
+source: "https://example.com/edit-test"
+created: 2024-01-10
+last_updated: 2024-01-11
+tags:
+  - test
+  - edit
+---
+
+# Edit Page Test
+
+## Summary
+Original summary content.
+`
+	slug := writeEditPageFixture(t, dir, page)
+
+	if err := HandleEditPage(v, db, slug, "## New\nNew body.\n"); err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "wiki/edit-page-test.md"))
+	if err != nil {
+		t.Fatalf("reading wiki page: %v", err)
+	}
+	s := string(content)
+
+	// Frontmatter fields preserved verbatim.
+	for _, want := range []string{
+		`title: "Edit Page Test"`,
+		`source: "https://example.com/edit-test"`,
+		"created: 2024-01-10",
+		"- test",
+		"- edit",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("expected frontmatter to preserve %q, got:\n%s", want, s)
+		}
+	}
+
+	// last_updated is bumped to today, old value gone.
+	today := time.Now().Format("2006-01-02")
+	if !strings.Contains(s, "last_updated: "+today) {
+		t.Errorf("expected last_updated bumped to %q, got:\n%s", today, s)
+	}
+	if strings.Contains(s, "last_updated: 2024-01-11") {
+		t.Errorf("old last_updated value should be replaced, got:\n%s", s)
+	}
+
+	// last_updated must be inside the frontmatter block, not the body.
+	parts := strings.SplitN(s, "---", 3)
+	if len(parts) < 3 {
+		t.Fatalf("expected frontmatter delimiters, got:\n%s", s)
+	}
+	if !strings.Contains(parts[1], "last_updated: "+today) {
+		t.Errorf("last_updated should be inside frontmatter, got frontmatter:\n%s", parts[1])
+	}
+}
+
+func TestHandleEditPage_ProvenanceCannotBeStripped(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	// The caller's new body itself contains frontmatter-looking text,
+	// including an attempt to overwrite the provenance fields. This must be
+	// treated as opaque body content, never merged into or replacing the
+	// real system-owned frontmatter.
+	maliciousBody := "---\n" +
+		"title: \"Hacked Title\"\n" +
+		"source: \"https://evil.example.com\"\n" +
+		"---\n\n" +
+		"Malicious body pretending to carry its own frontmatter.\n"
+
+	if err := HandleEditPage(v, db, slug, maliciousBody); err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "wiki/edit-page-test.md"))
+	if err != nil {
+		t.Fatalf("reading wiki page: %v", err)
+	}
+	s := string(content)
+
+	// The real (first) frontmatter block must still carry the original,
+	// system-owned provenance fields.
+	fm, _ := splitFrontmatter(s)
+	if !strings.Contains(fm, `title: "Edit Page Test"`) {
+		t.Errorf("frontmatter title must not be overridden by body content, got frontmatter:\n%s", fm)
+	}
+	if !strings.Contains(fm, `source: "https://example.com/edit-test"`) {
+		t.Errorf("frontmatter source must not be overridden by body content, got frontmatter:\n%s", fm)
+	}
+	if strings.Contains(fm, "Hacked Title") || strings.Contains(fm, "evil.example.com") {
+		t.Errorf("caller-supplied frontmatter-looking text must not leak into real frontmatter, got:\n%s", fm)
+	}
+}
+
+func TestHandleEditPage_NewWikilinksAnywhereBecomeEdges(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	// Wikilinks scattered across multiple sections, not just under "Related" —
+	// this is the superset behavior over update_wiki.
+	newBody := "## Summary\nSee [[foo-page]] for background.\n\n" +
+		"## Notes\nAlso relevant: [[bar-page]] and [[baz-page]].\n"
+
+	if err := HandleEditPage(v, db, slug, newBody); err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	edges, err := db.GetOutboundEdges(slug)
+	if err != nil {
+		t.Fatalf("getting outbound edges: %v", err)
+	}
+
+	got := make(map[string]bool)
+	for _, e := range edges {
+		got[e.ToSlug] = true
+	}
+	for _, want := range []string{"foo-page", "bar-page", "baz-page"} {
+		if !got[want] {
+			t.Errorf("expected edge to %q after edit_page, got edges: %v", want, edges)
+		}
+	}
+}
+
+func TestHandleEditPage_RemovedWikilinksDropEdges(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	// Seed the edges that correspond to the fixture's original "Related"
+	// section, as if a prior enrichment/edit had synced them.
+	initialEdges := []store.Edge{
+		{FromSlug: slug, ToSlug: "old-link-a", Type: "wikilink"},
+		{FromSlug: slug, ToSlug: "old-link-b", Type: "wikilink"},
+	}
+	if err := db.UpsertEdgesFrom(slug, "wikilink", initialEdges); err != nil {
+		t.Fatalf("inserting initial edges: %v", err)
+	}
+
+	// New body has no wikilinks to the old targets, and introduces one new
+	// link. The full edge set for the slug must be replaced.
+	newBody := "## Summary\nRewritten, references [[fresh-link]] only.\n"
+	if err := HandleEditPage(v, db, slug, newBody); err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	edges, err := db.GetOutboundEdges(slug)
+	if err != nil {
+		t.Fatalf("getting outbound edges: %v", err)
+	}
+
+	got := make(map[string]bool)
+	for _, e := range edges {
+		got[e.ToSlug] = true
+	}
+	if got["old-link-a"] || got["old-link-b"] {
+		t.Errorf("stale edges from removed wikilinks should be dropped, got edges: %v", edges)
+	}
+	if !got["fresh-link"] {
+		t.Errorf("expected edge to fresh-link, got edges: %v", edges)
+	}
+	if len(edges) != 1 {
+		t.Errorf("expected exactly 1 outbound edge after replace, got %d: %v", len(edges), edges)
+	}
+}
+
+func TestHandleEditPage_NonExistentSlugReturnsError(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+
+	err := HandleEditPage(v, db, "does-not-exist", "## Body\nSome content.\n")
+	if err == nil {
+		t.Fatalf("expected error for nonexistent slug")
+	}
+
+	if _, statErr := os.Stat(filepath.Join(dir, "wiki/does-not-exist.md")); !os.IsNotExist(statErr) {
+		t.Errorf("edit_page must not create a wiki file for a nonexistent slug")
+	}
+}
+
+func TestHandleEditPage_EmptyContentReturnsError(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	err := HandleEditPage(v, db, slug, "")
+	if err == nil {
+		t.Fatalf("expected error for empty content")
+	}
+
+	// The existing page must be left untouched.
+	content, readErr := os.ReadFile(filepath.Join(dir, "wiki/edit-page-test.md"))
+	if readErr != nil {
+		t.Fatalf("reading wiki page: %v", readErr)
+	}
+	if string(content) != wikiPageForEditPage {
+		t.Errorf("wiki page should be unchanged after a rejected empty-content call, got:\n%s", string(content))
+	}
+}
+
+func TestHandleEditPage_WhitespaceOnlyContentReturnsError(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	err := HandleEditPage(v, db, slug, "\n\n  \n")
+	if err == nil {
+		t.Fatalf("expected error for whitespace-only content")
+	}
+
+	// The existing page must be left untouched: a whitespace-only body must
+	// not sneak past the empty-content guard and silently wipe the page.
+	content, readErr := os.ReadFile(filepath.Join(dir, "wiki/edit-page-test.md"))
+	if readErr != nil {
+		t.Fatalf("reading wiki page: %v", readErr)
+	}
+	if string(content) != wikiPageForEditPage {
+		t.Errorf("wiki page should be unchanged after a rejected whitespace-only call, got:\n%s", string(content))
+	}
+}
+
+func TestHandleEditPage_AllWikilinksRemovedClearsEdges(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	// Seed edges via the handler itself, from a body with 2+ wikilinks.
+	seedBody := "## Summary\nReferences [[link-a]] and [[link-b]].\n"
+	if err := HandleEditPage(v, db, slug, seedBody); err != nil {
+		t.Fatalf("HandleEditPage (seed): %v", err)
+	}
+	seeded, err := db.GetOutboundEdges(slug)
+	if err != nil {
+		t.Fatalf("getting outbound edges after seed: %v", err)
+	}
+	if len(seeded) != 2 {
+		t.Fatalf("expected 2 seeded edges, got %d: %v", len(seeded), seeded)
+	}
+
+	// Edit again with a body containing no wikilinks at all.
+	noLinksBody := "## Summary\nNo links here anymore.\n"
+	if err := HandleEditPage(v, db, slug, noLinksBody); err != nil {
+		t.Fatalf("HandleEditPage (clear): %v", err)
+	}
+
+	edges, err := db.GetOutboundEdges(slug)
+	if err != nil {
+		t.Fatalf("getting outbound edges after clear: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 outbound edges after removing all wikilinks, got %d: %v", len(edges), edges)
+	}
+}
+
+func TestHandleEditPage_WikilinksInCodeBlockAreNotEdges(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	newBody := "## Summary\nSee [[real-link]] for details.\n\n" +
+		"```\nExample: [[should-not-link]]\n```\n"
+
+	if err := HandleEditPage(v, db, slug, newBody); err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	edges, err := db.GetOutboundEdges(slug)
+	if err != nil {
+		t.Fatalf("getting outbound edges: %v", err)
+	}
+
+	got := make(map[string]bool)
+	for _, e := range edges {
+		got[e.ToSlug] = true
+	}
+	if !got["real-link"] {
+		t.Errorf("expected edge to real-link, got edges: %v", edges)
+	}
+	if got["should-not-link"] {
+		t.Errorf("wikilink inside a fenced code block must not become an edge, got edges: %v", edges)
+	}
+	if len(edges) != 1 {
+		t.Errorf("expected exactly 1 outbound edge, got %d: %v", len(edges), edges)
+	}
+}
+
+func TestHandleEditPage_IndexUnchanged(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	indexContent := `# Wiki Index
+
+Last updated: 2024-01-15
+
+## Pages
+
+- [[edit-page-test]] — Edit Page Test [test, edit]
+- [[other-page]] — Other Page [other]
+`
+	indexPath := filepath.Join(dir, "index.md")
+	if err := os.WriteFile(indexPath, []byte(indexContent), 0o644); err != nil {
+		t.Fatalf("writing index: %v", err)
+	}
+
+	// Body-only edit: frontmatter title/tags are untouched, so index.md
+	// should require no update at all.
+	if err := HandleEditPage(v, db, slug, "## New\nRewritten body, no frontmatter change.\n"); err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	after, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("reading index after edit: %v", err)
+	}
+	if string(after) != indexContent {
+		t.Errorf("index.md should be byte-for-byte unchanged after edit_page.\nbefore:\n%s\nafter:\n%s", indexContent, string(after))
+	}
+}
+
+func TestHandleEditPage_NormalizesTrailingNewline(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	slug := writeEditPageFixture(t, dir, wikiPageForEditPage)
+
+	// Body supplied without a trailing newline.
+	if err := HandleEditPage(v, db, slug, "## Body\nNo trailing newline in caller input."); err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "wiki/edit-page-test.md"))
+	if err != nil {
+		t.Fatalf("reading wiki page: %v", err)
+	}
+	s := string(content)
+
+	if !strings.HasSuffix(s, "\n") {
+		t.Errorf("written wiki page should end with exactly one trailing newline, got: %q", s)
+	}
+	if strings.HasSuffix(s, "\n\n") {
+		t.Errorf("written wiki page should not end with multiple trailing newlines, got: %q", s)
+	}
+}
+
+func TestHandleEditPage_NoFrontmatterDoesNotFabricateIt(t *testing.T) {
+	// A wiki page with no frontmatter at all is an edge case explicitly
+	// called out in the plan: edit_page must not fabricate a frontmatter
+	// block (matching update_wiki's existing behavior for this case).
+	page := "# No Frontmatter Page\n\n## Summary\nOriginal content.\n"
+	v, db, dir := setupWriteTestVault(t)
+	if err := os.WriteFile(filepath.Join(dir, "wiki/no-frontmatter.md"), []byte(page), 0o644); err != nil {
+		t.Fatalf("writing wiki page: %v", err)
+	}
+
+	err := HandleEditPage(v, db, "no-frontmatter", "## Rewritten\nNew content.\n")
+	if err != nil {
+		t.Fatalf("HandleEditPage: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "wiki/no-frontmatter.md"))
+	if err != nil {
+		t.Fatalf("reading wiki page: %v", err)
+	}
+	s := string(content)
+
+	if strings.HasPrefix(s, "---") {
+		t.Errorf("edit_page must not fabricate frontmatter for a page that had none, got:\n%s", s)
+	}
+	if !strings.Contains(s, "## Rewritten") {
+		t.Errorf("expected new body content, got:\n%s", s)
+	}
+	if strings.Contains(s, "Original content.") {
+		t.Errorf("old body content should be replaced, got:\n%s", s)
 	}
 }

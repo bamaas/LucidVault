@@ -311,6 +311,32 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readToo
 			return mcp.NewToolResultText(fmt.Sprintf("Section %q of wiki/%s.md updated successfully.", section, slug)), nil
 		})
 
+		// edit_page — Write (requires store)
+		s.AddTool(mcp.NewTool("edit_page",
+			mcp.WithDescription("Replace the entire body of an existing wiki page. Frontmatter (title, source, tags, created) is preserved verbatim except last_updated, which is bumped. All [[wikilinks]] in the new body are re-derived as edges. Use for whole-page rewrites or adding new sections; for a single-section edit, prefer update_wiki."),
+			mcp.WithString("slug",
+				mcp.Required(),
+				mcp.Description("Wiki page slug (e.g. kubernetes-networking)"),
+			),
+			mcp.WithString("content",
+				mcp.Required(),
+				mcp.Description("New body markdown, no frontmatter"),
+			),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			slug := req.GetString("slug", "")
+			if slug == "" {
+				return mcp.NewToolResultError("slug is required"), nil
+			}
+			content := req.GetString("content", "")
+			if strings.TrimSpace(content) == "" {
+				return mcp.NewToolResultError("content is required"), nil
+			}
+			if err := HandleEditPage(v, db, slug, content); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("wiki/%s.md updated successfully.", slug)), nil
+		})
+
 		// expand_graph — Graph traversal (requires store)
 		s.AddTool(mcp.NewTool("expand_graph",
 			mcp.WithDescription("Expand a set of seed slugs by traversing wiki-link edges up to N hops. Returns all connected slugs within the hop radius. Use this to discover clusters of related content."),
@@ -371,7 +397,7 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readToo
 //
 // It assumes a non-nil store — the only configuration used in practice, since
 // both the in-process server and the `mcp` subcommand always open the DB. The
-// store-gated tools (update_wiki, expand_graph, delete_page) are therefore
+// store-gated tools (update_wiki, edit_page, expand_graph, delete_page) are therefore
 // always listed.
 func RegisteredTools(readTools bool) []agentsmd.ToolInfo {
 	var tools []agentsmd.ToolInfo
@@ -476,6 +502,14 @@ func RegisteredTools(readTools bool) []agentsmd.ToolInfo {
 			Description: "Delete a vault page and all its artifacts (wiki, raw, index entry, edges, DB record).",
 			Parameters: []agentsmd.ParamInfo{
 				{Name: "slug", Description: "Wiki page slug to delete", Required: true},
+			},
+		},
+		agentsmd.ToolInfo{
+			Name:        "edit_page",
+			Description: "Replace the entire body of a wiki page. Preserves frontmatter (bumps last_updated) and re-derives edges from the whole new body.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "slug", Description: "Wiki page slug (e.g. kubernetes-networking)", Required: true},
+				{Name: "content", Description: "New body markdown, no frontmatter", Required: true},
 			},
 		},
 	)

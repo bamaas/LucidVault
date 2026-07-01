@@ -154,6 +154,69 @@ func HandleDeletePage(v *vault.Vault, db *store.Store, slug string) (*DeleteResu
 	}, nil
 }
 
+// HandleEditPage replaces the entire body of an existing wiki page, preserving
+// frontmatter verbatim except for a bumped last_updated field. Unlike
+// HandleUpdateWiki (section-scoped), this is a whole-body replace: no section
+// parsing, and all [[wikilinks]] anywhere in the new body are re-derived as
+// edges (superset of HandleUpdateWiki's Related-only edge sync).
+// File mutations are wrapped in WithFileLock (D4).
+func HandleEditPage(v *vault.Vault, db *store.Store, slug, body string) error {
+	if strings.TrimSpace(body) == "" {
+		return fmt.Errorf("content is required")
+	}
+
+	err := db.WithFileLock(func() error {
+		relPath := "wiki/" + slug + ".md"
+		existing, err := v.ReadFile(relPath)
+		if err != nil {
+			return fmt.Errorf("reading wiki page %q: %w", slug, err)
+		}
+
+		// Split off the existing (system-owned) frontmatter; discard the old body.
+		frontmatter, _ := splitFrontmatter(existing)
+		frontmatter = upsertFrontmatterField(frontmatter, "last_updated", time.Now().Format("2006-01-02"))
+
+		// Normalize the caller's body to exactly one trailing newline.
+		newBody := strings.Trim(body, "\n") + "\n"
+
+		var newContent string
+		if frontmatter == "" {
+			// No frontmatter to preserve — match HandleUpdateWiki's behavior of
+			// not fabricating one.
+			newContent = newBody
+		} else {
+			// Single separating blank line between frontmatter and body.
+			newContent = frontmatter + "\n" + newBody
+		}
+
+		if _, err := v.WriteWiki(slug+".md", newContent); err != nil {
+			return fmt.Errorf("writing wiki page %q: %w", slug, err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// Re-derive edges from the whole new body (outside the lock; DB uses its
+	// own connection). This replaces the slug's full outbound edge set.
+	links := ParseWikiLinks(body)
+	var edges []store.Edge
+	for _, link := range links {
+		edges = append(edges, store.Edge{
+			FromSlug: slug,
+			ToSlug:   link,
+			Type:     "wikilink",
+		})
+	}
+	if err := db.UpsertEdgesFrom(slug, "wikilink", edges); err != nil {
+		return fmt.Errorf("syncing edges for %q: %w", slug, err)
+	}
+
+	return nil
+}
+
 // sectionBlock represents a parsed section of a markdown document.
 type sectionBlock struct {
 	heading string // heading text (without "## "), empty for preamble

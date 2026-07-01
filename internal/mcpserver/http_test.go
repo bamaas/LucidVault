@@ -182,8 +182,9 @@ func TestNewServer(t *testing.T) {
 }
 
 // TestNewServer_NilStore verifies NewServer's documented contract that, when the
-// store is nil, the write/graph tools requiring it (update_wiki, expand_graph,
-// delete_page) are NOT registered, while all store-independent tools remain.
+// store is nil, the write/graph tools requiring it (update_wiki, edit_page,
+// expand_graph, delete_page) are NOT registered, while all store-independent
+// tools remain.
 func TestNewServer_NilStore(t *testing.T) {
 	v := vault.New(t.TempDir())
 
@@ -195,7 +196,7 @@ func TestNewServer_NilStore(t *testing.T) {
 	registered := s.ListTools()
 
 	// Tools gated behind a non-nil store must be absent.
-	storeGated := []string{"update_wiki", "expand_graph", "delete_page"}
+	storeGated := []string{"update_wiki", "edit_page", "expand_graph", "delete_page"}
 	for _, name := range storeGated {
 		if _, ok := registered[name]; ok {
 			t.Errorf("tool %q should not be registered when store is nil", name)
