@@ -1,3 +1,9 @@
+## v0.24.0 (2026-07-01)
+
+### Feat
+
+- **mcpserver**: add edit_page MCP tool for whole-body wiki edits (#76)
+
 ## v0.23.0 (2026-06-04)
 
 ### Feat
