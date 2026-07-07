@@ -30,6 +30,7 @@ your Obsidian vault, ready to query from Claude Code, a browser, or any synced d
 
 - **Inbox** - Drop a `.md` file with a URL into `inbox/` and it gets scraped, enriched, and added to your vault. Works standalone - no external service required
 - **Raindrop.io integration** - Optionally connect Raindrop.io to auto-feed bookmarks into the inbox. Backfills all existing bookmarks on first run
+- **YouTube videos** - YouTube URLs are transcribed via [Supadata](https://supadata.ai) and enriched like any other source, so a video becomes a searchable, linkable wiki page
 - **Enrich** - LLM (Ollama Cloud, free) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** - Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **MCP server** - Built-in MCP server exposes the vault as structured retrieval primitives for any AI client (Claude Code, Cursor, Windsurf, OpenClaw). Supports stdio and Streamable HTTP transports
