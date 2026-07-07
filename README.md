@@ -1,12 +1,30 @@
 # LucidVault
 
-## Transform notes and bookmarks into connected insights
+## Your knowledge base, turned into a daily companion
 
-You save dozens of articles, blog posts, and links every week. Most of them disappear into a bookmark graveyard - never read, never searchable, never connected to anything. LucidVault fixes that.
+You save dozens of articles, posts, and links every week, and most vanish into a bookmark graveyard: never read again, never connected to anything. LucidVault turns them into a living knowledge base you actually reach for every day.
 
-LucidVault turns URLs into a structured, searchable knowledge base inside your Obsidian vault. Drop a URL into the inbox folder - or let Raindrop.io feed it automatically - and LucidVault scrapes the full content, summarizes it with an LLM, extracts key takeaways, and links it to your existing notes. Your personal notes live alongside enriched pages, and a `soul.md` file personalizes everything to your background and interests.
+Drop a URL into the inbox (or let Raindrop.io feed it) and LucidVault scrapes the full content, summarizes it with an LLM, pulls out the key takeaways, and links it to your existing notes, all inside your Obsidian vault. Your own notes live alongside the enriched pages, and a `soul.md` file tailors everything to your background and interests.
 
-LucidVault can inject a retrieval strategy section into your `~/.claude/CLAUDE.md`, so Claude Code knows how to query your knowledge base efficiently, making it a daily companion for development work.
+Then it meets you where you already work. LucidVault points Claude Code at your vault so you can query and extend your knowledge base while you code, chat with it in a browser, or read it on any device. A knowledge base that keeps feeding itself and answers back, day after day.
+
+## How it works
+
+```text
+  Ingest                                                    Use
+  ------                                                    ---
+                                                            ┌──────────────┐
+                                                         ┌─►│ Claude Code  │ read + write
+                                      ┌ Obsidian vault ┐ │  ├──────────────┤
+  URLs ─► inbox ─► scrape ─► enrich ─►│ wiki · index   │─┼─►│ browser chat │ ask questions
+  your notes ─► scan ─► auto-tag ────►│ notes · graph  │ │  ├──────────────┤
+                                      └────────────────┘ └─►│ any device   │ Obsidian sync
+                                                            └──────────────┘
+```
+
+Two ways in, one vault, many ways to use it. Saved links get scraped, summarized,
+and linked; the notes you write get scanned and auto-tagged. Everything lands in
+your Obsidian vault, ready to query from Claude Code, a browser, or any synced device.
 
 ## Features
 
