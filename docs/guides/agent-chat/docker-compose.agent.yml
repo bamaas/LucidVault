@@ -1,0 +1,97 @@
+# Full-stack overlay - multi-device sync + AI-agent access.
+#
+# EXAMPLE, not a shipped stack. Layers on the root docker-compose.yml (which is
+# lucidvault-only) and adds everything for the setup in agent-chat-setup.md:
+#
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docs/guides/agent-chat/docker-compose.agent.yml \
+#     up -d
+#
+#   lucidvault      turns the in-process MCP server ON, published on loopback
+#   couchdb         + livesync-bridge - Obsidian LiveSync sync spine
+#   hermes          the agent (OpenAI API + agent loop + MCP client), sandboxed
+#   open-webui      the browser chat UI, wired to Hermes
+#
+# Requires in .env: OLLAMA_API_KEY, COUCHDB_PASSWORD, HERMES_API_KEY.
+
+services:
+  lucidvault:
+    environment:
+      MCP_HTTP_ADDR: ":8080"
+      MCP_ALLOWED_HOST: "localhost,127.0.0.1,lucidvault"
+      MCP_READ_TOOLS: "false"      # agents read vault files directly
+    ports:
+      # Loopback only. MCP exposes vault MUTATION tools - never bind 0.0.0.0.
+      # (To let a trusted-LAN client write via MCP, publish the LAN IP instead
+      #  and add that IP to MCP_ALLOWED_HOST. See the runbook's rationale.)
+      - "127.0.0.1:8080:8080"
+
+  # --- Obsidian LiveSync sync spine ---------------------------------------
+  couchdb:
+    image: couchdb:3
+    container_name: couchdb
+    environment:
+      - COUCHDB_USER=${COUCHDB_USER:-admin}
+      - COUCHDB_PASSWORD=${COUCHDB_PASSWORD:?set COUCHDB_PASSWORD in .env}
+    volumes:
+      - couchdb_data:/opt/couchdb/data
+    ports:
+      - "${COUCHDB_BIND:-127.0.0.1}:5984:5984"
+    restart: unless-stopped
+
+  livesync-bridge:
+    build:
+      context: deploy/livesync-bridge
+    container_name: livesync-bridge
+    volumes:
+      - ./vault:/data/vault
+      - ./deploy/livesync-bridge/config.json:/app/dat/config.json:ro
+    depends_on:
+      - couchdb
+    restart: unless-stopped
+
+  # --- Agent access -------------------------------------------------------
+  hermes:
+    # Official multi-arch image - pulled automatically, no local build.
+    # Pin a date tag (e.g. :v2026.7.1) for reproducible deploys. Tags:
+    #   https://hub.docker.com/r/nousresearch/hermes-agent/tags
+    image: nousresearch/hermes-agent:latest
+    container_name: hermes
+    depends_on:
+      - lucidvault
+    volumes:
+      # The agent's own home (config, skills, memory, sessions) - read/write.
+      - ${HERMES_HOME:-~/.hermes}:/opt/data
+      # The vault, READ-ONLY, at the SAME absolute path the agent's HERMES.md /
+      # AGENTS.md references, so its reads resolve. Fresh setups: use /vault.
+      # Writes are kernel-denied - they must go through the MCP tools.
+      - ./vault:/vault:ro
+    environment:
+      # Remap the in-container user to the host owner of HERMES_HOME.
+      HERMES_UID: "${HERMES_UID:-1000}"
+      HERMES_GID: "${HERMES_GID:-1000}"
+      # API server binds inside the container; open-webui reaches it by name.
+      # API_SERVER_ENABLED / _KEY / _PORT come from the mounted /opt/data/.env.
+      API_SERVER_HOST: "0.0.0.0"
+    command: ["gateway", "run"]
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    depends_on:
+      - hermes
+    ports:
+      - "0.0.0.0:3000:8080"
+    environment:
+      OPENAI_API_BASE_URL: "http://hermes:8090/v1"
+      OPENAI_API_KEY: "${HERMES_API_KEY:?set HERMES_API_KEY in .env}"
+      ENABLE_OLLAMA_API: "false"
+    volumes:
+      - open-webui:/app/backend/data
+    restart: unless-stopped
+
+volumes:
+  couchdb_data:
+  open-webui:

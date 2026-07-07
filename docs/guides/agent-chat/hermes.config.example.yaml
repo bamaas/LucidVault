@@ -1,0 +1,22 @@
+# Hermes config excerpt - the parts that wire it to LucidVault.
+# Lives at /opt/data/config.yaml inside the container (= ~/.hermes/config.yaml
+# on the host, bind-mounted). Only the relevant keys are shown; leave the rest
+# of your generated config as-is.
+
+model:
+  # Pick with `hermes model`. Any strong tool-use model works; a large context
+  # window helps multi-step vault retrieval. Example: Ollama Cloud.
+  default: "minimax-m3"
+  provider: "ollama-cloud"       # key from OLLAMA_API_KEY in /opt/data/.env
+  base_url: "https://ollama.com/v1"
+
+mcp_servers:
+  # LucidVault graph + vault-mutation tools over Streamable HTTP.
+  # Use the compose SERVICE NAME (not 127.0.0.1) - Hermes is on the same
+  # bridge network as the lucidvault container.
+  #
+  # NOTE: stdio MCP servers (command:) must point at a binary that exists
+  # INSIDE the container. Host-only tools (e.g. a host-installed helper) will
+  # not resolve - either bake them into the image or disable them here.
+  lucidvault:
+    url: "http://lucidvault:8080/mcp"
