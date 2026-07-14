@@ -260,6 +260,73 @@ func TestHandleSearchIndex(t *testing.T) {
 			t.Error("expected non-empty JSON")
 		}
 	})
+
+	t.Run("multi-word query with AND semantics matches when terms hit different fields", func(t *testing.T) {
+		// "kubernetes networking" — "kubernetes" matches slug/tags, "networking" matches title/tags.
+		// Both terms must match for the entry to be returned.
+		results, err := HandleSearchIndex(v, "kubernetes networking")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) == 0 {
+			t.Fatal("expected at least one result for multi-word query 'kubernetes networking'")
+		}
+		found := false
+		for _, r := range results {
+			if r.Slug == "kubernetes-networking" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected kubernetes-networking in results for 'kubernetes networking', got: %+v", results)
+		}
+	})
+
+	t.Run("multi-word query with one non-matching term returns no match", func(t *testing.T) {
+		// "kubernetes zzznomatch" — "zzznomatch" does not appear anywhere,
+		// so AND semantics must return empty results.
+		results, err := HandleSearchIndex(v, "kubernetes zzznomatch")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 0 {
+			t.Errorf("expected no results when one term doesn't match, got %d: %+v", len(results), results)
+		}
+	})
+
+	t.Run("whitespace-only query returns empty results", func(t *testing.T) {
+		results, err := HandleSearchIndex(v, "   ")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 0 {
+			t.Errorf("expected empty results for whitespace-only query, got %d", len(results))
+		}
+	})
+
+	t.Run("result cap at maxSearchResults", func(t *testing.T) {
+		// Build an index with >50 matching entries.
+		dir := t.TempDir()
+		v2 := vault.New(dir)
+
+		var lines []string
+		lines = append(lines, "# Wiki Index\n")
+		for i := range 60 {
+			lines = append(lines, fmt.Sprintf("- [[slug-%03d]] — Title %03d [testtag]", i, i))
+		}
+		indexContent := strings.Join(lines, "\n")
+		if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte(indexContent), 0o644); err != nil {
+			t.Fatalf("writing index: %v", err)
+		}
+
+		results, err := HandleSearchIndex(v2, "testtag")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 50 {
+			t.Errorf("expected exactly 50 results (cap), got %d", len(results))
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

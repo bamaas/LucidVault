@@ -21,7 +21,6 @@ import (
 // filesystem-capable agents like Hermes read the vault natively).
 var readToolNames = []string{
 	"get_soul",
-	"search_index",
 	"read_wiki",
 	"grep_vault",
 	"read_note",
@@ -30,8 +29,12 @@ var readToolNames = []string{
 }
 
 // alwaysOnToolNames are registered regardless of the read-tool flag: graph
-// traversal (not reconstructable from a single file read) and all writes.
+// traversal (not reconstructable from a single file read), discovery tools, and
+// all writes. search_wiki is always-on because it returns only index metadata
+// (slug/title/tags) — the map, not the territory — enabling slug discovery for
+// graph tools without exposing page content (see ADR-026).
 var alwaysOnToolNames = []string{
+	"search_wiki",
 	"related_notes",
 	"add_bookmark",
 	"add_note",
