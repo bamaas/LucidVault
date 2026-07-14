@@ -1,3 +1,9 @@
+## v0.25.0 (2026-07-14)
+
+### Feat
+
+- **mcpserver**: rename search_index to search_wiki and promote to always-on (#83)
+
 ## v0.24.1 (2026-07-14)
 
 ### Fix
