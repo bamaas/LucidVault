@@ -260,6 +260,73 @@ func TestHandleSearchIndex(t *testing.T) {
 			t.Error("expected non-empty JSON")
 		}
 	})
+
+	t.Run("multi-word query with AND semantics matches when terms hit different fields", func(t *testing.T) {
+		// "kubernetes networking" — "kubernetes" matches slug/tags, "networking" matches title/tags.
+		// Both terms must match for the entry to be returned.
+		results, err := HandleSearchIndex(v, "kubernetes networking")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) == 0 {
+			t.Fatal("expected at least one result for multi-word query 'kubernetes networking'")
+		}
+		found := false
+		for _, r := range results {
+			if r.Slug == "kubernetes-networking" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected kubernetes-networking in results for 'kubernetes networking', got: %+v", results)
+		}
+	})
+
+	t.Run("multi-word query with one non-matching term returns no match", func(t *testing.T) {
+		// "kubernetes zzznomatch" — "zzznomatch" does not appear anywhere,
+		// so AND semantics must return empty results.
+		results, err := HandleSearchIndex(v, "kubernetes zzznomatch")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 0 {
+			t.Errorf("expected no results when one term doesn't match, got %d: %+v", len(results), results)
+		}
+	})
+
+	t.Run("whitespace-only query returns empty results", func(t *testing.T) {
+		results, err := HandleSearchIndex(v, "   ")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 0 {
+			t.Errorf("expected empty results for whitespace-only query, got %d", len(results))
+		}
+	})
+
+	t.Run("result cap at maxSearchResults", func(t *testing.T) {
+		// Build an index with >50 matching entries.
+		dir := t.TempDir()
+		v2 := vault.New(dir)
+
+		var lines []string
+		lines = append(lines, "# Wiki Index\n")
+		for i := range 60 {
+			lines = append(lines, fmt.Sprintf("- [[slug-%03d]] — Title %03d [testtag]", i, i))
+		}
+		indexContent := strings.Join(lines, "\n")
+		if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte(indexContent), 0o644); err != nil {
+			t.Fatalf("writing index: %v", err)
+		}
+
+		results, err := HandleSearchIndex(v2, "testtag")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 50 {
+			t.Errorf("expected exactly 50 results (cap), got %d", len(results))
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,5 +1246,54 @@ func TestHandleExpandGraph_DefaultHops(t *testing.T) {
 	expected := []string{"b", "c"}
 	if fmt.Sprintf("%v", result) != fmt.Sprintf("%v", expected) {
 		t.Errorf("HandleExpandGraph with hops=0 (default 2) = %v, want %v", result, expected)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleSearchIndex — result cap
+// ---------------------------------------------------------------------------
+
+// TestHandleSearchIndex_Cap verifies that results are capped at maxSearchResults
+// even when more matching entries exist in the index.
+func TestHandleSearchIndex_Cap(t *testing.T) {
+	dir := t.TempDir()
+	v := vault.New(dir)
+
+	// Build an index with maxSearchResults+1 entries that all match "test".
+	var sb strings.Builder
+	sb.WriteString("# Wiki Index\n\n")
+	for i := range maxSearchResults + 1 {
+		fmt.Fprintf(&sb, "- [[test-page-%03d]] — Test Page %d [test]\n", i, i)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte(sb.String()), 0o644); err != nil {
+		t.Fatalf("writing index: %v", err)
+	}
+
+	results, err := HandleSearchIndex(v, "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != maxSearchResults {
+		t.Errorf("expected exactly %d results (cap), got %d", maxSearchResults, len(results))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleSearchIndex — missing index
+// ---------------------------------------------------------------------------
+
+// TestHandleSearchIndex_MissingIndex verifies that a vault with no index.md
+// treats the missing file as an empty index and returns empty results (not an
+// error). This matches vault.ReadIndex's contract: os.IsNotExist → ("", nil).
+func TestHandleSearchIndex_MissingIndex(t *testing.T) {
+	dir := t.TempDir()
+	v := vault.New(dir)
+
+	results, err := HandleSearchIndex(v, "anything")
+	if err != nil {
+		t.Fatalf("unexpected error for missing index: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected empty results for missing index, got %d", len(results))
 	}
 }

@@ -62,24 +62,35 @@ func HandleGetSoul(v *vault.Vault) (string, error) {
 	return content, nil
 }
 
+// maxSearchResults caps the number of entries returned by HandleSearchIndex.
+const maxSearchResults = 50
+
 // HandleSearchIndex searches index.md for entries matching the query.
+// The query is split on whitespace; every term must match (AND semantics) against
+// slug, title, or any tag (case-insensitive substring). Results are capped at
+// maxSearchResults to keep responses agent-friendly.
 func HandleSearchIndex(v *vault.Vault, query string) ([]IndexEntry, error) {
 	indexContent, err := v.ReadIndex()
 	if err != nil {
 		return nil, fmt.Errorf("reading index: %w", err)
 	}
 
-	queryLower := strings.ToLower(query)
+	query = strings.TrimSpace(query)
+	terms := strings.Fields(strings.ToLower(query))
+
 	var results []IndexEntry
 
 	for line := range strings.SplitSeq(indexContent, "\n") {
+		if len(results) >= maxSearchResults {
+			break
+		}
 		entry := ParseIndexEntry(line)
 		if entry == nil {
 			continue
 		}
 
-		// Match against slug, title, and tags (case insensitive).
-		if matchesQuery(entry, queryLower) {
+		// Match against slug, title, and tags (case insensitive, AND across terms).
+		if matchesQuery(entry, terms) {
 			results = append(results, *entry)
 		}
 	}
@@ -90,19 +101,39 @@ func HandleSearchIndex(v *vault.Vault, query string) ([]IndexEntry, error) {
 	return results, nil
 }
 
-func matchesQuery(entry *IndexEntry, queryLower string) bool {
-	if strings.Contains(strings.ToLower(entry.Slug), queryLower) {
-		return true
+// matchesQuery reports whether entry matches all query terms (AND semantics).
+// Each term is matched as a case-insensitive substring against the slug, title,
+// and tags. Zero terms (empty query after trim) always returns false.
+func matchesQuery(entry *IndexEntry, terms []string) bool {
+	if len(terms) == 0 {
+		return false
 	}
-	if strings.Contains(strings.ToLower(entry.Title), queryLower) {
-		return true
-	}
+	slugLower := strings.ToLower(entry.Slug)
+	titleLower := strings.ToLower(entry.Title)
+	var tagsLower []string
 	for _, tag := range entry.Tags {
-		if strings.Contains(strings.ToLower(tag), queryLower) {
-			return true
+		tagsLower = append(tagsLower, strings.ToLower(tag))
+	}
+
+	for _, term := range terms {
+		matched := false
+		if strings.Contains(slugLower, term) {
+			matched = true
+		} else if strings.Contains(titleLower, term) {
+			matched = true
+		} else {
+			for _, tag := range tagsLower {
+				if strings.Contains(tag, term) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // HandleReadWiki reads a wiki page by slug.

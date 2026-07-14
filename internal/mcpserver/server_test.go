@@ -21,7 +21,6 @@ import (
 // filesystem-capable agents like Hermes read the vault natively).
 var readToolNames = []string{
 	"get_soul",
-	"search_index",
 	"read_wiki",
 	"grep_vault",
 	"read_note",
@@ -30,8 +29,12 @@ var readToolNames = []string{
 }
 
 // alwaysOnToolNames are registered regardless of the read-tool flag: graph
-// traversal (not reconstructable from a single file read) and all writes.
+// traversal (not reconstructable from a single file read), discovery tools, and
+// all writes. search_wiki is always-on because it returns only index metadata
+// (slug/title/tags) — the map, not the territory — enabling slug discovery for
+// graph tools without exposing page content (see ADR-026).
 var alwaysOnToolNames = []string{
+	"search_wiki",
 	"related_notes",
 	"add_bookmark",
 	"add_note",
@@ -299,6 +302,78 @@ func TestEditPageTool_ThroughServer(t *testing.T) {
 		}
 		if text := resultText(t, result); text == "" {
 			t.Errorf("expected a non-empty error message for nonexistent slug")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// search_wiki — driven through the real server
+// ---------------------------------------------------------------------------
+
+// TestSearchWikiTool_ThroughServer verifies the search_wiki tool is always
+// registered (regardless of readTools flag), that empty/whitespace queries
+// return a tool-level error, and that a valid query returns JSON results.
+func TestSearchWikiTool_ThroughServer(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write a minimal index so the vault can serve search results.
+	indexContent := "# Wiki Index\n\n- [[kubernetes-networking]] — Kubernetes Networking Deep Dive [kubernetes, networking]\n- [[gitops]] — GitOps with ArgoCD [gitops, argocd, kubernetes]\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "index.md"), []byte(indexContent), 0o644); err != nil {
+		t.Fatalf("writing index: %v", err)
+	}
+
+	v := vault.New(tmpDir)
+	db := newTestStoreForMCP(t)
+
+	// search_wiki must be always-on: register with readTools=false.
+	s := server.NewMCPServer("lucidvault-test", "0.0.0", server.WithToolCapabilities(false))
+	registerTools(s, v, db, false)
+
+	t.Run("empty query returns tool error", func(t *testing.T) {
+		result := callToolThroughServer(t, s, "search_wiki", map[string]any{
+			"query": "",
+		})
+		if !result.IsError {
+			t.Fatalf("expected tool error for empty query, got success")
+		}
+		if text := resultText(t, result); !strings.Contains(text, "query is required") {
+			t.Errorf("expected 'query is required' in error, got %q", text)
+		}
+	})
+
+	t.Run("whitespace-only query returns tool error", func(t *testing.T) {
+		result := callToolThroughServer(t, s, "search_wiki", map[string]any{
+			"query": "   ",
+		})
+		if !result.IsError {
+			t.Fatalf("expected tool error for whitespace-only query, got success")
+		}
+		if text := resultText(t, result); !strings.Contains(text, "query is required") {
+			t.Errorf("expected 'query is required' in error, got %q", text)
+		}
+	})
+
+	t.Run("valid query returns JSON array of results", func(t *testing.T) {
+		result := callToolThroughServer(t, s, "search_wiki", map[string]any{
+			"query": "kubernetes",
+		})
+		if result.IsError {
+			t.Fatalf("expected success, got error: %s", resultText(t, result))
+		}
+		text := resultText(t, result)
+		var entries []IndexEntry
+		if err := json.Unmarshal([]byte(text), &entries); err != nil {
+			t.Fatalf("result is not valid JSON array: %v — got: %s", err, text)
+		}
+		if len(entries) == 0 {
+			t.Error("expected at least one result for 'kubernetes'")
+		}
+	})
+
+	t.Run("search_wiki available when readTools=false", func(t *testing.T) {
+		live := s.ListTools()
+		if _, ok := live["search_wiki"]; !ok {
+			t.Error("search_wiki must be registered even when readTools=false")
 		}
 	})
 }
