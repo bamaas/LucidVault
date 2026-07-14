@@ -423,7 +423,7 @@ func HandleAddBookmark(v *vault.Vault, rawURL, title string, tags []string) (str
 
 	var b strings.Builder
 	b.WriteString("---\n")
-	fmt.Fprintf(&b, "title: %q\n", title)
+	fmt.Fprintf(&b, "title: %s\n", vault.QuoteYAMLValue(title))
 	b.WriteString("tags: [")
 	b.WriteString(strings.Join(tags, ", "))
 	b.WriteString("]\n")

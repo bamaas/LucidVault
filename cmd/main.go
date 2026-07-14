@@ -363,6 +363,7 @@ func processInboxItem(ctx context.Context, item inbox.Item, sc *scraper.Scraper,
 	if err != nil {
 		return fmt.Errorf("enriching: %w", err)
 	}
+	wikiContent = vault.FixFrontmatter(wikiContent)
 
 	// Write wiki file
 	wikiFilename := slug + ".md"
@@ -491,6 +492,7 @@ func reEnrichBookmark(ctx context.Context, rec store.BookmarkRecord, en *enrich.
 	if err != nil {
 		return fmt.Errorf("re-enriching: %w", err)
 	}
+	wikiContent = vault.FixFrontmatter(wikiContent)
 
 	// Handle slug change: remove old index entry and delete old wiki file
 	wikiFilename := slug + ".md"
@@ -712,7 +714,7 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 func buildNoteWikiContent(title string, tags []string, body string) string {
 	var b strings.Builder
 	b.WriteString("---\n")
-	fmt.Fprintf(&b, "title: %q\n", title)
+	fmt.Fprintf(&b, "title: %s\n", vault.QuoteYAMLValue(title))
 	b.WriteString("tags:\n")
 	for _, t := range tags {
 		fmt.Fprintf(&b, "  - %s\n", t)

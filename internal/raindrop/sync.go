@@ -95,11 +95,11 @@ func SyncToInbox(bookmarks []Bookmark, db *store.Store, vaultPath string, force 
 func formatInboxFile(bm Bookmark) string {
 	var b strings.Builder
 	b.WriteString("---\n")
-	fmt.Fprintf(&b, "title: %q\n", bm.Title)
+	fmt.Fprintf(&b, "title: %s\n", vault.QuoteYAMLValue(bm.Title))
 	if len(bm.Tags) > 0 {
 		b.WriteString("tags:\n")
 		for _, tag := range bm.Tags {
-			fmt.Fprintf(&b, "  - %q\n", tag)
+			fmt.Fprintf(&b, "  - %s\n", vault.QuoteYAMLValue(tag))
 		}
 	}
 	b.WriteString("---\n\n")

@@ -390,8 +390,8 @@ func NormalizeURL(rawURL string) string {
 func FormatRawContent(title, sourceURL, dateSaved string, tags []string, content string) string {
 	var b strings.Builder
 	b.WriteString("---\n")
-	fmt.Fprintf(&b, "title: %q\n", title)
-	fmt.Fprintf(&b, "source: %q\n", sourceURL)
+	fmt.Fprintf(&b, "title: %s\n", QuoteYAMLValue(title))
+	fmt.Fprintf(&b, "source: %s\n", QuoteYAMLValue(sourceURL))
 	fmt.Fprintf(&b, "date_saved: %s\n", dateSaved)
 	b.WriteString("source_tags:\n")
 	for _, t := range tags {

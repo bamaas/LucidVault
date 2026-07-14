@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"lucidvault/internal/vault"
 	"net/http"
 	"strings"
 	"time"
@@ -349,10 +350,8 @@ func buildMinimalPage(input *EnrichInput) string {
 	}
 	var b strings.Builder
 	b.WriteString("---\n")
-	safeTitle := strings.ReplaceAll(title, "'", "''")
-	fmt.Fprintf(&b, "title: '%s'\n", safeTitle)
-	safeSource := strings.ReplaceAll(input.URL, "'", "''")
-	fmt.Fprintf(&b, "source: '%s'\n", safeSource)
+	fmt.Fprintf(&b, "title: %s\n", vault.QuoteYAMLValue(title))
+	fmt.Fprintf(&b, "source: %s\n", vault.QuoteYAMLValue(input.URL))
 	fmt.Fprintf(&b, "date_saved: %s\n", input.DateSaved)
 	b.WriteString("tags:\n")
 	for _, t := range input.UserTags {
