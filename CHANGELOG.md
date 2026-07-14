@@ -1,3 +1,9 @@
+## v0.24.1 (2026-07-14)
+
+### Fix
+
+- **vault**: auto-quote YAML frontmatter values containing special characters (#82)
+
 ## v0.24.0 (2026-07-01)
 
 ### Feat
