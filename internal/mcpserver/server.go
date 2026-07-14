@@ -70,35 +70,12 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readToo
 			return mcp.NewToolResultText(content), nil
 		})
 
-		// search_index — Discovery
-		s.AddTool(mcp.NewTool("search_index",
-			mcp.WithDescription("Search the knowledge base index for topics, titles, and tags. Use this first for topic discovery before reading full pages. Returns lightweight references, not full content."),
-			mcp.WithString("query",
-				mcp.Required(),
-				mcp.Description("Search keywords"),
-			),
-		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			query := req.GetString("query", "")
-			if query == "" {
-				return mcp.NewToolResultError("query is required"), nil
-			}
-			results, err := HandleSearchIndex(v, query)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			data, err := json.Marshal(results)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("marshalling results: %v", err)), nil
-			}
-			return mcp.NewToolResultText(string(data)), nil
-		})
-
 		// read_wiki — Primary
 		s.AddTool(mcp.NewTool("read_wiki",
 			mcp.WithDescription("Read a curated wiki page. These are LLM-enriched summaries with key takeaways, tags, and links. Preferred source of knowledge — use before falling back to raw sources."),
 			mcp.WithString("slug",
 				mcp.Required(),
-				mcp.Description("Wiki page slug (from search_index results)"),
+				mcp.Description("Wiki page slug (from search_wiki results)"),
 			),
 		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			slug := req.GetString("slug", "")
@@ -177,6 +154,31 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readToo
 			return mcp.NewToolResultText(content), nil
 		})
 	} // end gated read tools (get_soul..read_raw)
+
+	// search_wiki — Discovery (always-on: returns only index metadata, not page content;
+	// see ADR-026 for rationale on moving this out of the read-tool gate).
+	// Filesystem-capable agents should prefer native grep for content search.
+	s.AddTool(mcp.NewTool("search_wiki",
+		mcp.WithDescription("Search wiki pages by topic keywords across slug, title, and tags. Returns slugs for use with related_notes / expand_graph / read_wiki. For filesystem-capable agents, prefer native grep for content search."),
+		mcp.WithString("query",
+			mcp.Required(),
+			mcp.Description("Search keywords (multi-word queries use AND semantics: every term must match)"),
+		),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		query := strings.TrimSpace(req.GetString("query", ""))
+		if query == "" {
+			return mcp.NewToolResultError("query is required"), nil
+		}
+		results, err := HandleSearchIndex(v, query)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		data, err := json.Marshal(results)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("marshalling results: %v", err)), nil
+		}
+		return mcp.NewToolResultText(string(data)), nil
+	})
 
 	// related_notes — Navigation (bidirectional via edges table)
 	s.AddTool(mcp.NewTool("related_notes",
@@ -410,17 +412,10 @@ func RegisteredTools(readTools bool) []agentsmd.ToolInfo {
 				Description: "Read the user's profile (soul.md). Contains identity, interests, and preferences.",
 			},
 			agentsmd.ToolInfo{
-				Name:        "search_index",
-				Description: "Search the knowledge base index for topics, titles, and tags.",
-				Parameters: []agentsmd.ParamInfo{
-					{Name: "query", Description: "Search keywords", Required: true},
-				},
-			},
-			agentsmd.ToolInfo{
 				Name:        "read_wiki",
 				Description: "Read a curated wiki page (LLM-enriched summary with key takeaways, tags, and links).",
 				Parameters: []agentsmd.ParamInfo{
-					{Name: "slug", Description: "Wiki page slug (from search_index results)", Required: true},
+					{Name: "slug", Description: "Wiki page slug (from search_wiki results)", Required: true},
 				},
 			},
 			agentsmd.ToolInfo{
@@ -452,9 +447,17 @@ func RegisteredTools(readTools bool) []agentsmd.ToolInfo {
 		)
 	}
 
-	// Always-on: graph traversal (not reconstructable from a single file read)
-	// and all writes.
+	// Always-on: discovery (search_wiki), graph traversal, and all writes.
+	// search_wiki returns only index metadata (slug/title/tags), making it a
+	// discovery tool rather than a content-read tool (see ADR-026).
 	tools = append(tools,
+		agentsmd.ToolInfo{
+			Name:        "search_wiki",
+			Description: "Search wiki pages by topic keywords across slug, title, and tags. Returns slugs for use with related_notes / expand_graph / read_wiki.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "query", Description: "Search keywords (multi-word queries use AND semantics)", Required: true},
+			},
+		},
 		agentsmd.ToolInfo{
 			Name:        "related_notes",
 			Description: "Get pages related to a wiki page using bidirectional edge traversal.",

@@ -84,7 +84,7 @@ Environment variables configure the service. CLI flags control one-off operation
 | `HYGIENE_INTERVAL` | No | `10` | Run vault hygiene (broken edge cleanup, index sync, raw/wiki consistency) every Nth poll cycle |
 | `MCP_HTTP_ADDR` | No | - | Serve the MCP server over HTTP in-process with the pipeline (e.g. `:8080`). Empty disables it. See [Exposing MCP over HTTP](#exposing-mcp-over-http). |
 | `MCP_ALLOWED_HOST` | No | `localhost,127.0.0.1` | Comma-separated Host-header allowlist (DNS-rebinding guard). `*` or empty disables the guard - needed in Kubernetes. |
-| `MCP_READ_TOOLS` | No | `false` | Expose the duplicate MCP content-read tools (`read_wiki`, `search_index`, `grep_vault`, `read_note`, `read_raw`, `vault_overview`, `get_soul`). Off by default so filesystem-capable agents read the vault directly; enable for clients that reach the vault only over MCP (no filesystem access). Graph and write tools are always available. |
+| `MCP_READ_TOOLS` | No | `false` | Expose the duplicate MCP content-read tools (`read_wiki`, `grep_vault`, `read_note`, `read_raw`, `vault_overview`, `get_soul`). Off by default so filesystem-capable agents read the vault directly; enable for clients that reach the vault only over MCP (no filesystem access). Discovery (`search_wiki`), graph, and write tools are always available. |
 | `AGENT_WEB_SEARCH_STRATEGY` | No | `fallback` | How the generated `AGENTS.md` tells an agent to use its **own** web search relative to the vault: `off` (no web-search guidance), `fallback` (only when the vault lacks coverage), `time-sensitive` (also for latest/current/news/price/date questions), `immediately` (web + vault in parallel for any substantive question). LucidVault never provides a web search; the prose names no provider. Unknown values fall back to `fallback`. |
 | `CLAUDE_MD_PATH` | No | `/CLAUDE.md` | Path to CLAUDE.md for Claude Code integration (override only if needed) |
 
@@ -129,20 +129,20 @@ lucidvault mcp --http :8080
 
 | Tool | Description |
 |------|-------------|
-| `get_soul` | Read user profile (soul.md) |
-| `search_index` | Search index for topics, titles, and tags |
-| `read_wiki` | Read a curated wiki page |
-| `grep_vault` | Search for exact terms (scoped to wiki/notes/raw) |
-| `read_note` | Read a personal note |
-| `read_raw` | Read original source content (fallback) |
+| `search_wiki` | Search wiki pages by topic, title, or tag (always-on; multi-word AND semantics) |
 | `related_notes` | Get bidirectional related pages (outbound, inbound, both) |
-| `vault_overview` | Get vault stats: page counts, edge count, top tags, metadata |
 | `expand_graph` | Expand seed slugs by traversing edges up to N hops |
 | `add_bookmark` | Add a URL to the inbox for pipeline processing |
 | `add_note` | Create a personal note in the knowledge base |
 | `update_wiki` | Update a section of a wiki page (preserves other sections) |
 | `edit_page` | Replace the whole body of a wiki page (preserves frontmatter, re-syncs edges) |
 | `delete_page` | Delete a page and all artifacts (returns dangling refs) |
+| `get_soul` | Read user profile (soul.md) — requires `MCP_READ_TOOLS=true` |
+| `read_wiki` | Read a curated wiki page — requires `MCP_READ_TOOLS=true` |
+| `grep_vault` | Search for exact terms (scoped to wiki/notes/raw) — requires `MCP_READ_TOOLS=true` |
+| `read_note` | Read a personal note — requires `MCP_READ_TOOLS=true` |
+| `read_raw` | Read original source content (fallback) — requires `MCP_READ_TOOLS=true` |
+| `vault_overview` | Get vault stats: page counts, edge count, top tags, metadata — requires `MCP_READ_TOOLS=true` |
 
 **Claude Code configuration** (`~/.claude/settings.json`):
 
