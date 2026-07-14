@@ -1248,3 +1248,23 @@ func TestHandleExpandGraph_DefaultHops(t *testing.T) {
 		t.Errorf("HandleExpandGraph with hops=0 (default 2) = %v, want %v", result, expected)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// HandleSearchIndex — missing index
+// ---------------------------------------------------------------------------
+
+// TestHandleSearchIndex_MissingIndex verifies that a vault with no index.md
+// treats the missing file as an empty index and returns empty results (not an
+// error). This matches vault.ReadIndex's contract: os.IsNotExist → ("", nil).
+func TestHandleSearchIndex_MissingIndex(t *testing.T) {
+	dir := t.TempDir()
+	v := vault.New(dir)
+
+	results, err := HandleSearchIndex(v, "anything")
+	if err != nil {
+		t.Fatalf("unexpected error for missing index: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected empty results for missing index, got %d", len(results))
+	}
+}
