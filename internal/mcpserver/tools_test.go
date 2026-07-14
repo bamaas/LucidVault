@@ -549,7 +549,7 @@ func TestHandleAddBookmark(t *testing.T) {
 		body := string(content)
 
 		// Verify frontmatter contains title.
-		if !strings.Contains(body, `title: "Some Title"`) {
+		if !strings.Contains(body, `title: Some Title`) {
 			t.Errorf("expected title in frontmatter, got:\n%s", body)
 		}
 

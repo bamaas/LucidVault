@@ -159,10 +159,10 @@ func TestSyncToInbox_FileFormat(t *testing.T) {
 	if !contains(content, "---") {
 		t.Error("missing frontmatter delimiters")
 	}
-	if !contains(content, `title: "My Article"`) {
+	if !contains(content, `title: My Article`) {
 		t.Errorf("missing or incorrect title in frontmatter, got:\n%s", content)
 	}
-	if !contains(content, `- "tech"`) || !contains(content, `- "go"`) {
+	if !contains(content, `- tech`) || !contains(content, `- go`) {
 		t.Errorf("missing tags in frontmatter, got:\n%s", content)
 	}
 	// URL should be after frontmatter
@@ -244,7 +244,7 @@ func TestSyncToInbox_ForceCreatesFilesForProcessedURLs(t *testing.T) {
 	if !contains(content, "https://example.com/already-done") {
 		t.Error("inbox file missing URL for re-fetched bookmark")
 	}
-	if !contains(content, `title: "Already Done"`) {
+	if !contains(content, `title: Already Done`) {
 		t.Error("inbox file missing title in frontmatter")
 	}
 
