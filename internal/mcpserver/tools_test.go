@@ -1250,6 +1250,35 @@ func TestHandleExpandGraph_DefaultHops(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// HandleSearchIndex — result cap
+// ---------------------------------------------------------------------------
+
+// TestHandleSearchIndex_Cap verifies that results are capped at maxSearchResults
+// even when more matching entries exist in the index.
+func TestHandleSearchIndex_Cap(t *testing.T) {
+	dir := t.TempDir()
+	v := vault.New(dir)
+
+	// Build an index with maxSearchResults+1 entries that all match "test".
+	var sb strings.Builder
+	sb.WriteString("# Wiki Index\n\n")
+	for i := range maxSearchResults + 1 {
+		fmt.Fprintf(&sb, "- [[test-page-%03d]] — Test Page %d [test]\n", i, i)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte(sb.String()), 0o644); err != nil {
+		t.Fatalf("writing index: %v", err)
+	}
+
+	results, err := HandleSearchIndex(v, "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != maxSearchResults {
+		t.Errorf("expected exactly %d results (cap), got %d", maxSearchResults, len(results))
+	}
+}
+
+// ---------------------------------------------------------------------------
 // HandleSearchIndex — missing index
 // ---------------------------------------------------------------------------
 
