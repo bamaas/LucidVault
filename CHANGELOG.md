@@ -1,3 +1,9 @@
+## v0.26.0 (2026-07-15)
+
+### Feat
+
+- **mcpserver**: add slug suggestions to not-found errors in related_notes and read_wiki (#84)
+
 ## v0.25.0 (2026-07-14)
 
 ### Feat
