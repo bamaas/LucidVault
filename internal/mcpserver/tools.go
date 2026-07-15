@@ -191,12 +191,9 @@ func suggestSlugs(v *vault.Vault, input string) []string {
 		return scored[i].score > scored[j].score
 	})
 
-	cap := maxSlugSuggestions
-	if len(scored) < cap {
-		cap = len(scored)
-	}
-	slugs := make([]string, cap)
-	for i := range cap {
+	n := min(len(scored), maxSlugSuggestions)
+	slugs := make([]string, n)
+	for i := range n {
 		slugs[i] = scored[i].slug
 	}
 	return slugs
@@ -316,10 +313,10 @@ func HandleReadRaw(v *vault.Vault, filename string) (string, error) {
 // bidirectional edge lookups from the store. Falls back to wikilink parsing when
 // no store is available.
 func HandleRelatedNotes(v *vault.Vault, slug string, db ...*store.Store) ([]RelatedEntry, error) {
-	// Verify the page exists. On miss, enrich the error with similar-slug
-	// suggestions from the index so agents can self-heal without an extra
-	// search_wiki round-trip.
-	if _, err := safeReadFile(v, "wiki/"+slug+".md"); err != nil {
+	// Read the wiki page upfront: verifies existence (not-found → enriched error)
+	// and provides content for the store-less fallback path without a second read.
+	wikiContent, err := safeReadFile(v, "wiki/"+slug+".md")
+	if err != nil {
 		base := fmt.Errorf("wiki page %q not found: %w", slug, err)
 		if suggestions := suggestSlugs(v, slug); len(suggestions) > 0 {
 			return nil, fmt.Errorf("%w; similar pages: %s (use search_wiki for broader discovery)",
@@ -364,12 +361,8 @@ func HandleRelatedNotes(v *vault.Vault, slug string, db ...*store.Store) ([]Rela
 			related[e.FromSlug].inbound = true
 		}
 	} else {
-		// Fallback: parse wikilinks from wiki file content (forward only).
-		content, err := safeReadFile(v, "wiki/"+slug+".md")
-		if err != nil {
-			return nil, fmt.Errorf("reading wiki page %q: %w", slug, err)
-		}
-		links := ParseWikiLinks(content)
+		// Fallback: parse wikilinks from the already-read wiki file (forward only).
+		links := ParseWikiLinks(wikiContent)
 		for _, link := range links {
 			related[link] = &dirInfo{outbound: true}
 		}
