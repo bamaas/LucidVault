@@ -1297,3 +1297,284 @@ func TestHandleSearchIndex_MissingIndex(t *testing.T) {
 		t.Errorf("expected empty results for missing index, got %d", len(results))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// termMatchesEntry — helper extraction
+// ---------------------------------------------------------------------------
+
+// TestTermMatchesEntry verifies the shared helper that powers both matchesQuery
+// (AND semantics) and suggestSlugs (OR semantics). After the helper extraction
+// the existing matchesQuery tests must also stay green.
+func TestTermMatchesEntry(t *testing.T) {
+	entry := &IndexEntry{
+		Slug:  "apple-m7-ultra",
+		Title: "Apple M7 Ultra Chip",
+		Tags:  []string{"apple", "silicon", "chip"},
+	}
+
+	t.Run("matches slug substring", func(t *testing.T) {
+		if !termMatchesEntry(entry, "apple") {
+			t.Error("expected 'apple' to match slug")
+		}
+	})
+
+	t.Run("matches title substring", func(t *testing.T) {
+		if !termMatchesEntry(entry, "ultra") {
+			t.Error("expected 'ultra' to match title")
+		}
+	})
+
+	t.Run("matches tag substring", func(t *testing.T) {
+		if !termMatchesEntry(entry, "chip") {
+			t.Error("expected 'chip' to match tag")
+		}
+	})
+
+	t.Run("case insensitive", func(t *testing.T) {
+		if !termMatchesEntry(entry, "APPLE") {
+			t.Error("expected case-insensitive match for 'APPLE'")
+		}
+	})
+
+	t.Run("no match returns false", func(t *testing.T) {
+		if termMatchesEntry(entry, "zzznothing") {
+			t.Error("expected no match for 'zzznothing'")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// suggestSlugs — OR-scored slug suggestions on miss
+// ---------------------------------------------------------------------------
+
+// testIndexForSuggestions builds a vault with an index seeded with Apple-M-chip
+// entries so we can test suggestion scoring against a realistic slug space.
+func testIndexForSuggestions(t *testing.T) *vault.Vault {
+	t.Helper()
+	dir := t.TempDir()
+	v := vault.New(dir)
+
+	indexContent := `# Wiki Index
+
+- [[apple-m7-ultra-komt-in-2028-en-ondersteunt-tot-15t]] — Apple M7 Ultra Komt In 2028 [apple, silicon, m7]
+- [[apple-silicon-roadmap]] — Apple Silicon Roadmap [apple, silicon]
+- [[kubernetes-networking]] — Kubernetes Networking Deep Dive [kubernetes, networking]
+- [[gitops]] — GitOps with ArgoCD [gitops, argocd]
+`
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte(indexContent), 0o644); err != nil {
+		t.Fatalf("writing index: %v", err)
+	}
+	return v
+}
+
+// TestSuggestSlugs_BasicMatch verifies that a guessed slug closely resembling
+// existing entries returns those entries as suggestions.
+func TestSuggestSlugs_BasicMatch(t *testing.T) {
+	v := testIndexForSuggestions(t)
+
+	// "apple-m7" normalizes to ["apple", "m7"] — both terms exist across
+	// apple-m7-ultra-... (slug contains both) and apple-silicon-roadmap (slug
+	// has "apple").
+	suggestions := suggestSlugs(v, "apple-m7")
+	if len(suggestions) == 0 {
+		t.Fatal("expected at least one suggestion for 'apple-m7'")
+	}
+	// The ultra slug matches both "apple" and "m7" — must be first.
+	if suggestions[0] != "apple-m7-ultra-komt-in-2028-en-ondersteunt-tot-15t" {
+		t.Errorf("expected apple-m7-ultra-... as first suggestion, got %q", suggestions[0])
+	}
+	// apple-silicon-roadmap matches "apple" — should also appear.
+	found := false
+	for _, s := range suggestions {
+		if s == "apple-silicon-roadmap" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected apple-silicon-roadmap in suggestions, got %v", suggestions)
+	}
+}
+
+// TestSuggestSlugs_PartialMiss verifies OR semantics: a dead term ("chip") does
+// not eliminate entries that match the other terms. This is the key difference
+// from search_wiki's AND semantics.
+func TestSuggestSlugs_PartialMiss(t *testing.T) {
+	v := testIndexForSuggestions(t)
+
+	// "apple-m7-chip" normalizes to ["apple", "m7", "chip"].
+	// "chip" matches no entry, but "apple" and "m7" do — OR semantics must
+	// still return suggestions.
+	suggestions := suggestSlugs(v, "apple-m7-chip")
+	if len(suggestions) == 0 {
+		t.Fatal("expected suggestions for 'apple-m7-chip' despite dead term 'chip'")
+	}
+	if suggestions[0] != "apple-m7-ultra-komt-in-2028-en-ondersteunt-tot-15t" {
+		t.Errorf("expected apple-m7-ultra-... as first suggestion, got %q", suggestions[0])
+	}
+}
+
+// TestSuggestSlugs_Ranking verifies that entries matching more terms rank above
+// entries matching fewer terms.
+func TestSuggestSlugs_Ranking(t *testing.T) {
+	v := testIndexForSuggestions(t)
+
+	// "apple m7" → ultra slug scores 2 (apple + m7 both in slug/tags),
+	// silicon-roadmap scores 1 (apple only). Ultra must rank first.
+	suggestions := suggestSlugs(v, "apple-m7")
+	if len(suggestions) < 2 {
+		t.Fatalf("expected at least 2 suggestions, got %d: %v", len(suggestions), suggestions)
+	}
+	if suggestions[0] != "apple-m7-ultra-komt-in-2028-en-ondersteunt-tot-15t" {
+		t.Errorf("2-term match should outrank 1-term match; first suggestion = %q", suggestions[0])
+	}
+}
+
+// TestSuggestSlugs_Cap verifies that at most maxSlugSuggestions (5) slugs are
+// returned even when more than 5 entries score ≥ 1.
+func TestSuggestSlugs_Cap(t *testing.T) {
+	dir := t.TempDir()
+	v := vault.New(dir)
+
+	// 8 entries all containing "golang".
+	var sb strings.Builder
+	sb.WriteString("# Wiki Index\n\n")
+	for i := range 8 {
+		fmt.Fprintf(&sb, "- [[golang-tip-%02d]] — Golang Tip %d [golang]\n", i, i)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte(sb.String()), 0o644); err != nil {
+		t.Fatalf("writing index: %v", err)
+	}
+
+	suggestions := suggestSlugs(v, "golang")
+	if len(suggestions) != maxSlugSuggestions {
+		t.Errorf("expected exactly %d suggestions (cap), got %d: %v", maxSlugSuggestions, len(suggestions), suggestions)
+	}
+}
+
+// TestSuggestSlugs_NoMatch verifies that when no entry scores ≥ 1, the
+// function returns nil (so the caller leaves the error message unchanged).
+func TestSuggestSlugs_NoMatch(t *testing.T) {
+	v := testIndexForSuggestions(t)
+
+	suggestions := suggestSlugs(v, "zzznomatch-xyzzy")
+	if len(suggestions) != 0 {
+		t.Errorf("expected no suggestions for unrecognised input, got %v", suggestions)
+	}
+}
+
+// TestSuggestSlugs_EmptyInput verifies that an empty or whitespace-only input
+// produces zero terms after normalisation and therefore no suggestions.
+func TestSuggestSlugs_EmptyInput(t *testing.T) {
+	v := testIndexForSuggestions(t)
+
+	for _, input := range []string{"", "   ", "-", "---"} {
+		suggestions := suggestSlugs(v, input)
+		if len(suggestions) != 0 {
+			t.Errorf("suggestSlugs(%q): expected no suggestions, got %v", input, suggestions)
+		}
+	}
+}
+
+// TestSuggestSlugs_MissingIndex verifies that when the index is missing or
+// empty, suggestSlugs returns nil without panicking.
+func TestSuggestSlugs_MissingIndex(t *testing.T) {
+	dir := t.TempDir()
+	v := vault.New(dir) // no index.md written
+
+	suggestions := suggestSlugs(v, "apple-m7")
+	if len(suggestions) != 0 {
+		t.Errorf("expected no suggestions for missing index, got %v", suggestions)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleReadWiki — not-found error includes suggestions
+// ---------------------------------------------------------------------------
+
+// TestHandleReadWiki_NotFoundIncludesSuggestions verifies that when a slug
+// does not exist, the error message includes a "similar pages:" clause listing
+// close matches from the index.
+func TestHandleReadWiki_NotFoundIncludesSuggestions(t *testing.T) {
+	v := testIndexForSuggestions(t)
+
+	_, err := HandleReadWiki(v, "apple-m7")
+	if err == nil {
+		t.Fatal("expected error for non-existent slug 'apple-m7'")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "similar pages:") {
+		t.Errorf("error message missing 'similar pages:' clause; got: %q", msg)
+	}
+	if !strings.Contains(msg, "apple-m7-ultra-komt-in-2028-en-ondersteunt-tot-15t") {
+		t.Errorf("error message missing expected suggestion; got: %q", msg)
+	}
+	if !strings.Contains(msg, "use search_wiki for broader discovery") {
+		t.Errorf("error message missing discovery hint; got: %q", msg)
+	}
+}
+
+// TestHandleReadWiki_NoSuggestionsWhenNoMatch verifies that when no entry
+// scores ≥ 1, the error message is byte-identical to the current behavior
+// (no "similar pages:" clause appended).
+func TestHandleReadWiki_NoSuggestionsWhenNoMatch(t *testing.T) {
+	v := testIndexForSuggestions(t)
+
+	_, err := HandleReadWiki(v, "zzznomatch-xyzzy")
+	if err == nil {
+		t.Fatal("expected error for non-existent slug")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "similar pages:") {
+		t.Errorf("error message must not contain 'similar pages:' when no entries score; got: %q", msg)
+	}
+}
+
+// TestHandleReadWiki_HappyPathUnchanged verifies the success path is not
+// affected by the suggestion logic.
+func TestHandleReadWiki_HappyPathUnchanged(t *testing.T) {
+	v, _ := setupTestVault(t)
+	content, err := HandleReadWiki(v, "kubernetes-networking")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if content != testWikiKubernetesNetworking {
+		t.Error("content mismatch on happy path")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleRelatedNotes — not-found error includes suggestions
+// ---------------------------------------------------------------------------
+
+// TestHandleRelatedNotes_NotFoundIncludesSuggestions verifies that when a slug
+// does not exist, the error from HandleRelatedNotes includes "similar pages:".
+func TestHandleRelatedNotes_NotFoundIncludesSuggestions(t *testing.T) {
+	v := testIndexForSuggestions(t)
+
+	_, err := HandleRelatedNotes(v, "apple-m7")
+	if err == nil {
+		t.Fatal("expected error for non-existent slug 'apple-m7'")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "similar pages:") {
+		t.Errorf("error message missing 'similar pages:' clause; got: %q", msg)
+	}
+	if !strings.Contains(msg, "apple-m7-ultra-komt-in-2028-en-ondersteunt-tot-15t") {
+		t.Errorf("error message missing expected suggestion; got: %q", msg)
+	}
+}
+
+// TestHandleRelatedNotes_NoSuggestionsWhenNoMatch verifies that when no entry
+// scores ≥ 1, the error message has no "similar pages:" clause.
+func TestHandleRelatedNotes_NoSuggestionsWhenNoMatch(t *testing.T) {
+	v := testIndexForSuggestions(t)
+
+	_, err := HandleRelatedNotes(v, "zzznomatch-xyzzy")
+	if err == nil {
+		t.Fatal("expected error for non-existent slug")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "similar pages:") {
+		t.Errorf("error message must not contain 'similar pages:' when no entries score; got: %q", msg)
+	}
+}

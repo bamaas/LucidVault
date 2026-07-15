@@ -130,7 +130,7 @@ lucidvault mcp --http :8080
 | Tool | Description |
 |------|-------------|
 | `search_wiki` | Search wiki pages by topic, title, or tag (always-on; multi-word AND semantics) |
-| `related_notes` | Get bidirectional related pages (outbound, inbound, both) |
+| `related_notes` | Get bidirectional related pages (outbound, inbound, both); not-found errors include similar-slug suggestions |
 | `expand_graph` | Expand seed slugs by traversing edges up to N hops |
 | `add_bookmark` | Add a URL to the inbox for pipeline processing |
 | `add_note` | Create a personal note in the knowledge base |
@@ -138,7 +138,7 @@ lucidvault mcp --http :8080
 | `edit_page` | Replace the whole body of a wiki page (preserves frontmatter, re-syncs edges) |
 | `delete_page` | Delete a page and all artifacts (returns dangling refs) |
 | `get_soul` | Read user profile (soul.md) — requires `MCP_READ_TOOLS=true` |
-| `read_wiki` | Read a curated wiki page — requires `MCP_READ_TOOLS=true` |
+| `read_wiki` | Read a curated wiki page; not-found errors include similar-slug suggestions — requires `MCP_READ_TOOLS=true` |
 | `grep_vault` | Search for exact terms (scoped to wiki/notes/raw) — requires `MCP_READ_TOOLS=true` |
 | `read_note` | Read a personal note — requires `MCP_READ_TOOLS=true` |
 | `read_raw` | Read original source content (fallback) — requires `MCP_READ_TOOLS=true` |

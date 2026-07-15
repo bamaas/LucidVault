@@ -377,3 +377,44 @@ func TestSearchWikiTool_ThroughServer(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// related_notes — through-server: unknown slug error includes suggestions
+// ---------------------------------------------------------------------------
+
+// TestRelatedNotesTool_NotFoundIncludesSuggestions verifies that when
+// related_notes is called with a slug that does not exist, the tool-level error
+// text contains "similar pages:" populated from the index.
+func TestRelatedNotesTool_NotFoundIncludesSuggestions(t *testing.T) {
+	tmpDir := t.TempDir()
+	for _, sub := range []string{"wiki", "raw", "notes"} {
+		if err := os.MkdirAll(filepath.Join(tmpDir, sub), 0o755); err != nil {
+			t.Fatalf("creating %s dir: %v", sub, err)
+		}
+	}
+
+	// Seed index with Apple-M7 entries so suggestSlugs finds them.
+	indexContent := "# Wiki Index\n\n- [[apple-m7-ultra-komt-in-2028]] — Apple M7 Ultra [apple, silicon, m7]\n- [[apple-silicon-roadmap]] — Apple Silicon Roadmap [apple, silicon]\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "index.md"), []byte(indexContent), 0o644); err != nil {
+		t.Fatalf("writing index: %v", err)
+	}
+
+	v := vault.New(tmpDir)
+	db := newTestStoreForMCP(t)
+	s := server.NewMCPServer("lucidvault-test", "0.0.0", server.WithToolCapabilities(false))
+	registerTools(s, v, db, false)
+
+	result := callToolThroughServer(t, s, "related_notes", map[string]any{
+		"slug": "apple-m7",
+	})
+	if !result.IsError {
+		t.Fatalf("expected tool error for unknown slug 'apple-m7', got success")
+	}
+	text := resultText(t, result)
+	if !strings.Contains(text, "similar pages:") {
+		t.Errorf("tool error text missing 'similar pages:' clause; got: %q", text)
+	}
+	if !strings.Contains(text, "apple-m7-ultra-komt-in-2028") {
+		t.Errorf("tool error text missing expected suggestion; got: %q", text)
+	}
+}
