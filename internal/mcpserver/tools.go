@@ -101,6 +101,26 @@ func HandleSearchIndex(v *vault.Vault, query string) ([]IndexEntry, error) {
 	return results, nil
 }
 
+// termMatchesEntry reports whether a single term matches the entry's slug,
+// title, or any tag (case-insensitive substring). It is the shared primitive
+// used by both matchesQuery (AND semantics) and suggestSlugs (OR semantics).
+// The term is lowercased internally so callers need not pre-lowercase it.
+func termMatchesEntry(entry *IndexEntry, term string) bool {
+	term = strings.ToLower(term)
+	if strings.Contains(strings.ToLower(entry.Slug), term) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(entry.Title), term) {
+		return true
+	}
+	for _, tag := range entry.Tags {
+		if strings.Contains(strings.ToLower(tag), term) {
+			return true
+		}
+	}
+	return false
+}
+
 // matchesQuery reports whether entry matches all query terms (AND semantics).
 // Each term is matched as a case-insensitive substring against the slug, title,
 // and tags. Zero terms (empty query after trim) always returns false.
@@ -108,39 +128,93 @@ func matchesQuery(entry *IndexEntry, terms []string) bool {
 	if len(terms) == 0 {
 		return false
 	}
-	slugLower := strings.ToLower(entry.Slug)
-	titleLower := strings.ToLower(entry.Title)
-	var tagsLower []string
-	for _, tag := range entry.Tags {
-		tagsLower = append(tagsLower, strings.ToLower(tag))
-	}
-
 	for _, term := range terms {
-		matched := false
-		if strings.Contains(slugLower, term) {
-			matched = true
-		} else if strings.Contains(titleLower, term) {
-			matched = true
-		} else {
-			for _, tag := range tagsLower {
-				if strings.Contains(tag, term) {
-					matched = true
-					break
-				}
-			}
-		}
-		if !matched {
+		if !termMatchesEntry(entry, term) {
 			return false
 		}
 	}
 	return true
 }
 
-// HandleReadWiki reads a wiki page by slug.
+// maxSlugSuggestions caps the number of similar-slug suggestions included in
+// not-found error messages.
+const maxSlugSuggestions = 5
+
+// suggestSlugs returns up to maxSlugSuggestions slugs from the index that are
+// similar to the failed input, using OR-scored per-term substring matching.
+// The input is normalized (lowercase, separators replaced by spaces, split on
+// whitespace) before scoring. Entries are ranked by score descending, with ties
+// broken by index file order (deterministic). Returns nil when no entry scores
+// ≥ 1, or when the index cannot be read (best-effort — never masks the original
+// not-found error with an index error).
+func suggestSlugs(v *vault.Vault, input string) []string {
+	indexContent, err := v.ReadIndex()
+	if err != nil || indexContent == "" {
+		return nil
+	}
+
+	// Normalize: lowercase, replace separators with spaces, split on whitespace.
+	normalized := strings.NewReplacer("-", " ", "_", " ", "/", " ").Replace(strings.ToLower(input))
+	terms := strings.Fields(normalized)
+	if len(terms) == 0 {
+		return nil
+	}
+
+	type scoredEntry struct {
+		slug  string
+		score int
+	}
+
+	var scored []scoredEntry
+	for line := range strings.SplitSeq(indexContent, "\n") {
+		entry := ParseIndexEntry(line)
+		if entry == nil {
+			continue
+		}
+		score := 0
+		for _, term := range terms {
+			if termMatchesEntry(entry, term) {
+				score++
+			}
+		}
+		if score > 0 {
+			scored = append(scored, scoredEntry{slug: entry.Slug, score: score})
+		}
+	}
+
+	if len(scored) == 0 {
+		return nil
+	}
+
+	// Sort by score descending; index order is the tiebreaker (stable sort).
+	sort.SliceStable(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+
+	cap := maxSlugSuggestions
+	if len(scored) < cap {
+		cap = len(scored)
+	}
+	slugs := make([]string, cap)
+	for i := range cap {
+		slugs[i] = scored[i].slug
+	}
+	return slugs
+}
+
+// HandleReadWiki reads a wiki page by slug. When the page does not exist, the
+// error message is enriched with up to maxSlugSuggestions similar slugs from
+// the index (OR-scored per-term substring matching) to help agents self-heal
+// without an extra search_wiki round-trip.
 func HandleReadWiki(v *vault.Vault, slug string) (string, error) {
 	content, err := safeReadFile(v, "wiki/"+slug+".md")
 	if err != nil {
-		return "", fmt.Errorf("wiki page %q not found: %w", slug, err)
+		base := fmt.Errorf("wiki page %q not found: %w", slug, err)
+		if suggestions := suggestSlugs(v, slug); len(suggestions) > 0 {
+			return "", fmt.Errorf("%w; similar pages: %s (use search_wiki for broader discovery)",
+				base, strings.Join(suggestions, ", "))
+		}
+		return "", base
 	}
 	return content, nil
 }
@@ -242,9 +316,16 @@ func HandleReadRaw(v *vault.Vault, filename string) (string, error) {
 // bidirectional edge lookups from the store. Falls back to wikilink parsing when
 // no store is available.
 func HandleRelatedNotes(v *vault.Vault, slug string, db ...*store.Store) ([]RelatedEntry, error) {
-	// Verify the page exists.
+	// Verify the page exists. On miss, enrich the error with similar-slug
+	// suggestions from the index so agents can self-heal without an extra
+	// search_wiki round-trip.
 	if _, err := safeReadFile(v, "wiki/"+slug+".md"); err != nil {
-		return nil, fmt.Errorf("wiki page %q not found: %w", slug, err)
+		base := fmt.Errorf("wiki page %q not found: %w", slug, err)
+		if suggestions := suggestSlugs(v, slug); len(suggestions) > 0 {
+			return nil, fmt.Errorf("%w; similar pages: %s (use search_wiki for broader discovery)",
+				base, strings.Join(suggestions, ", "))
+		}
+		return nil, base
 	}
 
 	// Track direction per related slug: outbound, inbound, or both.

@@ -72,7 +72,7 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readToo
 
 		// read_wiki — Primary
 		s.AddTool(mcp.NewTool("read_wiki",
-			mcp.WithDescription("Read a curated wiki page. These are LLM-enriched summaries with key takeaways, tags, and links. Preferred source of knowledge — use before falling back to raw sources."),
+			mcp.WithDescription("Read a curated wiki page. These are LLM-enriched summaries with key takeaways, tags, and links. Preferred source of knowledge — use before falling back to raw sources. Not-found errors include similar-slug suggestions so you can retry without an extra search_wiki call."),
 			mcp.WithString("slug",
 				mcp.Required(),
 				mcp.Description("Wiki page slug (from search_wiki results)"),
@@ -182,7 +182,7 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readToo
 
 	// related_notes — Navigation (bidirectional via edges table)
 	s.AddTool(mcp.NewTool("related_notes",
-		mcp.WithDescription("Get pages related to a given wiki page using bidirectional edge traversal. Returns outbound links (pages this page references), inbound links (pages that reference this page), and pages with both directions. Use after reading a page to discover connected knowledge."),
+		mcp.WithDescription("Get pages related to a given wiki page using bidirectional edge traversal. Returns outbound links (pages this page references), inbound links (pages that reference this page), and pages with both directions. Not-found errors include similar-slug suggestions so you can retry without an extra search_wiki call."),
 		mcp.WithString("slug",
 			mcp.Required(),
 			mcp.Description("Wiki page slug to find relations for"),
@@ -413,7 +413,7 @@ func RegisteredTools(readTools bool) []agentsmd.ToolInfo {
 			},
 			agentsmd.ToolInfo{
 				Name:        "read_wiki",
-				Description: "Read a curated wiki page (LLM-enriched summary with key takeaways, tags, and links).",
+				Description: "Read a curated wiki page (LLM-enriched summary with key takeaways, tags, and links). Not-found errors include similar-slug suggestions.",
 				Parameters: []agentsmd.ParamInfo{
 					{Name: "slug", Description: "Wiki page slug (from search_wiki results)", Required: true},
 				},
@@ -460,7 +460,7 @@ func RegisteredTools(readTools bool) []agentsmd.ToolInfo {
 		},
 		agentsmd.ToolInfo{
 			Name:        "related_notes",
-			Description: "Get pages related to a wiki page using bidirectional edge traversal.",
+			Description: "Get pages related to a wiki page using bidirectional edge traversal. Not-found errors include similar-slug suggestions.",
 			Parameters: []agentsmd.ParamInfo{
 				{Name: "slug", Description: "Wiki page slug to find relations for", Required: true},
 			},
