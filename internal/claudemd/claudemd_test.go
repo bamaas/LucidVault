@@ -551,6 +551,18 @@ func TestUpsert_AbsentVaultFallbackSentence(t *testing.T) {
 		t.Errorf("pointer must instruct the agent to follow AGENTS.md; got:\n%s", content)
 	}
 
+	// ADR-028: the absent-vault sentence itself must tell the agent to
+	// report the vault as unavailable rather than guess or fabricate. This
+	// is distinct from the MCP-tools sentence below -- deleting this clause
+	// from bodyFmt while keeping the MCP-tools sentence intact must fail
+	// this test.
+	if !strings.Contains(lower, "does not exist") && !strings.Contains(lower, "not mounted") {
+		t.Errorf("pointer must tell the agent when the vault path does not exist or is not mounted; got:\n%s", content)
+	}
+	if !strings.Contains(lower, "unavailable") {
+		t.Errorf("pointer must instruct the agent to report the vault as unavailable instead of guessing; got:\n%s", content)
+	}
+
 	// Always-on tools the absent-vault sentence may name (ADR-028).
 	assertContains(t, content, "search_wiki")
 	assertContains(t, content, "related_notes")
