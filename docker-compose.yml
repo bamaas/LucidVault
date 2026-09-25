@@ -20,6 +20,8 @@ services:
       - MCP_HTTP_ADDR=${MCP_HTTP_ADDR:-}
       - MCP_ALLOWED_HOST=${MCP_ALLOWED_HOST:-}
       - MCP_READ_TOOLS=${MCP_READ_TOOLS:-}
+      # Host path of the vault, for the CLAUDE.md pointer (see .env.example).
+      - CLAUDE_MD_VAULT_PATH=${CLAUDE_MD_VAULT_PATH:-}
     volumes:
       - ./vault:/vault
       - db:/data

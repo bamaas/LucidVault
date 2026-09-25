@@ -102,10 +102,15 @@ touch ~/.claude/CLAUDE.md    # ensure it exists before mounting
 
 docker run -d --name lucidvault --restart unless-stopped \
   -e OLLAMA_API_KEY=<your-key> \
+  -e CLAUDE_MD_VAULT_PATH=~/lucid-vault \
   -v ~/lucid-vault:/vault \
   -v ~/.claude/CLAUDE.md:/CLAUDE.md \
   ghcr.io/bamaas/lucidvault:latest
 ```
+
+`CLAUDE_MD_VAULT_PATH` is required here because the container only knows the
+vault as `/vault` - a path that does not exist on your host, so the pointer
+written into `~/.claude/CLAUDE.md` must be told the host path explicitly.
 
 Claude Code then reads the vault files directly. To let it also *write* (add
 bookmarks/notes, edit pages) deterministically over MCP - and to sync the vault
