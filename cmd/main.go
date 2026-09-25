@@ -83,8 +83,10 @@ func main() {
 	if claudeMDPath == "" {
 		claudeMDPath = "/CLAUDE.md"
 	}
+	claudeMDVaultPath := resolveClaudeMDVaultPath(cfg)
+	usingVaultPathFallback := cfg.claudeMDVaultPath == ""
 	if _, err := os.Stat(claudeMDPath); err == nil {
-		status, err := claudemd.Upsert(claudeMDPath, resolveClaudeMDVaultPath(cfg))
+		status, err := claudemd.Upsert(claudeMDPath, claudeMDVaultPath)
 		switch {
 		case err != nil:
 			slog.Warn("failed to upsert CLAUDE.md section", "path", claudeMDPath, "error", err)
@@ -92,6 +94,10 @@ func main() {
 			slog.Warn("CLAUDE.md section diverged from generated content; skipping", "path", claudeMDPath)
 		default:
 			slog.Info("CLAUDE.md section upserted", "path", claudeMDPath)
+			if usingVaultPathFallback {
+				slog.Warn("CLAUDE_MD_VAULT_PATH is unset; CLAUDE.md advertises the pipeline's own VAULT_PATH, which may not resolve for the reader",
+					"emitted_path", claudeMDVaultPath, "env", "CLAUDE_MD_VAULT_PATH")
+			}
 		}
 	}
 
