@@ -173,6 +173,9 @@ func TestUpsertClaudeMD_DivergedBlock_WarnsFileOnly_NoFallbackWarn(t *testing.T)
 	if _, hasEmittedPath := rec["emitted_path"]; hasEmittedPath {
 		t.Errorf("diverged-skip record must not carry emitted_path (that belongs to the fallback warning); record: %v", rec)
 	}
+	if rec["hint"] != "delete the lucidvault marker block in CLAUDE.md to let LucidVault regenerate it" {
+		t.Errorf("diverged-skip record hint = %v, want a remediation hint naming the marker block", rec["hint"])
+	}
 }
 
 // TestUpsertClaudeMD_ErrorResult_LogsWarningNoPanic verifies MAJOR-1(d): a
@@ -245,5 +248,40 @@ func TestUpsertClaudeMD_TargetDoesNotExist_NoOp(t *testing.T) {
 	}
 	if logged := buf.String(); logged != "" {
 		t.Errorf("expected no log output when the target file does not exist; log output: %q", logged)
+	}
+}
+
+// TestLogClaudeMDUpsertResult_UnexpectedStatus_WarnsInsteadOfAssumingSuccess
+// verifies the switch in logClaudeMDUpsertResult switches explicitly on
+// status: a Status value it does not recognize must be logged as a warning
+// naming the unexpected status, not fall through to the "wrote successfully"
+// branch. claudemd.Upsert cannot produce such a value with err == nil today,
+// so this calls the logging helper directly with a fabricated out-of-range
+// Status to guard against a future claudemd.Status value reaching here
+// unhandled.
+func TestLogClaudeMDUpsertResult_UnexpectedStatus_WarnsInsteadOfAssumingSuccess(t *testing.T) {
+	const fabricatedStatus = claudemd.Status(99)
+
+	var buf bytes.Buffer
+	logClaudeMDUpsertResult(fabricatedStatus, nil, "/some/CLAUDE.md", "/host/vault", false, newTestLogger(&buf))
+
+	logged := buf.String()
+	if strings.Contains(logged, "CLAUDE.md section upserted") {
+		t.Errorf("unexpected status must not be logged as a successful write; log output: %q", logged)
+	}
+	if strings.Contains(logged, "CLAUDE_MD_VAULT_PATH") {
+		t.Errorf("unexpected status must not trigger the fallback warning; log output: %q", logged)
+	}
+
+	records := parseLogLines(t, &buf)
+	rec := findLogRecord(t, records, "unexpected CLAUDE.md upsert status")
+	if rec["level"] != "WARN" {
+		t.Errorf("unexpected-status record level = %v, want WARN", rec["level"])
+	}
+	if rec["path"] != "/some/CLAUDE.md" {
+		t.Errorf("unexpected-status record path = %v, want %q", rec["path"], "/some/CLAUDE.md")
+	}
+	if gotStatus, ok := rec["status"].(float64); !ok || int(gotStatus) != int(fabricatedStatus) {
+		t.Errorf("unexpected-status record status = %v, want %d", rec["status"], int(fabricatedStatus))
 	}
 }

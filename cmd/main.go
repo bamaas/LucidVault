@@ -841,33 +841,50 @@ func resolveClaudeMDVaultPath(cfg *config) (path string, usingFallback bool) {
 
 // upsertClaudeMD writes the LucidVault pointer section into the host's
 // CLAUDE.md, if the file exists at claudeMDPath (best-effort: a missing or
-// unwritable CLAUDE.md must not fail pipeline startup). It logs the three
-// outcomes ADR-027 and ADR-028 require the caller to distinguish:
-//   - a hard failure (warn, naming the path and the error)
-//   - a StatusSkippedDiverged result -- an existing block that is not
-//     generator-owned -- (warn, naming the path only; no fallback warning,
-//     since nothing was written)
-//   - a write (info, naming the path), plus a second warning when
-//     usingVaultPathFallback is true, naming both the emitted
-//     claudeMDVaultPath and the CLAUDE_MD_VAULT_PATH env var, since the
-//     emitted path is then the pipeline's own (often container-local)
-//     VAULT_PATH rather than a value the operator configured for the reader
+// unwritable CLAUDE.md must not fail pipeline startup). See
+// logClaudeMDUpsertResult for the outcomes it logs.
 func upsertClaudeMD(claudeMDPath, claudeMDVaultPath string, usingVaultPathFallback bool, logger *slog.Logger) {
 	if _, err := os.Stat(claudeMDPath); err != nil {
 		return
 	}
 	status, err := claudemd.Upsert(claudeMDPath, claudeMDVaultPath)
+	logClaudeMDUpsertResult(status, err, claudeMDPath, claudeMDVaultPath, usingVaultPathFallback, logger)
+}
+
+// logClaudeMDUpsertResult logs the outcome of a claudemd.Upsert call. It
+// switches explicitly on status (rather than falling through to a catch-all
+// "it worked" branch) so a status this function does not know about is
+// reported as unexpected instead of being logged as a successful write. It
+// logs the four outcomes ADR-027 and ADR-028 require the caller to
+// distinguish:
+//   - a hard failure (warn, naming the path and the error)
+//   - a StatusSkippedDiverged result -- an existing block that is not
+//     generator-owned -- (warn, naming the path and a remediation hint; no
+//     fallback warning, since nothing was written)
+//   - a StatusWrote result (info, naming the path), plus a second warning
+//     when usingVaultPathFallback is true, naming both the emitted
+//     claudeMDVaultPath and the CLAUDE_MD_VAULT_PATH env var, since the
+//     emitted path is then the pipeline's own (often container-local)
+//     VAULT_PATH rather than a value the operator configured for the reader
+//   - any other status (warn, naming the path and the unexpected status),
+//     which should not occur today but guards against a future claudemd.Status
+//     value reaching here unhandled
+func logClaudeMDUpsertResult(status claudemd.Status, err error, claudeMDPath, claudeMDVaultPath string, usingVaultPathFallback bool, logger *slog.Logger) {
 	switch {
 	case err != nil:
 		logger.Warn("failed to upsert CLAUDE.md section", "path", claudeMDPath, "error", err)
 	case status == claudemd.StatusSkippedDiverged:
-		logger.Warn("CLAUDE.md section diverged from generated content; skipping", "path", claudeMDPath)
-	default:
+		logger.Warn("CLAUDE.md section diverged from generated content; skipping",
+			"path", claudeMDPath,
+			"hint", "delete the lucidvault marker block in CLAUDE.md to let LucidVault regenerate it")
+	case status == claudemd.StatusWrote:
 		logger.Info("CLAUDE.md section upserted", "path", claudeMDPath)
 		if usingVaultPathFallback {
 			logger.Warn("CLAUDE_MD_VAULT_PATH is unset; CLAUDE.md advertises the pipeline's own VAULT_PATH, which may not resolve for the reader",
 				"emitted_path", claudeMDVaultPath, "env", "CLAUDE_MD_VAULT_PATH")
 		}
+	default:
+		logger.Warn("unexpected CLAUDE.md upsert status", "status", int(status), "path", claudeMDPath)
 	}
 }
 
