@@ -12,3 +12,4 @@ tasks/
 plan.md
 worktrees/
 .lean-ctx/
+.DS_Store
