@@ -28,7 +28,10 @@ services:
     volumes:
       - ./vault:/vault
       - db:/data
-      # - ~/.claude/CLAUDE.md:/CLAUDE.md  # uncomment to enable the CLAUDE.md pointer; requires CLAUDE_MD_VAULT_PATH above
+      # Uncomment to enable the CLAUDE.md pointer; requires CLAUDE_MD_VAULT_PATH
+      # above. Create the file first, or Docker mounts a directory instead:
+      # touch ~/.claude/CLAUDE.md
+      # - ~/.claude/CLAUDE.md:/CLAUDE.md
     user: "1000:1000"
     restart: unless-stopped
 

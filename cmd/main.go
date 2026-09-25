@@ -801,11 +801,8 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 	// CLAUDE_MD_VAULT_PATH describes the vault as the CLAUDE.md reader (the
 	// host) sees it, per ADR-028 -- distinct from VAULT_PATH, which is the
 	// pipeline's own (often container-local) view. A whitespace-only value is
-	// treated as unset; a real value is kept verbatim (no trimming).
-	claudeMDVaultPath := os.Getenv("CLAUDE_MD_VAULT_PATH")
-	if strings.TrimSpace(claudeMDVaultPath) == "" {
-		claudeMDVaultPath = ""
-	}
+	// treated as unset; surrounding whitespace on a real value is trimmed.
+	claudeMDVaultPath := strings.TrimSpace(os.Getenv("CLAUDE_MD_VAULT_PATH"))
 
 	return &config{
 		raindropToken:     raindropToken,
@@ -851,24 +848,13 @@ func upsertClaudeMD(claudeMDPath, claudeMDVaultPath string, usingVaultPathFallba
 	logClaudeMDUpsertResult(status, err, claudeMDPath, claudeMDVaultPath, usingVaultPathFallback, logger)
 }
 
-// logClaudeMDUpsertResult logs the outcome of a claudemd.Upsert call. It
-// switches explicitly on status (rather than falling through to a catch-all
-// "it worked" branch) so a status this function does not know about is
-// reported as unexpected instead of being logged as a successful write. It
-// logs the four outcomes ADR-027 and ADR-028 require the caller to
-// distinguish:
-//   - a hard failure (warn, naming the path and the error)
-//   - a StatusSkippedDiverged result -- an existing block that is not
-//     generator-owned -- (warn, naming the path and a remediation hint; no
-//     fallback warning, since nothing was written)
-//   - a StatusWrote result (info, naming the path), plus a second warning
-//     when usingVaultPathFallback is true, naming both the emitted
-//     claudeMDVaultPath and the CLAUDE_MD_VAULT_PATH env var, since the
-//     emitted path is then the pipeline's own (often container-local)
-//     VAULT_PATH rather than a value the operator configured for the reader
-//   - any other status (warn, naming the path and the unexpected status),
-//     which should not occur today but guards against a future claudemd.Status
-//     value reaching here unhandled
+// logClaudeMDUpsertResult logs the outcome of a claudemd.Upsert call.
+//
+// StatusSkippedDiverged does not also emit the vault-path-fallback warning:
+// nothing was written in that case, so warning about the emitted path would
+// be misleading. The default case has no currently-reachable Status value
+// but stays as a guard against a future claudemd.Status variant being added
+// without updating this switch.
 func logClaudeMDUpsertResult(status claudemd.Status, err error, claudeMDPath, claudeMDVaultPath string, usingVaultPathFallback bool, logger *slog.Logger) {
 	switch {
 	case err != nil:

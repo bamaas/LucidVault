@@ -102,8 +102,8 @@ touch ~/.claude/CLAUDE.md    # ensure it exists before mounting
 
 docker run -d --name lucidvault --restart unless-stopped \
   -e OLLAMA_API_KEY=<your-key> \
-  -e CLAUDE_MD_VAULT_PATH=/Users/you/lucid-vault \
-  -v /Users/you/lucid-vault:/vault \
+  -e CLAUDE_MD_VAULT_PATH="$HOME/lucid-vault" \
+  -v ~/lucid-vault:/vault \
   -v ~/.claude/CLAUDE.md:/CLAUDE.md \
   ghcr.io/bamaas/lucidvault:latest
 ```

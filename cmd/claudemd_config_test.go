@@ -3,7 +3,7 @@ package main
 import "testing"
 
 // TestLoadConfig_ClaudeMDVaultPath verifies CLAUDE_MD_VAULT_PATH parsing per
-// ADR-028 and docs/plans/plan-claudemd-portable-pointer.md: loadConfig reads
+// ADR-028 and docs/plans/plan-claudemd-portable-pointer.md: loadConfig trims
 // the raw env var into cfg.claudeMDVaultPath (empty string when unset or
 // whitespace-only -- the plan's edge case for "treated as unset"), and
 // resolveClaudeMDVaultPath implements the precedence the Upsert call site in
@@ -28,6 +28,7 @@ func TestLoadConfig_ClaudeMDVaultPath(t *testing.T) {
 		{name: "empty falls back to VAULT_PATH", env: "", set: true, wantField: "", wantResolved: "/container/vault", wantFallback: true},
 		{name: "whitespace only falls back to VAULT_PATH", env: "   ", set: true, wantField: "", wantResolved: "/container/vault", wantFallback: true},
 		{name: "set overrides VAULT_PATH", env: "/Users/bas/lucid-vault", set: true, wantField: "/Users/bas/lucid-vault", wantResolved: "/Users/bas/lucid-vault", wantFallback: false},
+		{name: "surrounding whitespace is trimmed", env: "  /Users/bas/lucid-vault  ", set: true, wantField: "/Users/bas/lucid-vault", wantResolved: "/Users/bas/lucid-vault", wantFallback: false},
 	}
 
 	for _, tt := range tests {
