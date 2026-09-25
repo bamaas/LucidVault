@@ -1358,3 +1358,132 @@ func TestHandleEditPage_NoFrontmatterDoesNotFabricateIt(t *testing.T) {
 		t.Errorf("old body content should be replaced, got:\n%s", s)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// HandleCreateWiki
+// ---------------------------------------------------------------------------
+
+// initIndex writes a minimal index.md so UpdateIndex has a file to append to,
+// mirroring what vault.Init() sets up in production.
+func initIndex(t *testing.T, dir string) {
+	t.Helper()
+	content := "# Wiki Index\n\nLast updated: 2024-01-01\n\n## Pages\n\n"
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("writing index.md: %v", err)
+	}
+}
+
+func TestHandleCreateWiki_CreatesPageWithFrontmatter(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	initIndex(t, dir)
+
+	slug, err := HandleCreateWiki(v, db, "My New Page", "Some initial content.", []string{"golang", "testing"})
+	if err != nil {
+		t.Fatalf("HandleCreateWiki: %v", err)
+	}
+	if slug != "my-new-page" {
+		t.Fatalf("expected slug %q, got %q", "my-new-page", slug)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "wiki/my-new-page.md"))
+	if err != nil {
+		t.Fatalf("reading wiki page: %v", err)
+	}
+	s := string(content)
+
+	today := time.Now().Format("2006-01-02")
+	for _, want := range []string{
+		"title: My New Page",
+		"slug: my-new-page",
+		"- golang",
+		"- testing",
+		"created: " + today,
+		"last_updated: " + today,
+		"# My New Page",
+		"Some initial content.",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("expected page to contain %q, got:\n%s", want, s)
+		}
+	}
+}
+
+func TestHandleCreateWiki_UpdatesIndex(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	initIndex(t, dir)
+
+	if _, err := HandleCreateWiki(v, db, "Indexed Page", "Body.", nil); err != nil {
+		t.Fatalf("HandleCreateWiki: %v", err)
+	}
+
+	index, err := os.ReadFile(filepath.Join(dir, "index.md"))
+	if err != nil {
+		t.Fatalf("reading index.md: %v", err)
+	}
+	if !strings.Contains(string(index), "[[indexed-page]]") {
+		t.Errorf("expected index.md to contain new page entry, got:\n%s", string(index))
+	}
+}
+
+func TestHandleCreateWiki_SyncsWikilinkEdges(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	initIndex(t, dir)
+
+	if _, err := HandleCreateWiki(v, db, "Linking Page", "See [[other-page]] for more.", nil); err != nil {
+		t.Fatalf("HandleCreateWiki: %v", err)
+	}
+
+	edges, err := db.GetOutboundEdges("linking-page")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	found := false
+	for _, e := range edges {
+		if e.ToSlug == "other-page" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected edge to other-page, got: %+v", edges)
+	}
+}
+
+func TestHandleCreateWiki_FailsIfSlugAlreadyExists(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	initIndex(t, dir)
+
+	if _, err := HandleCreateWiki(v, db, "Duplicate Page", "First version.", nil); err != nil {
+		t.Fatalf("HandleCreateWiki: %v", err)
+	}
+
+	_, err := HandleCreateWiki(v, db, "Duplicate Page", "Second version.", nil)
+	if err == nil {
+		t.Fatal("expected error creating a page with an already-existing slug, got nil")
+	}
+
+	content, readErr := os.ReadFile(filepath.Join(dir, "wiki/duplicate-page.md"))
+	if readErr != nil {
+		t.Fatalf("reading wiki page: %v", readErr)
+	}
+	if !strings.Contains(string(content), "First version.") {
+		t.Errorf("existing page should not be overwritten, got:\n%s", string(content))
+	}
+}
+
+func TestHandleCreateWiki_EmptyTitleReturnsError(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	initIndex(t, dir)
+
+	if _, err := HandleCreateWiki(v, db, "", "Some content.", nil); err == nil {
+		t.Fatal("expected error for empty title, got nil")
+	}
+}
+
+func TestHandleCreateWiki_EmptyContentReturnsError(t *testing.T) {
+	v, db, dir := setupWriteTestVault(t)
+	initIndex(t, dir)
+
+	if _, err := HandleCreateWiki(v, db, "Some Title", "   ", nil); err == nil {
+		t.Fatal("expected error for whitespace-only content, got nil")
+	}
+}

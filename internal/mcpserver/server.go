@@ -278,6 +278,39 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readToo
 		return mcp.NewToolResultText(fmt.Sprintf("Note saved to notes/%s", filename)), nil
 	})
 
+	// create_wiki — Write (requires store)
+	if db != nil {
+		s.AddTool(mcp.NewTool("create_wiki",
+			mcp.WithDescription("Create a new wiki page from scratch, with frontmatter (title, slug, tags, created, last_updated) and initial content. Fails if the slug already exists — use edit_page or update_wiki to modify an existing page. Use this instead of add_note when the content belongs in the wiki, not notes/."),
+			mcp.WithString("title",
+				mcp.Required(),
+				mcp.Description("Page title (used for H1 heading, frontmatter, and slug/filename)"),
+			),
+			mcp.WithString("content",
+				mcp.Required(),
+				mcp.Description("Markdown body of the page, no frontmatter"),
+			),
+			mcp.WithString("tags",
+				mcp.Description("Comma-separated tags (e.g. \"golang, testing\")"),
+			),
+		), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			title := req.GetString("title", "")
+			if title == "" {
+				return mcp.NewToolResultError("title is required"), nil
+			}
+			content := req.GetString("content", "")
+			if strings.TrimSpace(content) == "" {
+				return mcp.NewToolResultError("content is required"), nil
+			}
+			tags := parseTags(req.GetString("tags", ""))
+			slug, err := HandleCreateWiki(v, db, title, content, tags)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Wiki page created at wiki/%s.md and indexed.", slug)), nil
+		})
+	}
+
 	// update_wiki — Write (requires store)
 	if db != nil {
 		s.AddTool(mcp.NewTool("update_wiki",
@@ -399,7 +432,7 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readToo
 //
 // It assumes a non-nil store — the only configuration used in practice, since
 // both the in-process server and the `mcp` subcommand always open the DB. The
-// store-gated tools (update_wiki, edit_page, expand_graph, delete_page) are therefore
+// store-gated tools (create_wiki, update_wiki, edit_page, expand_graph, delete_page) are therefore
 // always listed.
 func RegisteredTools(readTools bool) []agentsmd.ToolInfo {
 	var tools []agentsmd.ToolInfo
@@ -489,6 +522,15 @@ func RegisteredTools(readTools bool) []agentsmd.ToolInfo {
 				{Name: "title", Description: "Note title (used for H1 heading and filename)", Required: true},
 				{Name: "content", Description: "Markdown body of the note", Required: true},
 				{Name: "tags", Description: "Comma-separated tags. If omitted, the pipeline will auto-tag."},
+			},
+		},
+		agentsmd.ToolInfo{
+			Name:        "create_wiki",
+			Description: "Create a new wiki page from scratch, with frontmatter and initial content.",
+			Parameters: []agentsmd.ParamInfo{
+				{Name: "title", Description: "Page title (used for H1 heading, frontmatter, and slug/filename)", Required: true},
+				{Name: "content", Description: "Markdown body of the page, no frontmatter", Required: true},
+				{Name: "tags", Description: "Comma-separated tags"},
 			},
 		},
 		agentsmd.ToolInfo{
