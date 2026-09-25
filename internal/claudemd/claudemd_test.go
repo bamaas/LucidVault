@@ -1,18 +1,34 @@
 package claudemd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
+// legacyTemplateFmt is the pre-checksum ADR-025 pointer template, verbatim
+// as it existed before the ADR-027 divergence guard. ADR-027 requires the
+// guard to recognize a block in exactly this shape (any vault path) as
+// generator-written and upgrade it; anything that merely resembles this
+// shape must be treated as diverged. Fixed here, independent of the package
+// under test, as the historical contract these tests pin down.
+const legacyTemplateFmt = "<!-- lucidvault:start -->\n" +
+	"## LucidVault Knowledge Base\n\n" +
+	"You have a personal knowledge base at %s. It contains `AGENTS.md` — read that file and follow it. `AGENTS.md` is the single source of truth for the vault layout, retrieval strategy, and citation rules.\n" +
+	"<!-- lucidvault:end -->"
+
 func TestUpsert_CreatesNewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 
-	if err := Upsert(path, "/data/vault"); err != nil {
+	status, err := Upsert(path, "/data/vault")
+	if err != nil {
 		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusWrote {
+		t.Errorf("status = %v, want %v", status, StatusWrote)
 	}
 
 	content := readFile(t, path)
@@ -30,8 +46,12 @@ func TestUpsert_AppendsToExisting(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if err := Upsert(path, "/vault"); err != nil {
+	status, err := Upsert(path, "/vault")
+	if err != nil {
 		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusWrote {
+		t.Errorf("status = %v, want %v", status, StatusWrote)
 	}
 
 	content := readFile(t, path)
@@ -41,6 +61,13 @@ func TestUpsert_AppendsToExisting(t *testing.T) {
 	assertContains(t, content, EndMarker)
 }
 
+// TestUpsert_ReplacesExisting exercises a marker block whose body is neither
+// checksum-matched (no embedded checksum) nor a legacy pre-checksum template
+// match ("old content" is not the ADR-025 pointer shape). Under the ADR-027
+// divergence guard this is user content and MUST be preserved byte-identical,
+// with the call reporting a skip -- the opposite of the pre-guard behavior
+// this test originally asserted (blind replacement, which is the silent
+// data-loss bug ADR-027 exists to fix).
 func TestUpsert_ReplacesExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
@@ -50,24 +77,37 @@ func TestUpsert_ReplacesExisting(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if err := Upsert(path, "/new/vault"); err != nil {
+	status, err := Upsert(path, "/new/vault")
+	if err != nil {
 		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusSkippedDiverged {
+		t.Errorf("status = %v, want %v", status, StatusSkippedDiverged)
 	}
 
 	content := readFile(t, path)
-	assertContains(t, content, "# Config")
-	assertContains(t, content, "# Footer")
-	assertContains(t, content, "/new/vault")
-	assertNotContains(t, content, "old content")
+	if content != old {
+		t.Errorf("expected file to be left byte-identical when diverged\ngot:\n%s\nwant:\n%s", content, old)
+	}
+	assertContains(t, content, "old content")
+	assertNotContains(t, content, "/new/vault")
 }
 
 func TestUpsert_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 
-	for range 3 {
-		if err := Upsert(path, "/vault"); err != nil {
-			t.Fatalf("Upsert: %v", err)
+	var firstContent string
+	for i := range 3 {
+		status, err := Upsert(path, "/vault")
+		if err != nil {
+			t.Fatalf("Upsert (iteration %d): %v", i, err)
+		}
+		if status != StatusWrote {
+			t.Errorf("iteration %d: status = %v, want %v", i, status, StatusWrote)
+		}
+		if i == 0 {
+			firstContent = readFile(t, path)
 		}
 	}
 
@@ -75,6 +115,9 @@ func TestUpsert_Idempotent(t *testing.T) {
 	count := strings.Count(content, StartMarker)
 	if count != 1 {
 		t.Errorf("expected 1 start marker, got %d", count)
+	}
+	if content != firstContent {
+		t.Errorf("expected file to converge after the first run and stay stable\nfirst:\n%s\nfinal:\n%s", firstContent, content)
 	}
 }
 
@@ -86,8 +129,12 @@ func TestUpsert_PointerForm(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 
-	if err := Upsert(path, "/data/vault"); err != nil {
+	status, err := Upsert(path, "/data/vault")
+	if err != nil {
 		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusWrote {
+		t.Errorf("status = %v, want %v", status, StatusWrote)
 	}
 
 	content := readFile(t, path)
@@ -113,6 +160,422 @@ func TestUpsert_PointerForm(t *testing.T) {
 	assertNotContains(t, content, "Vault Structure")
 	assertNotContains(t, content, "LLM-enriched summaries")
 	assertNotContains(t, content, "Fetch a URL")
+}
+
+// TestUpsert_ChecksumRoundTrip_PicksUpNewPath verifies acceptance criterion 1
+// and plan test-list item 1: a block Upsert itself wrote, re-run through
+// Upsert unchanged, is recognized as generator-owned (its embedded checksum
+// matches its current body) and rewritten -- including picking up a new
+// vault path on the very next call, with no manual edit in between.
+func TestUpsert_ChecksumRoundTrip_PicksUpNewPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	status1, err := Upsert(path, "/vault/a")
+	if err != nil {
+		t.Fatalf("Upsert (1st): %v", err)
+	}
+	if status1 != StatusWrote {
+		t.Errorf("1st call: status = %v, want %v", status1, StatusWrote)
+	}
+
+	status2, err := Upsert(path, "/vault/b")
+	if err != nil {
+		t.Fatalf("Upsert (2nd): %v", err)
+	}
+	if status2 != StatusWrote {
+		t.Errorf("2nd call: status = %v, want %v", status2, StatusWrote)
+	}
+
+	content := readFile(t, path)
+	assertContains(t, content, "/vault/b")
+	assertNotContains(t, content, "/vault/a")
+	if count := strings.Count(content, StartMarker); count != 1 {
+		t.Errorf("expected 1 start marker after rewrite, got %d", count)
+	}
+}
+
+// TestUpsert_ChecksumMismatch_HandEditedBlockPreserved verifies acceptance
+// criterion 2 and plan test-list item 2: a checksummed block whose body was
+// hand-edited after Upsert wrote it (so its embedded checksum no longer
+// matches its body) must be left byte-identical on the next Upsert call, and
+// the call must signal skipped-diverged rather than an error.
+func TestUpsert_ChecksumMismatch_HandEditedBlockPreserved(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	if _, err := Upsert(path, "/vault/a"); err != nil {
+		t.Fatalf("Upsert (seed): %v", err)
+	}
+
+	generated := readFile(t, path)
+	handEdited := strings.Replace(generated, EndMarker, "\n\nA user wrote this sentence by hand.\n"+EndMarker, 1)
+	if handEdited == generated {
+		t.Fatalf("test setup: hand edit did not change content")
+	}
+	if err := os.WriteFile(path, []byte(handEdited), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/vault/b")
+	if err != nil {
+		t.Fatalf("Upsert (after hand edit): %v", err)
+	}
+	if status != StatusSkippedDiverged {
+		t.Errorf("status = %v, want %v", status, StatusSkippedDiverged)
+	}
+
+	content := readFile(t, path)
+	if content != handEdited {
+		t.Errorf("expected file to be left byte-identical after divergence\ngot:\n%s\nwant:\n%s", content, handEdited)
+	}
+	assertContains(t, content, "A user wrote this sentence by hand.")
+	assertNotContains(t, content, "/vault/b")
+}
+
+// TestUpsert_LegacyTemplateShape_Upgraded verifies acceptance criterion 3 and
+// plan test-list item 3: a legacy (pre-checksum) block whose body exactly
+// matches the ADR-025 pointer template, carrying any vault path, is provably
+// generator-written per ADR-027 and must be upgraded -- rewritten with the
+// new template and an embedded checksum -- on the next Upsert.
+func TestUpsert_LegacyTemplateShape_Upgraded(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	legacyBlock := fmt.Sprintf(legacyTemplateFmt, "/legacy/vault")
+	old := "# Config\n\n" + legacyBlock + "\n\n# Footer\n"
+	if err := os.WriteFile(path, []byte(old), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/upgraded/vault")
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusWrote {
+		t.Errorf("status = %v, want %v", status, StatusWrote)
+	}
+
+	content := readFile(t, path)
+	assertContains(t, content, "# Config")
+	assertContains(t, content, "# Footer")
+	assertContains(t, content, "/upgraded/vault")
+	assertNotContains(t, content, "/legacy/vault")
+	if count := strings.Count(content, StartMarker); count != 1 {
+		t.Errorf("expected 1 start marker after upgrade, got %d", count)
+	}
+}
+
+// TestUpsert_LegacyTemplateWithAddedProse_TreatedAsDiverged verifies
+// acceptance criterion 4 and plan test-list item 4: a legacy block carrying
+// the ADR-025 template shape PLUS user-added prose no longer matches that
+// shape exactly, so ADR-027 requires it be treated as diverged -- left
+// byte-identical, with the call reporting skipped-diverged.
+func TestUpsert_LegacyTemplateWithAddedProse_TreatedAsDiverged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	legacyBlock := fmt.Sprintf(legacyTemplateFmt, "/legacy/vault")
+	withProse := strings.Replace(legacyBlock, EndMarker, "\n\nAlso check the inbox weekly.\n"+EndMarker, 1)
+	old := "# Config\n\n" + withProse + "\n\n# Footer\n"
+	if err := os.WriteFile(path, []byte(old), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/upgraded/vault")
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusSkippedDiverged {
+		t.Errorf("status = %v, want %v", status, StatusSkippedDiverged)
+	}
+
+	content := readFile(t, path)
+	if content != old {
+		t.Errorf("expected file to be left byte-identical when diverged\ngot:\n%s\nwant:\n%s", content, old)
+	}
+	assertContains(t, content, "Also check the inbox weekly.")
+	assertNotContains(t, content, "/upgraded/vault")
+}
+
+// TestUpsert_NoMarkerBlock_AppendsAndPreservesContent verifies acceptance
+// criterion 5 and plan test-list item 6: a file with no marker block gets
+// one appended, with every byte of the pre-existing content preserved as a
+// prefix, and the call reports a write.
+func TestUpsert_NoMarkerBlock_AppendsAndPreservesContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	existing := "# My Config\n\n- some bullet\n- another bullet\n"
+	if err := os.WriteFile(path, []byte(existing), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/vault")
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusWrote {
+		t.Errorf("status = %v, want %v", status, StatusWrote)
+	}
+
+	content := readFile(t, path)
+	if !strings.HasPrefix(content, existing) {
+		t.Errorf("expected pre-existing content preserved verbatim as a prefix\ngot:\n%s\nwant prefix:\n%s", content, existing)
+	}
+	assertContains(t, content, StartMarker)
+	assertContains(t, content, EndMarker)
+}
+
+// TestUpsert_AbsentVaultFallbackSentence verifies acceptance criteria 7-8 and
+// plan test-list item 8: the emitted block carries the passed-in path, points
+// at AGENTS.md with an instruction to follow it, and the ADR-028 absent-vault
+// fallback sentence -- which may name only the always-on MCP tools
+// (search_wiki, related_notes, expand_graph) and must never promise the
+// MCP_READ_TOOLS-gated content-read tools, nor restate retrieval
+// strategy/file-legend content that belongs solely to AGENTS.md.
+func TestUpsert_AbsentVaultFallbackSentence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	if _, err := Upsert(path, "/data/vault"); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	content := readFile(t, path)
+
+	assertContains(t, content, "/data/vault")
+	assertContains(t, content, "AGENTS.md")
+	lower := strings.ToLower(content)
+	if !strings.Contains(lower, "follow") {
+		t.Errorf("pointer must instruct the agent to follow AGENTS.md; got:\n%s", content)
+	}
+
+	// Always-on tools the absent-vault sentence may name (ADR-028).
+	assertContains(t, content, "search_wiki")
+	assertContains(t, content, "related_notes")
+	assertContains(t, content, "expand_graph")
+
+	// MCP_READ_TOOLS-gated content-read tools (default off) must never be
+	// promised -- promising them contradicts ADR-023's native-first default.
+	for _, forbidden := range []string{
+		"read_wiki", "grep_vault", "read_note", "read_raw", "vault_overview", "get_soul",
+	} {
+		assertNotContains(t, content, forbidden)
+	}
+
+	// Retrieval strategy and the file legend belong solely to AGENTS.md
+	// (ADR-025); restating them here would reintroduce the drift ADR-025
+	// exists to eliminate.
+	assertNotContains(t, content, "Retrieval Strategy")
+	assertNotContains(t, content, "Grep index.md")
+	assertNotContains(t, content, "Vault Structure")
+}
+
+// TestUpsert_EmptyFile_AppendsWithNoLeadingBlankLines verifies the "target
+// file exists but is empty" edge case: the block is appended with no leading
+// blank lines.
+func TestUpsert_EmptyFile_AppendsWithNoLeadingBlankLines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/vault")
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusWrote {
+		t.Errorf("status = %v, want %v", status, StatusWrote)
+	}
+
+	content := readFile(t, path)
+	if !strings.HasPrefix(content, StartMarker) {
+		t.Errorf("expected block to start the file with no leading blank lines, got:\n%q", content)
+	}
+}
+
+// TestUpsert_UnterminatedMarkers_AppendsRatherThanSwallowingContent verifies
+// the destructive-failure-mode edge case called out explicitly in the plan:
+// a start marker with no matching end marker must NOT be matched by the
+// marker regex -- a greedy/unanchored match could otherwise swallow
+// everything after the dangling start marker to the end of the file. The
+// block must instead be appended, and all existing content -- including the
+// dangling start marker itself -- must survive untouched.
+func TestUpsert_UnterminatedMarkers_AppendsRatherThanSwallowingContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	old := "# Config\n\n" + StartMarker + "\nsome dangling content\nthat must survive\n"
+	if err := os.WriteFile(path, []byte(old), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/vault")
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusWrote {
+		t.Errorf("status = %v, want %v", status, StatusWrote)
+	}
+
+	content := readFile(t, path)
+	assertContains(t, content, "some dangling content")
+	assertContains(t, content, "that must survive")
+
+	if count := strings.Count(content, StartMarker); count != 2 {
+		t.Errorf("expected 2 start markers (dangling original + newly appended), got %d\ncontent:\n%s", count, content)
+	}
+	if count := strings.Count(content, EndMarker); count != 1 {
+		t.Errorf("expected 1 end marker (from the newly appended block only), got %d\ncontent:\n%s", count, content)
+	}
+}
+
+// TestUpsert_TwoMarkerPairs_OnlyFirstTouched verifies the "two marker pairs
+// in one file" edge case: only the first pair is replaced/upgraded, the
+// second is left completely untouched, and the count of marker pairs must
+// not grow.
+func TestUpsert_TwoMarkerPairs_OnlyFirstTouched(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	if _, err := Upsert(path, "/vault/old"); err != nil {
+		t.Fatalf("Upsert (seed first block): %v", err)
+	}
+	firstBlock := readFile(t, path)
+
+	secondBlock := StartMarker + "\nSECOND-BLOCK-SENTINEL\n" + EndMarker
+	combined := firstBlock + "\n\n# Between\n\n" + secondBlock + "\n\n# Footer\n"
+	if err := os.WriteFile(path, []byte(combined), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/vault/new")
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusWrote {
+		t.Errorf("status = %v, want %v", status, StatusWrote)
+	}
+
+	content := readFile(t, path)
+	if count := strings.Count(content, StartMarker); count != 2 {
+		t.Errorf("expected marker pair count to stay at 2, got %d start markers\ncontent:\n%s", count, content)
+	}
+	if count := strings.Count(content, EndMarker); count != 2 {
+		t.Errorf("expected marker pair count to stay at 2, got %d end markers\ncontent:\n%s", count, content)
+	}
+
+	assertContains(t, content, "/vault/new")
+	assertNotContains(t, content, "/vault/old")
+	assertContains(t, content, "SECOND-BLOCK-SENTINEL")
+	assertContains(t, content, "# Between")
+	assertContains(t, content, "# Footer")
+}
+
+// TestUpsert_VaultPathWithRegexMetacharacters verifies vault paths
+// containing regex metacharacters and '%' survive templating and
+// shape-matching intact: they must not break Sprintf-style formatting of the
+// template, must not break the checksum round trip, and must not break
+// legacy-shape regex matching (an unescaped metacharacter in the path could
+// otherwise turn the shape match into something that matches too much, too
+// little, or panics).
+func TestUpsert_VaultPathWithRegexMetacharacters(t *testing.T) {
+	trickyPaths := []string{
+		"/vault/a.b",
+		"/vault/(parenthesized)",
+		"/vault/$HOME",
+		"/vault/100%full",
+		"/vault/a.b(c)$d%e",
+	}
+
+	for _, trickyPath := range trickyPaths {
+		t.Run(trickyPath, func(t *testing.T) {
+			t.Run("checksum round trip", func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "CLAUDE.md")
+
+				status1, err := Upsert(path, trickyPath)
+				if err != nil {
+					t.Fatalf("Upsert (1st): %v", err)
+				}
+				if status1 != StatusWrote {
+					t.Errorf("1st call: status = %v, want %v", status1, StatusWrote)
+				}
+
+				status2, err := Upsert(path, trickyPath)
+				if err != nil {
+					t.Fatalf("Upsert (2nd, round trip): %v", err)
+				}
+				if status2 != StatusWrote {
+					t.Errorf("2nd call: status = %v, want %v", status2, StatusWrote)
+				}
+
+				content := readFile(t, path)
+				assertContains(t, content, trickyPath)
+				if count := strings.Count(content, StartMarker); count != 1 {
+					t.Errorf("expected 1 start marker, got %d\ncontent:\n%s", count, content)
+				}
+			})
+
+			t.Run("legacy shape upgrade", func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "CLAUDE.md")
+
+				legacyBlock := fmt.Sprintf(legacyTemplateFmt, trickyPath)
+				old := "# Config\n\n" + legacyBlock + "\n\n# Footer\n"
+				if err := os.WriteFile(path, []byte(old), 0644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+
+				status, err := Upsert(path, "/vault/new")
+				if err != nil {
+					t.Fatalf("Upsert: %v", err)
+				}
+				if status != StatusWrote {
+					t.Errorf("status = %v, want %v", status, StatusWrote)
+				}
+
+				content := readFile(t, path)
+				assertContains(t, content, "/vault/new")
+				assertNotContains(t, content, trickyPath)
+				if count := strings.Count(content, StartMarker); count != 1 {
+					t.Errorf("expected 1 start marker after upgrade, got %d\ncontent:\n%s", count, content)
+				}
+			})
+		})
+	}
+}
+
+// TestUpsert_ReadOnlyFile_ReturnsWrappedError verifies the "file is
+// read-only" edge case: Upsert must return a wrapped error (not swallow it or
+// log-and-return it), and on failure the returned status must be the zero
+// value so a caller cannot mistake a failure for a write or a skip.
+func TestUpsert_ReadOnlyFile_ReturnsWrappedError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: file permissions do not block writes")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	if err := os.WriteFile(path, []byte("# Config\n"), 0o444); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+	status, err := Upsert(path, "/vault")
+	if err == nil {
+		t.Fatal("expected an error for a read-only target file, got nil")
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("expected wrapped error to name the file path %q, got: %v", path, err)
+	}
+	if status != StatusUnknown {
+		t.Errorf("status on failure = %v, want zero value %v", status, StatusUnknown)
+	}
 }
 
 func readFile(t *testing.T, path string) string {

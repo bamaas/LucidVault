@@ -41,6 +41,7 @@ type config struct {
 	mcpAllowedHosts   []string
 	mcpReadTools      bool
 	webSearchStrategy agentsmd.WebSearchStrategy
+	claudeMDVaultPath string
 }
 
 // pollCycleCount tracks the number of poll cycles for hygiene scheduling.
@@ -83,9 +84,13 @@ func main() {
 		claudeMDPath = "/CLAUDE.md"
 	}
 	if _, err := os.Stat(claudeMDPath); err == nil {
-		if err := claudemd.Upsert(claudeMDPath, cfg.vaultPath); err != nil {
+		status, err := claudemd.Upsert(claudeMDPath, resolveClaudeMDVaultPath(cfg))
+		switch {
+		case err != nil:
 			slog.Warn("failed to upsert CLAUDE.md section", "path", claudeMDPath, "error", err)
-		} else {
+		case status == claudemd.StatusSkippedDiverged:
+			slog.Warn("CLAUDE.md section diverged from generated content; skipping", "path", claudeMDPath)
+		default:
 			slog.Info("CLAUDE.md section upserted", "path", claudeMDPath)
 		}
 	}
@@ -802,6 +807,15 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 			"value", rawStrategy, "default", string(webSearchStrategy))
 	}
 
+	// CLAUDE_MD_VAULT_PATH describes the vault as the CLAUDE.md reader (the
+	// host) sees it, per ADR-028 -- distinct from VAULT_PATH, which is the
+	// pipeline's own (often container-local) view. A whitespace-only value is
+	// treated as unset; a real value is kept verbatim (no trimming).
+	claudeMDVaultPath := os.Getenv("CLAUDE_MD_VAULT_PATH")
+	if strings.TrimSpace(claudeMDVaultPath) == "" {
+		claudeMDVaultPath = ""
+	}
+
 	return &config{
 		raindropToken:     raindropToken,
 		ollamaAPIKey:      apiKey,
@@ -818,7 +832,18 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 		mcpAllowedHosts:   mcpAllowedHosts,
 		mcpReadTools:      mcpReadTools,
 		webSearchStrategy: webSearchStrategy,
+		claudeMDVaultPath: claudeMDVaultPath,
 	}, nil
+}
+
+// resolveClaudeMDVaultPath returns the vault path to advertise in the host
+// CLAUDE.md pointer (ADR-028): CLAUDE_MD_VAULT_PATH when set, falling back to
+// VAULT_PATH (the pipeline's own, possibly container-local, view).
+func resolveClaudeMDVaultPath(cfg *config) string {
+	if cfg.claudeMDVaultPath != "" {
+		return cfg.claudeMDVaultPath
+	}
+	return cfg.vaultPath
 }
 
 // parseBoolEnv reads a boolean environment variable, returning false when the
