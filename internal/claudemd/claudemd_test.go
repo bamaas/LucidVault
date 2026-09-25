@@ -4,9 +4,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// checksumCommentRe matches the checksum comment format the package
+// documents (MINOR-3): a 64-character lowercase-hex SHA-256 sum inside the
+// package's checksum comment markers.
+var checksumCommentRe = regexp.MustCompile(`<!-- lucidvault:checksum:[0-9a-f]{64} -->`)
 
 // legacyTemplateFmt is the pre-checksum ADR-025 pointer template, verbatim
 // as it existed before the ADR-027 divergence guard. ADR-027 requires the
@@ -257,12 +263,36 @@ func TestUpsert_LegacyTemplateShape_Upgraded(t *testing.T) {
 	}
 
 	content := readFile(t, path)
-	assertContains(t, content, "# Config")
-	assertContains(t, content, "# Footer")
+	// HasPrefix/HasSuffix (rather than Contains) pin the surrounding content
+	// to its exact position, catching a shifted splice index that Contains
+	// alone would miss.
+	if !strings.HasPrefix(content, "# Config") {
+		t.Errorf("expected content to start with %q\ngot:\n%s", "# Config", content)
+	}
+	if !strings.HasSuffix(content, "# Footer\n") {
+		t.Errorf("expected content to end with %q\ngot:\n%s", "# Footer\n", content)
+	}
 	assertContains(t, content, "/upgraded/vault")
 	assertNotContains(t, content, "/legacy/vault")
 	if count := strings.Count(content, StartMarker); count != 1 {
 		t.Errorf("expected 1 start marker after upgrade, got %d", count)
+	}
+
+	// The emitted block must carry a checksum comment in the documented
+	// format so a future run can recognize it as generator-owned.
+	if !checksumCommentRe.MatchString(content) {
+		t.Errorf("expected emitted block to contain a checksum comment matching %s\ngot:\n%s", checksumCommentRe.String(), content)
+	}
+
+	// Round-trip: a third Upsert call on the now-upgraded (checksummed)
+	// block must still report StatusWrote -- the upgrade itself must not be
+	// mistaken for a diverged block on the very next call.
+	status3, err := Upsert(path, "/upgraded/vault")
+	if err != nil {
+		t.Fatalf("Upsert (3rd, round trip after upgrade): %v", err)
+	}
+	if status3 != StatusWrote {
+		t.Errorf("3rd call status = %v, want %v (upgraded block must be round-trippable)", status3, StatusWrote)
 	}
 }
 
@@ -295,6 +325,44 @@ func TestUpsert_LegacyTemplateWithAddedProse_TreatedAsDiverged(t *testing.T) {
 		t.Errorf("expected file to be left byte-identical when diverged\ngot:\n%s\nwant:\n%s", content, old)
 	}
 	assertContains(t, content, "Also check the inbox weekly.")
+	assertNotContains(t, content, "/upgraded/vault")
+}
+
+// TestUpsert_LegacyTemplateWithProseOnPathLine_TreatedAsDiverged verifies the
+// CRITICAL fix to buildLegacyBodyRe: a legacy block where the user inserted
+// prose ON THE PATH LINE itself -- right after the path, still before "It
+// contains" on that same line -- not a trailing sentence after the block (as
+// TestUpsert_LegacyTemplateWithAddedProse_TreatedAsDiverged covers). Before
+// the fix, the legacy-shape regex's greedy [^\n]* accepted arbitrary same-line
+// prose as "the path", so a legacy block a user annotated inline (e.g. a
+// mounted-read-only caveat) was misclassified as generator-owned and silently
+// overwritten -- exactly the failure ADR-027 exists to prevent.
+func TestUpsert_LegacyTemplateWithProseOnPathLine_TreatedAsDiverged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	// The inserted prose sits where a real path would go, before the
+	// ". It contains" sentence boundary continues on the same line.
+	pathWithProse := "/legacy/vault (mounted read-only, ask before writing)"
+	legacyBlock := fmt.Sprintf(legacyTemplateFmt, pathWithProse)
+	old := "# Config\n\n" + legacyBlock + "\n\n# Footer\n"
+	if err := os.WriteFile(path, []byte(old), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/upgraded/vault")
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusSkippedDiverged {
+		t.Errorf("status = %v, want %v", status, StatusSkippedDiverged)
+	}
+
+	content := readFile(t, path)
+	if content != old {
+		t.Errorf("expected file to be left byte-identical when user prose is inserted on the path line\ngot:\n%s\nwant:\n%s", content, old)
+	}
+	assertContains(t, content, "mounted read-only, ask before writing")
 	assertNotContains(t, content, "/upgraded/vault")
 }
 
@@ -422,8 +490,12 @@ func TestUpsert_UnterminatedMarkers_AppendsRatherThanSwallowingContent(t *testin
 	}
 
 	content := readFile(t, path)
-	assertContains(t, content, "some dangling content")
-	assertContains(t, content, "that must survive")
+	// HasPrefix (rather than two separate Contains checks) pins the dangling
+	// content's exact bytes and order, not merely their presence -- a
+	// reordering or partial rewrite of it would be caught.
+	if !strings.HasPrefix(content, old) {
+		t.Errorf("expected original (dangling) content preserved verbatim as a prefix, with the new block appended after it\ngot:\n%s\nwant prefix:\n%s", content, old)
+	}
 
 	if count := strings.Count(content, StartMarker); count != 2 {
 		t.Errorf("expected 2 start markers (dangling original + newly appended), got %d\ncontent:\n%s", count, content)
@@ -472,7 +544,16 @@ func TestUpsert_TwoMarkerPairs_OnlyFirstTouched(t *testing.T) {
 	assertNotContains(t, content, "/vault/old")
 	assertContains(t, content, "SECOND-BLOCK-SENTINEL")
 	assertContains(t, content, "# Between")
-	assertContains(t, content, "# Footer")
+	// HasPrefix/HasSuffix (rather than Contains) pin the rewritten first
+	// block to the very start of the file and the untouched footer to the
+	// very end, catching a shifted splice index that Contains alone would
+	// miss.
+	if !strings.HasPrefix(content, StartMarker) {
+		t.Errorf("expected content to start with the rewritten first block (%q)\ngot:\n%s", StartMarker, content)
+	}
+	if !strings.HasSuffix(content, "# Footer\n") {
+		t.Errorf("expected content to end with %q\ngot:\n%s", "# Footer\n", content)
+	}
 }
 
 // TestUpsert_VaultPathWithRegexMetacharacters verifies vault paths
@@ -575,6 +656,94 @@ func TestUpsert_ReadOnlyFile_ReturnsWrappedError(t *testing.T) {
 	}
 	if status != StatusUnknown {
 		t.Errorf("status on failure = %v, want zero value %v", status, StatusUnknown)
+	}
+}
+
+// TestUpsert_TargetIsDirectory_ReturnsWrappedError verifies Upsert's
+// non-IsNotExist read-error branch (internal/claudemd/claudemd.go): passing
+// a directory as claudeMDPath makes os.ReadFile fail with an error that is
+// not os.IsNotExist, distinct from TestUpsert_ReadOnlyFile_ReturnsWrappedError
+// which exercises the write-error path.
+func TestUpsert_TargetIsDirectory_ReturnsWrappedError(t *testing.T) {
+	dir := t.TempDir()
+
+	status, err := Upsert(dir, "/vault")
+	if err == nil {
+		t.Fatal("expected an error when the target path is a directory, got nil")
+	}
+	if !strings.Contains(err.Error(), dir) {
+		t.Errorf("expected wrapped error to name the path %q, got: %v", dir, err)
+	}
+	if status != StatusUnknown {
+		t.Errorf("status on failure = %v, want zero value %v", status, StatusUnknown)
+	}
+}
+
+// TestUpsert_WhitespaceOnlyEditInsideChecksummedBlock_StillGeneratorOwned
+// pins an intentional leniency in isGeneratorOwned: because the
+// reconstructed body is compared to its checksum only after strings.TrimSpace,
+// a purely-whitespace change at the very start or end of the body (e.g. an
+// extra blank line inserted right after the start marker, which some editors
+// do automatically) does not trip the ADR-027 divergence guard. This
+// documents the behavior as an intentional leniency rather than leaving it an
+// unpinned accident.
+func TestUpsert_WhitespaceOnlyEditInsideChecksummedBlock_StillGeneratorOwned(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	if _, err := Upsert(path, "/vault/a"); err != nil {
+		t.Fatalf("Upsert (seed): %v", err)
+	}
+
+	generated := readFile(t, path)
+	// Insert extra blank lines right after the start marker -- whitespace
+	// only, no content change.
+	whitespaceEdited := strings.Replace(generated, StartMarker+"\n", StartMarker+"\n\n\n", 1)
+	if whitespaceEdited == generated {
+		t.Fatalf("test setup: whitespace edit did not change content")
+	}
+	if err := os.WriteFile(path, []byte(whitespaceEdited), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/vault/b")
+	if err != nil {
+		t.Fatalf("Upsert (after whitespace edit): %v", err)
+	}
+	if status != StatusWrote {
+		t.Errorf("status = %v, want %v (whitespace-only edits at the body's boundary must not trip the divergence guard)", status, StatusWrote)
+	}
+
+	content := readFile(t, path)
+	assertContains(t, content, "/vault/b")
+}
+
+// TestUpsert_AppendsToExisting_NoTrailingNewline pins appendSection's
+// no-trailing-newline branch: when the pre-existing content does not end in
+// "\n", Upsert must add the missing newline before the blank-line separator,
+// so the block is neither appended directly onto the last line of existing
+// content nor preceded by more than one blank line.
+func TestUpsert_AppendsToExisting_NoTrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	existing := "# My Config\n\nSome existing content without trailing newline"
+	if err := os.WriteFile(path, []byte(existing), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/vault")
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusWrote {
+		t.Errorf("status = %v, want %v", status, StatusWrote)
+	}
+
+	content := readFile(t, path)
+	want := existing + "\n\n" + StartMarker
+	if !strings.HasPrefix(content, want) {
+		t.Errorf("expected existing content followed by exactly one blank line then the block\ngot:\n%s\nwant prefix:\n%s", content, want)
 	}
 }
 

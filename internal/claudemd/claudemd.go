@@ -52,7 +52,27 @@ func buildLegacyBodyRe() *regexp.Regexp {
 	// The vault path sits inside a single line and is captured, not matched
 	// literally, so it survives regex metacharacters and '%' in the path
 	// unescaped; only the fixed surrounding text needs QuoteMeta.
-	return regexp.MustCompile(`^` + regexp.QuoteMeta(parts[0]) + `[^\n]*` + regexp.QuoteMeta(parts[1]) + `$`)
+	//
+	// The captured class is deliberately [^\s] (no whitespace), not [^\n]
+	// (anything but a newline). A greedy [^\n]* accepts arbitrary same-line
+	// prose as "the path": a user who annotated a legacy block inline, e.g.
+	// "...knowledge base at /legacy/vault (mounted read-only, ask before
+	// writing). It contains `AGENTS.md`...", would have that whole
+	// parenthetical swallowed into the "path" capture, and the block would
+	// be misclassified as generator-owned and silently overwritten -- the
+	// exact failure ADR-027 exists to prevent.
+	//
+	// Excluding whitespace closes that hole while still accepting every
+	// path this package's tests exercise (/vault/a.b, /vault/(parenthesized),
+	// /vault/$HOME, /vault/100%full, /vault/a.b(c)$d%e -- none contain a
+	// space) and every path this repo's deployment examples use (/vault,
+	// ~/lucid-vault). The trade-off, weighed deliberately: a real vault path
+	// that does contain a literal space would now be treated as diverged
+	// instead of auto-upgraded. ADR-027 explicitly prefers that outcome --
+	// "False negatives cost a warning; false positives cost the user's
+	// writing" -- and shape-matching is documented there as "deliberately
+	// exact, not fuzzy".
+	return regexp.MustCompile(`^` + regexp.QuoteMeta(parts[0]) + `[^\s]+` + regexp.QuoteMeta(parts[1]) + `$`)
 }
 
 // Status reports what Upsert did to the target file.

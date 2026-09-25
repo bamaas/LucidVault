@@ -85,21 +85,7 @@ func main() {
 	}
 	claudeMDVaultPath := resolveClaudeMDVaultPath(cfg)
 	usingVaultPathFallback := cfg.claudeMDVaultPath == ""
-	if _, err := os.Stat(claudeMDPath); err == nil {
-		status, err := claudemd.Upsert(claudeMDPath, claudeMDVaultPath)
-		switch {
-		case err != nil:
-			slog.Warn("failed to upsert CLAUDE.md section", "path", claudeMDPath, "error", err)
-		case status == claudemd.StatusSkippedDiverged:
-			slog.Warn("CLAUDE.md section diverged from generated content; skipping", "path", claudeMDPath)
-		default:
-			slog.Info("CLAUDE.md section upserted", "path", claudeMDPath)
-			if usingVaultPathFallback {
-				slog.Warn("CLAUDE_MD_VAULT_PATH is unset; CLAUDE.md advertises the pipeline's own VAULT_PATH, which may not resolve for the reader",
-					"emitted_path", claudeMDVaultPath, "env", "CLAUDE_MD_VAULT_PATH")
-			}
-		}
-	}
+	upsertClaudeMD(claudeMDPath, claudeMDVaultPath, usingVaultPathFallback, slog.Default())
 
 	// Resolve the actual path inside the container (may differ from VAULT_PATH on Docker Desktop/macOS)
 	vaultPath := resolveContainerPath(cfg.vaultPath)
@@ -850,6 +836,38 @@ func resolveClaudeMDVaultPath(cfg *config) string {
 		return cfg.claudeMDVaultPath
 	}
 	return cfg.vaultPath
+}
+
+// upsertClaudeMD writes the LucidVault pointer section into the host's
+// CLAUDE.md, if the file exists at claudeMDPath (best-effort: a missing or
+// unwritable CLAUDE.md must not fail pipeline startup). It logs the three
+// outcomes ADR-027 and ADR-028 require the caller to distinguish:
+//   - a hard failure (warn, naming the path and the error)
+//   - a StatusSkippedDiverged result -- an existing block that is not
+//     generator-owned -- (warn, naming the path only; no fallback warning,
+//     since nothing was written)
+//   - a write (info, naming the path), plus a second warning when
+//     usingVaultPathFallback is true, naming both the emitted
+//     claudeMDVaultPath and the CLAUDE_MD_VAULT_PATH env var, since the
+//     emitted path is then the pipeline's own (often container-local)
+//     VAULT_PATH rather than a value the operator configured for the reader
+func upsertClaudeMD(claudeMDPath, claudeMDVaultPath string, usingVaultPathFallback bool, logger *slog.Logger) {
+	if _, err := os.Stat(claudeMDPath); err != nil {
+		return
+	}
+	status, err := claudemd.Upsert(claudeMDPath, claudeMDVaultPath)
+	switch {
+	case err != nil:
+		logger.Warn("failed to upsert CLAUDE.md section", "path", claudeMDPath, "error", err)
+	case status == claudemd.StatusSkippedDiverged:
+		logger.Warn("CLAUDE.md section diverged from generated content; skipping", "path", claudeMDPath)
+	default:
+		logger.Info("CLAUDE.md section upserted", "path", claudeMDPath)
+		if usingVaultPathFallback {
+			logger.Warn("CLAUDE_MD_VAULT_PATH is unset; CLAUDE.md advertises the pipeline's own VAULT_PATH, which may not resolve for the reader",
+				"emitted_path", claudeMDVaultPath, "env", "CLAUDE_MD_VAULT_PATH")
+		}
+	}
 }
 
 // parseBoolEnv reads a boolean environment variable, returning false when the
