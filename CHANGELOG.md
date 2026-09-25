@@ -1,3 +1,9 @@
+## v0.26.1 (2026-09-25)
+
+### Fix
+
+- **claudemd**: guard the CLAUDE.md block against overwrite and emit a host-facing vault path (#88)
+
 ## v0.26.0 (2026-07-15)
 
 ### Feat

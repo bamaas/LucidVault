@@ -87,6 +87,7 @@ Environment variables configure the service. CLI flags control one-off operation
 | `MCP_READ_TOOLS` | No | `false` | Expose the duplicate MCP content-read tools (`read_wiki`, `grep_vault`, `read_note`, `read_raw`, `vault_overview`, `get_soul`). Off by default so filesystem-capable agents read the vault directly; enable for clients that reach the vault only over MCP (no filesystem access). Discovery (`search_wiki`), graph, and write tools are always available. |
 | `AGENT_WEB_SEARCH_STRATEGY` | No | `fallback` | How the generated `AGENTS.md` tells an agent to use its **own** web search relative to the vault: `off` (no web-search guidance), `fallback` (only when the vault lacks coverage), `time-sensitive` (also for latest/current/news/price/date questions), `immediately` (web + vault in parallel for any substantive question). LucidVault never provides a web search; the prose names no provider. Unknown values fall back to `fallback`. |
 | `CLAUDE_MD_PATH` | No | `/CLAUDE.md` | Path to CLAUDE.md for Claude Code integration (override only if needed) |
+| `CLAUDE_MD_VAULT_PATH` | No | - (falls back to `VAULT_PATH`) | Vault path as seen by whoever *reads* `CLAUDE.md` (the host), not by the pipeline. Every shipped config sets `VAULT_PATH=/vault`, which does not exist on the host, so set this to the vault's real host path (e.g. `/home/you/lucid-vault`). Must be a literal absolute path, not `$HOME` or `~` - it is written verbatim into `CLAUDE.md` with no shell expansion. |
 
 ### CLI flags
 
