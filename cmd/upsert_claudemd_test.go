@@ -251,6 +251,33 @@ func TestUpsertClaudeMD_TargetDoesNotExist_NoOp(t *testing.T) {
 	}
 }
 
+// TestUpsertClaudeMD_StatFailsNotNotExist_LogsWarning verifies that a stat
+// failure other than "does not exist" (e.g. a path component that is a
+// regular file instead of a directory, producing ENOTDIR) is logged instead
+// of silently doing nothing.
+func TestUpsertClaudeMD_StatFailsNotNotExist_LogsWarning(t *testing.T) {
+	dir := t.TempDir()
+	notADir := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(notADir, []byte("regular file"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	path := filepath.Join(notADir, "CLAUDE.md")
+
+	var buf bytes.Buffer
+	upsertClaudeMD(path, "/host/vault", false, newTestLogger(&buf))
+
+	logged := buf.String()
+	if logged == "" {
+		t.Fatal("expected a warning to be logged when os.Stat fails for a reason other than not-exist")
+	}
+	if !strings.Contains(logged, `"level":"WARN"`) {
+		t.Errorf("stat failure must be logged at warn level; log output: %q", logged)
+	}
+	if !strings.Contains(logged, path) {
+		t.Errorf("logged warning must name the path %q; log output: %q", path, logged)
+	}
+}
+
 // TestLogClaudeMDUpsertResult_UnexpectedStatus_WarnsInsteadOfAssumingSuccess
 // verifies the switch in logClaudeMDUpsertResult switches explicitly on
 // status: a Status value it does not recognize must be logged as a warning

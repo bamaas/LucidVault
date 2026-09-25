@@ -842,6 +842,9 @@ func resolveClaudeMDVaultPath(cfg *config) (path string, usingFallback bool) {
 // logClaudeMDUpsertResult for the outcomes it logs.
 func upsertClaudeMD(claudeMDPath, claudeMDVaultPath string, usingVaultPathFallback bool, logger *slog.Logger) {
 	if _, err := os.Stat(claudeMDPath); err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warn("cannot stat CLAUDE.md; skipping pointer upsert", "path", claudeMDPath, "error", err)
+		}
 		return
 	}
 	status, err := claudemd.Upsert(claudeMDPath, claudeMDVaultPath)
