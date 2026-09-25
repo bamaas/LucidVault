@@ -20,9 +20,18 @@ services:
       - MCP_HTTP_ADDR=${MCP_HTTP_ADDR:-}
       - MCP_ALLOWED_HOST=${MCP_ALLOWED_HOST:-}
       - MCP_READ_TOOLS=${MCP_READ_TOOLS:-}
+      # Host path of the vault, for the CLAUDE.md pointer (see .env.example).
+      # Only takes effect once a host CLAUDE.md is bind-mounted into the
+      # container below (CLAUDE_MD_PATH, default /CLAUDE.md) -- without that
+      # mount there is nothing for the pointer to be written into.
+      - CLAUDE_MD_VAULT_PATH=${CLAUDE_MD_VAULT_PATH:-}
     volumes:
       - ./vault:/vault
       - db:/data
+      # Uncomment to enable the CLAUDE.md pointer; requires CLAUDE_MD_VAULT_PATH
+      # above. Create the file first, or Docker mounts a directory instead:
+      # touch ~/.claude/CLAUDE.md
+      # - ~/.claude/CLAUDE.md:/CLAUDE.md
     user: "1000:1000"
     restart: unless-stopped
 
