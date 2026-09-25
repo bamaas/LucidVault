@@ -83,8 +83,7 @@ func main() {
 	if claudeMDPath == "" {
 		claudeMDPath = "/CLAUDE.md"
 	}
-	claudeMDVaultPath := resolveClaudeMDVaultPath(cfg)
-	usingVaultPathFallback := cfg.claudeMDVaultPath == ""
+	claudeMDVaultPath, usingVaultPathFallback := resolveClaudeMDVaultPath(cfg)
 	upsertClaudeMD(claudeMDPath, claudeMDVaultPath, usingVaultPathFallback, slog.Default())
 
 	// Resolve the actual path inside the container (may differ from VAULT_PATH on Docker Desktop/macOS)
@@ -830,12 +829,14 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 
 // resolveClaudeMDVaultPath returns the vault path to advertise in the host
 // CLAUDE.md pointer (ADR-028): CLAUDE_MD_VAULT_PATH when set, falling back to
-// VAULT_PATH (the pipeline's own, possibly container-local, view).
-func resolveClaudeMDVaultPath(cfg *config) string {
+// VAULT_PATH (the pipeline's own, possibly container-local, view). The second
+// return value reports whether the fallback was used, so callers don't have
+// to re-derive that condition themselves from cfg.
+func resolveClaudeMDVaultPath(cfg *config) (path string, usingFallback bool) {
 	if cfg.claudeMDVaultPath != "" {
-		return cfg.claudeMDVaultPath
+		return cfg.claudeMDVaultPath, false
 	}
-	return cfg.vaultPath
+	return cfg.vaultPath, true
 }
 
 // upsertClaudeMD writes the LucidVault pointer section into the host's

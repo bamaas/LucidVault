@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -18,9 +19,48 @@ func newTestLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+// parseLogLines decodes each line of buf (one JSON object per slog record,
+// per slog.NewJSONHandler) into a field map, keyed by the handler's own
+// attribute names. Used to assert on specific level/msg/attribute fields
+// (MINOR-6, test round 2) rather than only on substrings of the raw buffer,
+// so a renamed attribute key is caught instead of silently passing because
+// its value happens to still appear somewhere in the line.
+func parseLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var records []map[string]any
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("parsing log line as JSON: %v\nline: %s", err, line)
+		}
+		records = append(records, rec)
+	}
+	return records
+}
+
+// findLogRecord returns the first record whose "msg" field contains msgSubstr,
+// failing the test if none is found.
+func findLogRecord(t *testing.T, records []map[string]any, msgSubstr string) map[string]any {
+	t.Helper()
+	for _, rec := range records {
+		if msg, ok := rec["msg"].(string); ok && strings.Contains(msg, msgSubstr) {
+			return rec
+		}
+	}
+	t.Fatalf("no log record found with msg containing %q; records: %v", msgSubstr, records)
+	return nil
+}
+
 // TestUpsertClaudeMD_PlainWrite_NoFallbackWarn verifies MAJOR-1(a): a normal
 // write, with usingVaultPathFallback false, must not mention
-// CLAUDE_MD_VAULT_PATH at all.
+// CLAUDE_MD_VAULT_PATH at all. It also asserts the expected info-level
+// "wrote" log actually fired (MINOR-5, test round 2) -- without this, a
+// deletion of the info log entirely would leave the "no fallback warning"
+// assertion green for the wrong reason (nothing logged at all, rather than
+// the right thing logged).
 func TestUpsertClaudeMD_PlainWrite_NoFallbackWarn(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
@@ -38,11 +78,21 @@ func TestUpsertClaudeMD_PlainWrite_NoFallbackWarn(t *testing.T) {
 	if strings.Contains(logged, "CLAUDE_MD_VAULT_PATH") {
 		t.Errorf("plain write must not mention CLAUDE_MD_VAULT_PATH; log output: %q", logged)
 	}
+	if !strings.Contains(logged, `"level":"INFO"`) {
+		t.Errorf("plain write must be logged at info level; log output: %q", logged)
+	}
+	if !strings.Contains(logged, path) {
+		t.Errorf("write log must name the target path %q; log output: %q", path, logged)
+	}
 }
 
 // TestUpsertClaudeMD_FallbackWrite_WarnsWithPathAndEnvVar verifies
 // MAJOR-1(b) and the ADR-028 requirement that the fallback warning name
 // both the emitted path and the CLAUDE_MD_VAULT_PATH env var, at warn level.
+// Beyond the substring checks, it decodes the specific JSON record and
+// asserts on its structured level/emitted_path/env fields (MINOR-6, test
+// round 2), so renaming one of those attribute keys would be caught even
+// though the raw substring checks alone would not notice.
 func TestUpsertClaudeMD_FallbackWrite_WarnsWithPathAndEnvVar(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
@@ -63,13 +113,28 @@ func TestUpsertClaudeMD_FallbackWrite_WarnsWithPathAndEnvVar(t *testing.T) {
 	if !strings.Contains(logged, `"level":"WARN"`) {
 		t.Errorf("fallback notice must be logged at warn level; log output: %q", logged)
 	}
+
+	records := parseLogLines(t, &buf)
+	rec := findLogRecord(t, records, "CLAUDE_MD_VAULT_PATH is unset")
+	if rec["level"] != "WARN" {
+		t.Errorf("fallback record level = %v, want WARN", rec["level"])
+	}
+	if rec["emitted_path"] != "/container/vault" {
+		t.Errorf("fallback record emitted_path = %v, want %q", rec["emitted_path"], "/container/vault")
+	}
+	if rec["env"] != "CLAUDE_MD_VAULT_PATH" {
+		t.Errorf("fallback record env = %v, want %q", rec["env"], "CLAUDE_MD_VAULT_PATH")
+	}
 }
 
 // TestUpsertClaudeMD_DivergedBlock_WarnsFileOnly_NoFallbackWarn verifies
 // MAJOR-1(c): a StatusSkippedDiverged result must warn naming the file, and
 // must NOT also emit the fallback-path warning -- even when
 // usingVaultPathFallback is true -- since no write happened for that
-// warning to be about.
+// warning to be about. Beyond the substring checks, it decodes the specific
+// JSON record and asserts on its structured level/path fields (MINOR-6, test
+// round 2), so renaming the "path" attribute key would be caught even though
+// the raw substring check alone would not notice.
 func TestUpsertClaudeMD_DivergedBlock_WarnsFileOnly_NoFallbackWarn(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
@@ -95,6 +160,18 @@ func TestUpsertClaudeMD_DivergedBlock_WarnsFileOnly_NoFallbackWarn(t *testing.T)
 	}
 	if !strings.Contains(logged, `"level":"WARN"`) {
 		t.Errorf("diverged skip must be logged at warn level; log output: %q", logged)
+	}
+
+	records := parseLogLines(t, &buf)
+	rec := findLogRecord(t, records, "diverged from generated content")
+	if rec["level"] != "WARN" {
+		t.Errorf("diverged-skip record level = %v, want WARN", rec["level"])
+	}
+	if rec["path"] != path {
+		t.Errorf("diverged-skip record path = %v, want %q", rec["path"], path)
+	}
+	if _, hasEmittedPath := rec["emitted_path"]; hasEmittedPath {
+		t.Errorf("diverged-skip record must not carry emitted_path (that belongs to the fallback warning); record: %v", rec)
 	}
 }
 

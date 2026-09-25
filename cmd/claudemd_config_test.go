@@ -8,7 +8,10 @@ import "testing"
 // whitespace-only -- the plan's edge case for "treated as unset"), and
 // resolveClaudeMDVaultPath implements the precedence the Upsert call site in
 // main() relies on: CLAUDE_MD_VAULT_PATH when it carries a non-whitespace
-// value, VAULT_PATH (cfg.vaultPath) otherwise.
+// value, VAULT_PATH (cfg.vaultPath) otherwise. resolveClaudeMDVaultPath also
+// reports whether it fell back to VAULT_PATH, which main() uses verbatim as
+// usingVaultPathFallback -- so this table is the only place that condition is
+// exercised (see MINOR-1, test round 2).
 func TestLoadConfig_ClaudeMDVaultPath(t *testing.T) {
 	t.Setenv("OLLAMA_API_KEY", "test")
 	t.Setenv("VAULT_PATH", "/container/vault")
@@ -19,11 +22,12 @@ func TestLoadConfig_ClaudeMDVaultPath(t *testing.T) {
 		set          bool
 		wantField    string
 		wantResolved string
+		wantFallback bool
 	}{
-		{name: "unset falls back to VAULT_PATH", set: false, wantField: "", wantResolved: "/container/vault"},
-		{name: "empty falls back to VAULT_PATH", env: "", set: true, wantField: "", wantResolved: "/container/vault"},
-		{name: "whitespace only falls back to VAULT_PATH", env: "   ", set: true, wantField: "", wantResolved: "/container/vault"},
-		{name: "set overrides VAULT_PATH", env: "/Users/bas/lucid-vault", set: true, wantField: "/Users/bas/lucid-vault", wantResolved: "/Users/bas/lucid-vault"},
+		{name: "unset falls back to VAULT_PATH", set: false, wantField: "", wantResolved: "/container/vault", wantFallback: true},
+		{name: "empty falls back to VAULT_PATH", env: "", set: true, wantField: "", wantResolved: "/container/vault", wantFallback: true},
+		{name: "whitespace only falls back to VAULT_PATH", env: "   ", set: true, wantField: "", wantResolved: "/container/vault", wantFallback: true},
+		{name: "set overrides VAULT_PATH", env: "/Users/bas/lucid-vault", set: true, wantField: "/Users/bas/lucid-vault", wantResolved: "/Users/bas/lucid-vault", wantFallback: false},
 	}
 
 	for _, tt := range tests {
@@ -48,9 +52,14 @@ func TestLoadConfig_ClaudeMDVaultPath(t *testing.T) {
 				t.Errorf("CLAUDE_MD_VAULT_PATH=%q (set=%v): claudeMDVaultPath=%q, want %q",
 					tt.env, tt.set, cfg.claudeMDVaultPath, tt.wantField)
 			}
-			if got := resolveClaudeMDVaultPath(cfg); got != tt.wantResolved {
-				t.Errorf("CLAUDE_MD_VAULT_PATH=%q (set=%v): resolveClaudeMDVaultPath=%q, want %q",
-					tt.env, tt.set, got, tt.wantResolved)
+			gotResolved, gotFallback := resolveClaudeMDVaultPath(cfg)
+			if gotResolved != tt.wantResolved {
+				t.Errorf("CLAUDE_MD_VAULT_PATH=%q (set=%v): resolveClaudeMDVaultPath path=%q, want %q",
+					tt.env, tt.set, gotResolved, tt.wantResolved)
+			}
+			if gotFallback != tt.wantFallback {
+				t.Errorf("CLAUDE_MD_VAULT_PATH=%q (set=%v): resolveClaudeMDVaultPath usingFallback=%v, want %v",
+					tt.env, tt.set, gotFallback, tt.wantFallback)
 			}
 		})
 	}

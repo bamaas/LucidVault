@@ -67,14 +67,17 @@ func TestUpsert_AppendsToExisting(t *testing.T) {
 	assertContains(t, content, EndMarker)
 }
 
-// TestUpsert_ReplacesExisting exercises a marker block whose body is neither
-// checksum-matched (no embedded checksum) nor a legacy pre-checksum template
-// match ("old content" is not the ADR-025 pointer shape). Under the ADR-027
-// divergence guard this is user content and MUST be preserved byte-identical,
-// with the call reporting a skip -- the opposite of the pre-guard behavior
-// this test originally asserted (blind replacement, which is the silent
-// data-loss bug ADR-027 exists to fix).
-func TestUpsert_ReplacesExisting(t *testing.T) {
+// TestUpsert_UnknownBlockContent_TreatedAsDiverged exercises a marker block
+// whose body is neither checksum-matched (no embedded checksum) nor a legacy
+// pre-checksum template match ("old content" is not the ADR-025 pointer
+// shape). Under the ADR-027 divergence guard this is user content and MUST be
+// preserved byte-identical, with the call reporting a skip -- the opposite of
+// the pre-guard behavior this test originally asserted (blind replacement,
+// which is the silent data-loss bug ADR-027 exists to fix; the test was
+// renamed from TestUpsert_ReplacesExisting in test round 2 because the old
+// name described the pre-guard behavior it disproves, not the behavior it
+// actually asserts).
+func TestUpsert_UnknownBlockContent_TreatedAsDiverged(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 
@@ -239,6 +242,90 @@ func TestUpsert_ChecksumMismatch_HandEditedBlockPreserved(t *testing.T) {
 	assertNotContains(t, content, "/vault/b")
 }
 
+// TestUpsert_ChecksumMismatch_PathEditedInPlace_HandEditedBlockPreserved is a
+// sibling of TestUpsert_ChecksumMismatch_HandEditedBlockPreserved (MINOR-7,
+// test round 2): instead of appending a trailing sentence, the hand edit
+// replaces the vault path in place, leaving the rest of the body untouched.
+// The mechanism is the same (the embedded checksum no longer matches the
+// body) but this pins the specific, plausible edit shape of a user
+// correcting "their" path by hand rather than adding prose.
+func TestUpsert_ChecksumMismatch_PathEditedInPlace_HandEditedBlockPreserved(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	if _, err := Upsert(path, "/vault/a"); err != nil {
+		t.Fatalf("Upsert (seed): %v", err)
+	}
+
+	generated := readFile(t, path)
+	handEdited := strings.Replace(generated, "/vault/a", "/vault/hand-corrected", 1)
+	if handEdited == generated {
+		t.Fatalf("test setup: hand edit did not change content")
+	}
+	if err := os.WriteFile(path, []byte(handEdited), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/vault/b")
+	if err != nil {
+		t.Fatalf("Upsert (after hand edit): %v", err)
+	}
+	if status != StatusSkippedDiverged {
+		t.Errorf("status = %v, want %v", status, StatusSkippedDiverged)
+	}
+
+	content := readFile(t, path)
+	if content != handEdited {
+		t.Errorf("expected file to be left byte-identical after divergence\ngot:\n%s\nwant:\n%s", content, handEdited)
+	}
+	assertContains(t, content, "/vault/hand-corrected")
+	assertNotContains(t, content, "/vault/b")
+}
+
+// TestUpsert_ChecksumCommentDeleted_TreatedAsDiverged verifies the other
+// plausible hand-edit shape (MINOR-7, test round 2): a user deletes the
+// checksum comment line entirely but leaves the rest of the generated body
+// intact. With no checksum present, isGeneratorOwned's checksumRe branch
+// cannot match; the body also isn't the pre-checksum legacyBodyFmt shape
+// (post-ADR-028 bodyFmt reads differently), so it falls through to
+// legacyBodyRe, fails that too, and the block is treated as diverged rather
+// than panicking or being silently accepted as generator-owned.
+func TestUpsert_ChecksumCommentDeleted_TreatedAsDiverged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	if _, err := Upsert(path, "/vault/a"); err != nil {
+		t.Fatalf("Upsert (seed): %v", err)
+	}
+
+	generated := readFile(t, path)
+	checksumLine := checksumCommentRe.FindString(generated)
+	if checksumLine == "" {
+		t.Fatalf("test setup: could not find checksum comment in generated content:\n%s", generated)
+	}
+	noChecksum := strings.Replace(generated, checksumLine+"\n", "", 1)
+	if noChecksum == generated {
+		t.Fatalf("test setup: removing the checksum comment did not change content")
+	}
+	if err := os.WriteFile(path, []byte(noChecksum), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/vault/b")
+	if err != nil {
+		t.Fatalf("Upsert (after checksum comment deleted): %v", err)
+	}
+	if status != StatusSkippedDiverged {
+		t.Errorf("status = %v, want %v", status, StatusSkippedDiverged)
+	}
+
+	content := readFile(t, path)
+	if content != noChecksum {
+		t.Errorf("expected file to be left byte-identical when the checksum comment is deleted\ngot:\n%s\nwant:\n%s", content, noChecksum)
+	}
+	assertNotContains(t, content, "/vault/b")
+}
+
 // TestUpsert_LegacyTemplateShape_Upgraded verifies acceptance criterion 3 and
 // plan test-list item 3: a legacy (pre-checksum) block whose body exactly
 // matches the ADR-025 pointer template, carrying any vault path, is provably
@@ -363,6 +450,51 @@ func TestUpsert_LegacyTemplateWithProseOnPathLine_TreatedAsDiverged(t *testing.T
 		t.Errorf("expected file to be left byte-identical when user prose is inserted on the path line\ngot:\n%s\nwant:\n%s", content, old)
 	}
 	assertContains(t, content, "mounted read-only, ask before writing")
+	assertNotContains(t, content, "/upgraded/vault")
+}
+
+// TestUpsert_LegacyPathWithSpace_TreatedAsDiverged pins the accepted ADR-027
+// false-negative trade-off documented on buildLegacyBodyRe (MINOR-3, test
+// round 2): the legacy-shape regex captures the path as [^\s]+ (no
+// whitespace), not [^\n]* (anything but a newline), to close the CRITICAL-1
+// hole where whitespace-free user prose appended to a legacy path (see
+// TestUpsert_LegacyTemplateWithProseOnPathLine_TreatedAsDiverged above) was
+// swallowed into the "path" capture and silently overwritten.
+//
+// The cost of that fix is this case: a REAL legacy vault path that itself
+// contains a literal space -- e.g. a macOS path like "/Users/bas/My Vault" --
+// is indistinguishable, by shape alone, from a legacy path with appended
+// prose. Both are a path-shaped run of characters followed by a space and
+// more text. ADR-027 is deliberately biased toward false negatives (a block
+// frozen with a warning) over false positives (a user's block silently
+// destroyed): "False negatives cost a warning; false positives cost the
+// user's writing." So this block is never auto-upgraded -- it stays
+// checksum-less and diverged on every future run -- and that is accepted, not
+// a bug.
+func TestUpsert_LegacyPathWithSpace_TreatedAsDiverged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	pathWithSpace := "/Users/bas/My Vault"
+	legacyBlock := fmt.Sprintf(legacyTemplateFmt, pathWithSpace)
+	old := "# Config\n\n" + legacyBlock + "\n\n# Footer\n"
+	if err := os.WriteFile(path, []byte(old), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	status, err := Upsert(path, "/upgraded/vault")
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if status != StatusSkippedDiverged {
+		t.Errorf("status = %v, want %v (a legacy path containing a space is an accepted false negative, not an upgrade)", status, StatusSkippedDiverged)
+	}
+
+	content := readFile(t, path)
+	if content != old {
+		t.Errorf("expected file to be left byte-identical when the legacy path contains a space\ngot:\n%s\nwant:\n%s", content, old)
+	}
+	assertContains(t, content, pathWithSpace)
 	assertNotContains(t, content, "/upgraded/vault")
 }
 

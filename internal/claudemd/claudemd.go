@@ -62,16 +62,29 @@ func buildLegacyBodyRe() *regexp.Regexp {
 	// be misclassified as generator-owned and silently overwritten -- the
 	// exact failure ADR-027 exists to prevent.
 	//
-	// Excluding whitespace closes that hole while still accepting every
-	// path this package's tests exercise (/vault/a.b, /vault/(parenthesized),
-	// /vault/$HOME, /vault/100%full, /vault/a.b(c)$d%e -- none contain a
-	// space) and every path this repo's deployment examples use (/vault,
-	// ~/lucid-vault). The trade-off, weighed deliberately: a real vault path
-	// that does contain a literal space would now be treated as diverged
-	// instead of auto-upgraded. ADR-027 explicitly prefers that outcome --
+	// Excluding whitespace narrows that hole -- it does not close it -- while
+	// still accepting every path this package's tests exercise (/vault/a.b,
+	// /vault/(parenthesized), /vault/$HOME, /vault/100%full,
+	// /vault/a.b(c)$d%e -- none contain a space) and every path this repo's
+	// deployment examples use (/vault, ~/lucid-vault). Two residual cases
+	// remain, both accepted trade-offs rather than bugs:
+	//   - Whitespace-free prose appended directly to a legacy path with no
+	//     separating space (e.g. "/legacy/vault.DO-NOT-REGENERATE" or
+	//     "/legacy/vault(read-only)") is still indistinguishable from a path
+	//     and is still misclassified as generator-owned and overwritten. A
+	//     path and a whitespace-free annotation are indistinguishable without
+	//     more structure than this template has, so this is believed
+	//     irreducible with a shape-only regex.
+	//   - A real vault path that does contain a literal space (e.g. a macOS
+	//     "/Users/bas/My Vault") now fails the shape match and is frozen as
+	//     diverged forever, never auto-upgraded (see
+	//     TestUpsert_LegacyPathWithSpace_TreatedAsDiverged).
+	// ADR-027 explicitly prefers false negatives over false positives --
 	// "False negatives cost a warning; false positives cost the user's
 	// writing" -- and shape-matching is documented there as "deliberately
-	// exact, not fuzzy".
+	// exact, not fuzzy". Loosening this back toward the original [^\n]* to
+	// "fix" either residual case would reintroduce CRITICAL-1 (silent
+	// overwrite of user-annotated legacy blocks) -- do not do that.
 	return regexp.MustCompile(`^` + regexp.QuoteMeta(parts[0]) + `[^\s]+` + regexp.QuoteMeta(parts[1]) + `$`)
 }
 
