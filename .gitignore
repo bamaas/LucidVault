@@ -13,3 +13,8 @@ plan.md
 worktrees/
 .lean-ctx/
 .DS_Store
+
+# Real env files hold secrets (OLLAMA_API_KEY, tokens). Only the template is tracked.
+.env
+.env.*
+!.env.example
