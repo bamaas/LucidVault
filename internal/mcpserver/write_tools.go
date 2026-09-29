@@ -217,6 +217,80 @@ func HandleEditPage(v *vault.Vault, db *store.Store, slug, body string) error {
 	return nil
 }
 
+// HandleCreateWiki creates a new wiki page from scratch, with frontmatter
+// (title, slug, tags, created, last_updated) and initial body content.
+// Fails if the slug already exists — use HandleEditPage or HandleUpdateWiki
+// to modify an existing page. Mirrors HandleAddNote's slug-from-title and
+// frontmatter-building approach, but targets wiki/ and participates in the
+// wiki indexing/linking pipeline (index.md entry + wikilink edges).
+// File mutations are wrapped in WithFileLock (D4).
+func HandleCreateWiki(v *vault.Vault, db *store.Store, title, content string, tags []string) (string, error) {
+	if title == "" {
+		return "", fmt.Errorf("title is required")
+	}
+	if strings.TrimSpace(content) == "" {
+		return "", fmt.Errorf("content is required")
+	}
+
+	slug := vault.GenerateSlug(title)
+	relPath := "wiki/" + slug + ".md"
+
+	if tags == nil {
+		tags = []string{}
+	}
+
+	date := time.Now().Format("2006-01-02")
+
+	var b strings.Builder
+	b.WriteString("---\n")
+	fmt.Fprintf(&b, "title: %s\n", vault.QuoteYAMLValue(title))
+	fmt.Fprintf(&b, "slug: %s\n", slug)
+	b.WriteString("tags:\n")
+	for _, t := range tags {
+		fmt.Fprintf(&b, "  - %s\n", t)
+	}
+	fmt.Fprintf(&b, "created: %s\n", date)
+	fmt.Fprintf(&b, "last_updated: %s\n", date)
+	b.WriteString("type: wiki\n")
+	b.WriteString("---\n\n")
+	fmt.Fprintf(&b, "# %s\n\n", title)
+	b.WriteString(strings.Trim(content, "\n"))
+	b.WriteString("\n")
+	newContent := b.String()
+
+	err := db.WithFileLock(func() error {
+		if v.FileHasContent(relPath) {
+			return fmt.Errorf("wiki page %q already exists — use edit_page or update_wiki to modify it", slug)
+		}
+		if _, err := v.WriteWiki(slug+".md", newContent); err != nil {
+			return fmt.Errorf("writing wiki page %q: %w", slug, err)
+		}
+		if err := v.UpdateIndex(slug, title, tags); err != nil {
+			return fmt.Errorf("indexing wiki page %q: %w", slug, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+
+	// Sync edges outside the file lock (DB operations use their own connection).
+	links := ParseWikiLinks(content)
+	var edges []store.Edge
+	for _, link := range links {
+		edges = append(edges, store.Edge{
+			FromSlug: slug,
+			ToSlug:   link,
+			Type:     "wikilink",
+		})
+	}
+	if err := db.UpsertEdgesFrom(slug, "wikilink", edges); err != nil {
+		return "", fmt.Errorf("syncing edges for %q: %w", slug, err)
+	}
+
+	return slug, nil
+}
+
 // sectionBlock represents a parsed section of a markdown document.
 type sectionBlock struct {
 	heading string // heading text (without "## "), empty for preamble
