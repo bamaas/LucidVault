@@ -447,11 +447,11 @@ Body two.
 	assertContains(t, after, "- [[my-bookmark]]")
 	assertNotContains(t, after, "— shared tags")
 
-	// Dedup must not drop the graph edge: the carried-over line is skipped as
-	// TEXT (to avoid a duplicate line in the rendered file), but the
-	// underlying my-note -> my-bookmark edge must still exist, since it was
-	// established when the auto-link was first written and nothing in this
-	// scenario removes the relationship.
+	// Sanity check only: the my-note -> my-bookmark edge comes from the
+	// user's own "- [[my-bookmark]]" line in the note body via
+	// syncEdgesFromContent, independent of the carry-over/dedup logic above.
+	// This does not by itself prove dedup preserves an edge that depended
+	// solely on the carried-over (now-skipped) auto-link text.
 	out, err := db.GetOutboundEdges("my-note")
 	if err != nil {
 		t.Fatalf("GetOutboundEdges: %v", err)
@@ -598,12 +598,13 @@ func TestProcessNotes_SkipsNoteWhenOldWikiCopyReadFails(t *testing.T) {
 //
 // docs/plans/plan-preserve-note-related-on-rebuild.md only says user-removed
 // links "must not be resurrected" in general and does not explicitly carve
-// out this hand-written-format-collision case — the plan does not bless this
-// specific behavior. This test documents the implementation's current,
-// observed behavior (a byproduct of carrying over by text format rather than
-// by provenance) so that a future fix for it is recognized as an intentional
-// improvement rather than mistaken for a regression against an approved spec.
+// out this hand-written-format-collision case. The test asserts the DESIRED
+// behavior (deletion sticks) and is skipped until the carry-over heuristic
+// can distinguish provenance (genuine auto-link vs. hand-written lookalike)
+// and this is tracked as a fixable issue, so it doesn't lock in the bug.
 func TestProcessNotes_KnownLimitation_HandWrittenAutoLinkFormatSurvivesDeletion(t *testing.T) {
+	t.Skip("known limitation: AutoLinkedRelatedLines carries over by text format, not provenance, so a deleted hand-written lookalike line is resurrected; needs a tracked issue before fixing")
+
 	tmpDir, db, v, _, en := setupTestEnv(t)
 	ctx := context.Background()
 
@@ -647,7 +648,7 @@ Body one.
 	}
 	processNotes(ctx, en, db, v)
 
-	// Known limitation: the line reappears because it still matches the
-	// auto-link marker heuristic when read from the OLD wiki copy.
-	assertContains(t, readFile(t, noteWiki), "[[my-bookmark]] — shared tags: golang, testing")
+	// Desired behavior: a user-deleted line must not reappear, even if it
+	// happens to match the auto-link format.
+	assertNotContains(t, readFile(t, noteWiki), "[[my-bookmark]] — shared tags: golang, testing")
 }

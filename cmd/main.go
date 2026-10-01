@@ -638,9 +638,12 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 
 		// Write wiki copy. For an existing note, carry over any auto-linked
 		// ## Related lines from the old wiki copy before it's overwritten (see
-		// docs/plans/plan-preserve-note-related-on-rebuild.md). Read-old,
-		// write, and update-Related run under one file lock so a concurrent
-		// MCP process (ADR-019) can't append a Related line in between.
+		// docs/plans/plan-preserve-note-related-on-rebuild.md). The merge
+		// happens in memory and is written once, so a failure never leaves a
+		// half-updated wiki file: the note hash stays stale and the whole
+		// rebuild retries next cycle. Read-old and write run under one file
+		// lock so a concurrent MCP process (ADR-019) can't append a Related
+		// line in between.
 		wikiRelPath := filepath.Join("wiki", wikiFilename)
 		var wikiPath string
 		finalContent := wikiContent
@@ -650,7 +653,7 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 				oldContent, readErr := v.ReadFile(wikiRelPath)
 				switch {
 				case readErr == nil:
-					carryLines = vault.AutoLinkedRelatedLines(oldContent)
+					carryLines = dropLinksToMissingPages(v, vault.AutoLinkedRelatedLines(oldContent))
 				case errors.Is(readErr, fs.ErrNotExist):
 					// Old wiki copy missing — nothing to carry over.
 				default:
@@ -658,22 +661,15 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 				}
 			}
 
-			p, writeErr := v.WriteWiki(wikiFilename, wikiContent)
+			if len(carryLines) > 0 {
+				finalContent = vault.MergeRelatedLinks(wikiContent, carryLines)
+			}
+
+			p, writeErr := v.WriteWiki(wikiFilename, finalContent)
 			if writeErr != nil {
 				return fmt.Errorf("writing wiki copy: %w", writeErr)
 			}
 			wikiPath = p
-
-			if len(carryLines) > 0 {
-				if relErr := v.UpdateRelatedSection(wikiRelPath, carryLines); relErr != nil {
-					return fmt.Errorf("carrying over related links: %w", relErr)
-				}
-				updated, readErr := v.ReadFile(wikiRelPath)
-				if readErr != nil {
-					return fmt.Errorf("re-reading wiki copy: %w", readErr)
-				}
-				finalContent = updated
-			}
 			return nil
 		})
 		if err != nil {
@@ -1052,6 +1048,21 @@ func autoLinkRelated(db *store.Store, v *vault.Vault, slug string, tags []string
 
 		slog.Info("auto-linked related page", "from", slug, "to", c.Slug, "shared_tags", c.SharedTags)
 	}
+}
+
+// dropLinksToMissingPages filters out carried-over Related links whose
+// target wiki page no longer exists. Without this, a broken edge carried
+// over on every note rebuild fights hygiene's FindBrokenEdges, which deletes
+// the same edge syncEdgesFromContent just recreated.
+func dropLinksToMissingPages(v *vault.Vault, links []string) []string {
+	var kept []string
+	for _, link := range links {
+		slug := vault.ExtractSlugFromLink(link)
+		if slug == "" || v.FileHasContent("wiki/"+slug+".md") {
+			kept = append(kept, link)
+		}
+	}
+	return kept
 }
 
 func runMCP(args []string) {

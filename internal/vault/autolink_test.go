@@ -492,19 +492,12 @@ func TestBacklinkLine_Format(t *testing.T) {
 // were written by autoLinkRelated (the format produced by
 // BacklinkCandidate.BacklinkLine, identified by the "— shared tags:" marker),
 // stripped of their leading "- " prefix so the result can be fed straight
-// back into UpdateRelatedSection. See
+// back into UpdateRelatedSection/MergeRelatedLinks. See
 // docs/plans/plan-preserve-note-related-on-rebuild.md.
 //
-// Known duplication (not fixed here, out of scope for a test-quality round):
-// the plan describes this function as reusing the existing section-boundary
-// detection via findRelatedSectionEnd, but the actual implementation
-// re-implements its own inline loop instead of calling findRelatedSectionEnd.
-// The two currently agree (both end a section at a "## "/"# " heading or a
-// "---" line), but nothing enforces that beyond the test cases below —
-// changing one without the other would silently drift. If collectExistingLinks,
-// findRelatedSectionEnd, and AutoLinkedRelatedLines all still need their own
-// boundary checks, that is a separate refactor; this test suite just makes
-// sure the current contract of each is pinned down precisely.
+// Its section-boundary detection is a separate inline loop from
+// findRelatedSectionEnd/collectExistingLinks; the cases below pin down its
+// current contract precisely so the two don't silently drift apart.
 
 func TestAutoLinkedRelatedLines(t *testing.T) {
 	tests := []struct {
@@ -579,9 +572,6 @@ func TestAutoLinkedRelatedLines(t *testing.T) {
 		{
 			// Pins the current implementation's section-boundary detection,
 			// which stops at a "---" line (as well as at the next heading).
-			// This is a separate inline check from findRelatedSectionEnd,
-			// which UpdateRelatedSection uses for the same purpose — see the
-			// "duplicated logic" note above TestAutoLinkedRelatedLines.
 			name: "stops at a --- line inside the Related section",
 			content: "# Test\n\n## Related\n\n" +
 				"- [[auto-link]] — shared tags: go\n\n" +
