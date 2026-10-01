@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,7 +75,9 @@ func TestProcessNotes_PreservesAutoLinkedRelatedOnNoteEdit(t *testing.T) {
 	autoLinkRelated(db, v, "my-bookmark", []string{"golang", "testing"}, bmContent)
 
 	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
-	assertContains(t, readFile(t, noteWiki), "[[my-bookmark]]")
+	before := readFile(t, noteWiki)
+	assertContains(t, before, "\n- [[my-bookmark]] — shared tags: golang, testing\n")
+	assertNotContains(t, before, "- - ")
 
 	// User edits the note.
 	if err := os.WriteFile(notePath, []byte(relatedNoteV2), 0o644); err != nil {
@@ -83,7 +87,8 @@ func TestProcessNotes_PreservesAutoLinkedRelatedOnNoteEdit(t *testing.T) {
 
 	after := readFile(t, noteWiki)
 	assertContains(t, after, "Version two")
-	assertContains(t, after, "[[my-bookmark]]")
+	assertContains(t, after, "\n- [[my-bookmark]] — shared tags: golang, testing\n")
+	assertNotContains(t, after, "- - ")
 
 	out, err := db.GetOutboundEdges("my-note")
 	if err != nil {
@@ -210,7 +215,8 @@ Body two.
 	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
 	before := readFile(t, noteWiki)
 	assertContains(t, before, "[[x]]")
-	assertContains(t, before, "[[my-bookmark]]")
+	assertContains(t, before, "\n- [[my-bookmark]] — shared tags: golang, testing\n")
+	assertNotContains(t, before, "- - ")
 
 	// User edits the note, keeping their own ## Related section intact.
 	if err := os.WriteFile(notePath, []byte(noteV2), 0o644); err != nil {
@@ -220,6 +226,8 @@ Body two.
 
 	after := readFile(t, noteWiki)
 	assertContains(t, after, "Body two")
+	assertContains(t, after, "\n- [[my-bookmark]] — shared tags: golang, testing\n")
+	assertNotContains(t, after, "- - ")
 	if got := strings.Count(after, "## Related"); got != 1 {
 		t.Errorf("expected exactly 1 ## Related section, got %d:\n%s", got, after)
 	}
@@ -228,6 +236,23 @@ Body two.
 	}
 	if got := strings.Count(after, "[[my-bookmark]]"); got != 1 {
 		t.Errorf("expected exactly 1 occurrence of [[my-bookmark]], got %d:\n%s", got, after)
+	}
+
+	// The rebuilt note's outbound edges must include both the user's manual
+	// link target ("x") and the carried-over auto-link target ("my-bookmark").
+	out, err := db.GetOutboundEdges("my-note")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	targets := make(map[string]bool, len(out))
+	for _, e := range out {
+		targets[e.ToSlug] = true
+	}
+	if !targets["x"] {
+		t.Errorf("expected edge my-note -> x after merge, got edges %v", out)
+	}
+	if !targets["my-bookmark"] {
+		t.Errorf("expected edge my-note -> my-bookmark after merge, got edges %v", out)
 	}
 }
 
@@ -287,4 +312,305 @@ Version two.
 	after := readFile(t, noteWiki)
 	assertContains(t, after, "Version two")
 	assertNotContains(t, after, "## Related")
+}
+
+// TestProcessNotes_AutoLinkedRelatedStableAcrossRepeatedRebuilds verifies that
+// once an auto-linked line has been carried over, it stays stable (no
+// duplication, no "- - " corruption) across repeated edits of the note,
+// including an edit that reverts the note back to a previously-seen content
+// hash (v1 -> v2 -> v1).
+func TestProcessNotes_AutoLinkedRelatedStableAcrossRepeatedRebuilds(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	notePath := filepath.Join(tmpDir, "notes", "my-note.md")
+	if err := os.WriteFile(notePath, []byte(relatedNoteV1), 0o644); err != nil {
+		t.Fatalf("WriteFile v1: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	bmContent := relatedBookmarkWiki
+	if _, err := v.WriteWiki("my-bookmark.md", bmContent); err != nil {
+		t.Fatalf("WriteWiki bookmark: %v", err)
+	}
+	syncEdgesFromContent(db, "my-bookmark", bmContent)
+	if err := v.UpdateIndex("my-bookmark", "Bookmark", []string{"golang", "testing"}); err != nil {
+		t.Fatalf("UpdateIndex: %v", err)
+	}
+	autoLinkRelated(db, v, "my-bookmark", []string{"golang", "testing"}, bmContent)
+
+	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
+	assertContains(t, readFile(t, noteWiki), "\n- [[my-bookmark]] — shared tags: golang, testing\n")
+
+	assertStable := func(step string) {
+		t.Helper()
+		content := readFile(t, noteWiki)
+		if got := strings.Count(content, "## Related"); got != 1 {
+			t.Errorf("%s: expected exactly 1 ## Related section, got %d:\n%s", step, got, content)
+		}
+		if got := strings.Count(content, "[[my-bookmark]]"); got != 1 {
+			t.Errorf("%s: expected exactly 1 occurrence of [[my-bookmark]], got %d:\n%s", step, got, content)
+		}
+		assertContains(t, content, "\n- [[my-bookmark]] — shared tags: golang, testing\n")
+		assertNotContains(t, content, "- - ")
+	}
+
+	// v1 -> v2
+	if err := os.WriteFile(notePath, []byte(relatedNoteV2), 0o644); err != nil {
+		t.Fatalf("WriteFile v2: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+	assertStable("after v1->v2")
+
+	// v2 -> v1 (reverts to a previously-seen content hash)
+	if err := os.WriteFile(notePath, []byte(relatedNoteV1), 0o644); err != nil {
+		t.Fatalf("WriteFile v1 again: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+	assertStable("after v2->v1")
+
+	out, err := db.GetOutboundEdges("my-note")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	found := false
+	for _, e := range out {
+		if e.ToSlug == "my-bookmark" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("edge my-note -> my-bookmark lost after repeated rebuilds, got edges %v", out)
+	}
+}
+
+// TestProcessNotes_SkipsCarriedOverDuplicateBySameSlugAsUserLink verifies the
+// plan's "duplicates by slug are skipped" edge case: when the note's own
+// (post-edit) ## Related section already contains a hand-written link for the
+// SAME slug as a carried-over auto-link, the carried-over line must be
+// skipped so the slug appears only once in the rebuilt file.
+func TestProcessNotes_SkipsCarriedOverDuplicateBySameSlugAsUserLink(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	notePath := filepath.Join(tmpDir, "notes", "my-note.md")
+	if err := os.WriteFile(notePath, []byte(relatedNoteV1), 0o644); err != nil {
+		t.Fatalf("WriteFile v1: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	// A bookmark is enriched later, auto-linking into the note's wiki copy.
+	bmContent := relatedBookmarkWiki
+	if _, err := v.WriteWiki("my-bookmark.md", bmContent); err != nil {
+		t.Fatalf("WriteWiki bookmark: %v", err)
+	}
+	syncEdgesFromContent(db, "my-bookmark", bmContent)
+	if err := v.UpdateIndex("my-bookmark", "Bookmark", []string{"golang", "testing"}); err != nil {
+		t.Fatalf("UpdateIndex: %v", err)
+	}
+	autoLinkRelated(db, v, "my-bookmark", []string{"golang", "testing"}, bmContent)
+
+	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
+	assertContains(t, readFile(t, noteWiki), "[[my-bookmark]]")
+
+	// User edits the note, hand-writing their OWN link for the same slug
+	// ("my-bookmark") as the carried-over auto-link.
+	noteV2 := `---
+tags:
+  - golang
+  - testing
+---
+
+# Note
+
+Body two.
+
+## Related
+
+- [[my-bookmark]]
+`
+	if err := os.WriteFile(notePath, []byte(noteV2), 0o644); err != nil {
+		t.Fatalf("WriteFile v2: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	after := readFile(t, noteWiki)
+	if got := strings.Count(after, "## Related"); got != 1 {
+		t.Errorf("expected exactly 1 ## Related section, got %d:\n%s", got, after)
+	}
+	if got := strings.Count(after, "[[my-bookmark]]"); got != 1 {
+		t.Errorf("expected exactly 1 occurrence of [[my-bookmark]] (no duplicate), got %d:\n%s", got, after)
+	}
+}
+
+// TestProcessNotes_NewNoteDoesNotCarryOverStaleWikiFile pins the new-note path
+// (existingHash == "", i.e. first-time processing): if a wiki/<slug>.md file
+// already exists on disk (e.g. left over from an unrelated process) with an
+// auto-link-format ## Related line, processNotes must not inherit that stale
+// content, because carry-over only reads the OLD wiki copy when the DB
+// already has a record for the note (existingHash != "").
+func TestProcessNotes_NewNoteDoesNotCarryOverStaleWikiFile(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	staleWiki := `---
+title: "Stale"
+tags:
+  - golang
+  - testing
+---
+
+# Stale
+
+## Related
+
+- [[leftover-bookmark]] — shared tags: golang, testing
+`
+	if _, err := v.WriteWiki("my-note.md", staleWiki); err != nil {
+		t.Fatalf("WriteWiki stale: %v", err)
+	}
+
+	notePath := filepath.Join(tmpDir, "notes", "my-note.md")
+	if err := os.WriteFile(notePath, []byte(relatedNoteV1), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// No DB record exists yet for notes/my-note.md — this is the new-note path.
+	processNotes(ctx, en, db, v)
+
+	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
+	after := readFile(t, noteWiki)
+	assertContains(t, after, "Version one")
+	assertNotContains(t, after, "[[leftover-bookmark]]")
+	assertNotContains(t, after, "## Related")
+}
+
+// TestProcessNotes_SkipsNoteWhenOldWikiCopyReadFails verifies that when
+// reading the OLD wiki copy fails for a reason other than "not found" (e.g.
+// the path unexpectedly resolves to a directory), processNotes logs the
+// failure and skips the note — without panicking and without marking it
+// processed — so the edit is retried on the next poll cycle instead of being
+// silently dropped.
+func TestProcessNotes_SkipsNoteWhenOldWikiCopyReadFails(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	notePath := filepath.Join(tmpDir, "notes", "my-note.md")
+	if err := os.WriteFile(notePath, []byte(relatedNoteV1), 0o644); err != nil {
+		t.Fatalf("WriteFile v1: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	const noteDBPath = "notes/my-note.md"
+	hashBefore, err := db.GetNoteHash(noteDBPath)
+	if err != nil {
+		t.Fatalf("GetNoteHash: %v", err)
+	}
+	if hashBefore == "" {
+		t.Fatal("expected note to be recorded after first processNotes run")
+	}
+
+	// Replace the old wiki copy with a directory so reading it fails with a
+	// non-not-found error.
+	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
+	if err := os.Remove(noteWiki); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if err := os.Mkdir(noteWiki, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	if err := os.WriteFile(notePath, []byte(relatedNoteV2), 0o644); err != nil {
+		t.Fatalf("WriteFile v2: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+	t.Cleanup(func() { slog.SetDefault(prevLogger) })
+
+	// Must not panic even though wiki/my-note.md is now a directory.
+	processNotes(ctx, en, db, v)
+
+	if !strings.Contains(logBuf.String(), "failed to write wiki copy for note") {
+		t.Errorf("expected the read failure to be logged, got: %s", logBuf.String())
+	}
+
+	hashAfter, err := db.GetNoteHash(noteDBPath)
+	if err != nil {
+		t.Fatalf("GetNoteHash: %v", err)
+	}
+	if hashAfter != hashBefore {
+		t.Errorf("expected note hash to remain %q (not marked processed) so it retries next cycle, got %q", hashBefore, hashAfter)
+	}
+
+	info, err := os.Stat(noteWiki)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("expected wiki/my-note.md to remain a directory after the failed rebuild")
+	}
+}
+
+// TestProcessNotes_KnownLimitation_HandWrittenAutoLinkFormatSurvivesDeletion
+// pins down an accepted limitation of the carry-over heuristic in
+// vault.AutoLinkedRelatedLines: it cannot distinguish a genuine auto-link
+// (written by autoLinkRelated) from a user-authored line that merely matches
+// the same format ("- [[slug]] — shared tags: ..."). If a user hand-writes
+// such a line inside their own ## Related section and later deletes it, the
+// OLD wiki copy (read during the next rebuild, before it is overwritten)
+// still contains the line, so processNotes "carries it over" into the new
+// wiki copy — resurrecting text the user explicitly removed from the note
+// body. This is accepted behavior (see docs/plans/plan-preserve-note-related-
+// on-rebuild.md, "Edge cases": only auto-link-format lines are carried over,
+// with no way to tell genuine ones from coincidentally-formatted user text).
+// This test documents it so a future change can't silently alter it.
+func TestProcessNotes_KnownLimitation_HandWrittenAutoLinkFormatSurvivesDeletion(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	noteV1 := `---
+tags:
+  - golang
+  - testing
+---
+
+# Note
+
+Body one.
+
+## Related
+
+- [[my-bookmark]] — shared tags: golang, testing
+`
+	noteV2 := `---
+tags:
+  - golang
+  - testing
+---
+
+# Note
+
+Body one.
+`
+
+	notePath := filepath.Join(tmpDir, "notes", "my-note.md")
+	if err := os.WriteFile(notePath, []byte(noteV1), 0o644); err != nil {
+		t.Fatalf("WriteFile v1: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
+	assertContains(t, readFile(t, noteWiki), "[[my-bookmark]] — shared tags: golang, testing")
+
+	// User deletes the hand-written line from the note body.
+	if err := os.WriteFile(notePath, []byte(noteV2), 0o644); err != nil {
+		t.Fatalf("WriteFile v2: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	// Known limitation: the line reappears because it still matches the
+	// auto-link marker heuristic when read from the OLD wiki copy.
+	assertContains(t, readFile(t, noteWiki), "[[my-bookmark]] — shared tags: golang, testing")
 }

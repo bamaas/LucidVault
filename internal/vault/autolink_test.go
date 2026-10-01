@@ -494,6 +494,17 @@ func TestBacklinkLine_Format(t *testing.T) {
 // stripped of their leading "- " prefix so the result can be fed straight
 // back into UpdateRelatedSection. See
 // docs/plans/plan-preserve-note-related-on-rebuild.md.
+//
+// Known duplication (not fixed here, out of scope for a test-quality round):
+// the plan describes this function as reusing the existing section-boundary
+// detection via findRelatedSectionEnd, but the actual implementation
+// re-implements its own inline loop instead of calling findRelatedSectionEnd.
+// The two currently agree (both end a section at a "## "/"# " heading or a
+// "---" line), but nothing enforces that beyond the test cases below —
+// changing one without the other would silently drift. If collectExistingLinks,
+// findRelatedSectionEnd, and AutoLinkedRelatedLines all still need their own
+// boundary checks, that is a separate refactor; this test suite just makes
+// sure the current contract of each is pinned down precisely.
 
 func TestAutoLinkedRelatedLines(t *testing.T) {
 	tests := []struct {
@@ -564,6 +575,63 @@ func TestAutoLinkedRelatedLines(t *testing.T) {
 			name:    "returns nil for empty content",
 			content: "",
 			want:    nil,
+		},
+		{
+			// Pins the current implementation's section-boundary detection,
+			// which stops at a "---" line (as well as at the next heading).
+			// This is a separate inline check from findRelatedSectionEnd,
+			// which UpdateRelatedSection uses for the same purpose — see the
+			// "duplicated logic" note above TestAutoLinkedRelatedLines.
+			name: "stops at a --- line inside the Related section",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[auto-link]] — shared tags: go\n\n" +
+				"---\n" +
+				"- [[not-related]] — shared tags: go\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			// Only a "## "/"# " heading (or "---") ends the section — a
+			// sub-heading one level deeper does not, per the plan's "section
+			// end via findRelatedSectionEnd" contract.
+			name: "does not stop at a ### sub-heading inside the Related section",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[auto-link]] — shared tags: go\n\n" +
+				"### Sub\n\n" +
+				"- [[also-related]] — shared tags: rust\n",
+			want: []string{
+				"[[auto-link]] — shared tags: go",
+				"[[also-related]] — shared tags: rust",
+			},
+		},
+		{
+			name: "handles CRLF line endings via TrimSpace",
+			content: "# Test\r\n\r\n## Related\r\n\r\n" +
+				"- [[auto-link]] — shared tags: go\r\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			name: "auto-link-formatted line missing the leading dash is returned unchanged",
+			content: "# Test\n\n## Related\n\n" +
+				"[[auto-link]] — shared tags: go\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			name: "indented auto-link line is trimmed and still extracted",
+			content: "# Test\n\n## Related\n\n" +
+				"  - [[auto-link]] — shared tags: go\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			// Only the FIRST ## Related section counts: the loop breaks at
+			// the next "## " heading ("## Another"), so it never reaches the
+			// second "## Related" section below it.
+			name: "a second ## Related section later in the file is ignored",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[first]] — shared tags: go\n\n" +
+				"## Another\n\n" +
+				"## Related\n\n" +
+				"- [[second]] — shared tags: go\n",
+			want: []string{"[[first]] — shared tags: go"},
 		},
 	}
 
