@@ -1,7 +1,9 @@
 package mcpserver
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -566,7 +568,12 @@ func slugFromURL(rawURL string) string {
 	return vault.GenerateSlug(strings.Join(parts, " "))
 }
 
-// HandleAddNote creates a note file in the notes directory.
+// HandleAddNote creates a note file in the notes directory. It never
+// overwrites an existing file: if the title's slug collides with a file that
+// already exists (including a pre-existing user-authored note), a numeric
+// suffix is appended (e.g. "-2", "-3") and the resulting filename is
+// returned. Callers must treat the returned filename as authoritative rather
+// than assuming it matches the slug derived from title.
 func HandleAddNote(v *vault.Vault, title, content string, tags []string) (string, error) {
 	if title == "" {
 		return "", fmt.Errorf("title is required")
@@ -576,7 +583,6 @@ func HandleAddNote(v *vault.Vault, title, content string, tags []string) (string
 	}
 
 	slug := vault.GenerateSlug(title)
-	filename := slug + ".md"
 
 	if tags == nil {
 		tags = []string{}
@@ -600,12 +606,54 @@ func HandleAddNote(v *vault.Vault, title, content string, tags []string) (string
 		return "", fmt.Errorf("creating notes directory: %w", err)
 	}
 
-	absPath := filepath.Join(notesDir, filename)
-	if err := os.WriteFile(absPath, []byte(b.String()), 0o644); err != nil {
-		return "", fmt.Errorf("writing note file: %w", err)
+	createdFilename, err := createUniqueNoteFile(notesDir, slug, []byte(b.String()))
+	if err != nil {
+		return "", err
 	}
 
-	return filename, nil
+	return createdFilename, nil
+}
+
+// maxNoteFilenameAttempts caps how many suffixed candidates createUniqueNoteFile
+// will try (<slug>.md plus -2 … -100) before giving up.
+const maxNoteFilenameAttempts = 100
+
+// createUniqueNoteFile writes data to the first free filename among <slug>.md,
+// <slug>-2.md, ..., <slug>-100.md inside notesDir, never overwriting an existing
+// file. Each candidate is created with O_EXCL so the existence check and the
+// create happen atomically, avoiding a TOCTOU race between concurrent callers.
+// It returns the filename (not the full path) that was actually created.
+func createUniqueNoteFile(notesDir, slug string, data []byte) (string, error) {
+	for attempt := 1; attempt <= maxNoteFilenameAttempts; attempt++ {
+		filename := slug + ".md"
+		if attempt > 1 {
+			filename = fmt.Sprintf("%s-%d.md", slug, attempt)
+		}
+
+		path := filepath.Join(notesDir, filename)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				continue
+			}
+			return "", fmt.Errorf("creating note file %q: %w", filename, err)
+		}
+
+		if _, writeErr := f.Write(data); writeErr != nil {
+			_ = f.Close()
+			_ = os.Remove(path)
+			return "", fmt.Errorf("writing note file %q: %w", filename, writeErr)
+		}
+
+		if closeErr := f.Close(); closeErr != nil {
+			_ = os.Remove(path)
+			return "", fmt.Errorf("closing note file %q: %w", filename, closeErr)
+		}
+
+		return filename, nil
+	}
+
+	return "", fmt.Errorf("no available filename for slug %q after %d attempts", slug, maxNoteFilenameAttempts)
 }
 
 // HandleExpandGraph expands seed slugs by traversing wiki-link edges up to N hops.
