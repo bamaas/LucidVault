@@ -56,13 +56,14 @@ only auto-link lines guarantees that.
 ### Where the lines go
 
 Reuse `vault.UpdateRelatedSection` after writing the new content. It already:
+
 - appends to an existing `## Related` section (e.g. one the user wrote in the note
   body) and skips links whose slug is already present;
 - otherwise creates `## Related` at the end of the file (note copies have no
   `*Source:` footer).
 
-`UpdateRelatedSection` takes link text without the `- ` prefix (it adds it), so pass
-the carried-over lines with the leading `- ` stripped.
+`UpdateRelatedSection` takes link text without the `-` prefix (it adds it), so pass
+the carried-over lines with the leading `-` stripped.
 
 ### Order of operations in `processNotes` (existing note, `existingHash != ""`)
 
