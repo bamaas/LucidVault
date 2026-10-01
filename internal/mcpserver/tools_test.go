@@ -2,7 +2,9 @@ package mcpserver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1131,12 +1133,21 @@ func TestHandleAddNote(t *testing.T) {
 			}
 		})
 
+		probePath := filepath.Join(notesDir, "probe")
+		if err := os.WriteFile(probePath, nil, 0o644); err == nil {
+			_ = os.Remove(probePath)
+			t.Skip("filesystem does not enforce permissions")
+		}
+
 		_, err := HandleAddNote(v, "Permission Denied Note", "Some content.", nil)
 		if err == nil {
 			t.Fatal("expected an error when the notes dir is not writable")
 		}
 		if strings.Contains(err.Error(), "no available filename") {
 			t.Errorf("expected a permission error, not filename exhaustion, got: %v", err)
+		}
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("expected fs.ErrPermission, got: %v", err)
 		}
 
 		entries, readErr := os.ReadDir(notesDir)
