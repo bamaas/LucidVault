@@ -113,6 +113,44 @@ func (v *Vault) UpdateRelatedSection(relPath string, newLinks []string) error {
 	return nil
 }
 
+// AutoLinkedRelatedLines extracts the lines in content's ## Related section
+// that were written by autoLinkRelated — i.e. list items matching the format
+// produced by BacklinkCandidate.BacklinkLine, identified by the
+// "— shared tags:" marker — with their leading "- " prefix stripped so the
+// result can be passed straight to UpdateRelatedSection. User-authored lines
+// (no marker) are ignored. Returns nil if there is no ## Related section or
+// no matching lines.
+func AutoLinkedRelatedLines(content string) []string {
+	lines := strings.Split(content, "\n")
+
+	relatedIdx := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "## Related" {
+			relatedIdx = i
+			break
+		}
+	}
+	if relatedIdx < 0 {
+		return nil
+	}
+
+	var result []string
+	for i := relatedIdx + 1; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "# ") || strings.HasPrefix(line, "---") {
+			break
+		}
+		if !strings.Contains(line, "— shared tags:") {
+			continue
+		}
+		result = append(result, strings.TrimPrefix(line, "- "))
+	}
+	return result
+}
+
 // FindRelatedByTags reads index.md and finds pages sharing 2+ tags with newTags.
 // Excludes newSlug from results. Returns at most 3 candidates sorted by:
 // tag overlap DESC → file mtime DESC → slug ASC.

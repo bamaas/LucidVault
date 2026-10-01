@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -634,18 +636,56 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 			}
 		}
 
-		// Write wiki copy
-		wikiPath, err := v.WriteWiki(wikiFilename, wikiContent)
+		// Write wiki copy. For an existing note, carry over any auto-linked
+		// ## Related lines from the old wiki copy before it's overwritten (see
+		// docs/plans/plan-preserve-note-related-on-rebuild.md). Read-old,
+		// write, and update-Related run under one file lock so a concurrent
+		// MCP process (ADR-019) can't append a Related line in between.
+		wikiRelPath := filepath.Join("wiki", wikiFilename)
+		var wikiPath string
+		finalContent := wikiContent
+		err = db.WithFileLock(func() error {
+			var carryLines []string
+			if existingHash != "" {
+				oldContent, readErr := v.ReadFile(wikiRelPath)
+				switch {
+				case readErr == nil:
+					carryLines = vault.AutoLinkedRelatedLines(oldContent)
+				case errors.Is(readErr, fs.ErrNotExist):
+					// Old wiki copy missing — nothing to carry over.
+				default:
+					return fmt.Errorf("reading old wiki copy: %w", readErr)
+				}
+			}
+
+			p, writeErr := v.WriteWiki(wikiFilename, wikiContent)
+			if writeErr != nil {
+				return fmt.Errorf("writing wiki copy: %w", writeErr)
+			}
+			wikiPath = p
+
+			if len(carryLines) > 0 {
+				if relErr := v.UpdateRelatedSection(wikiRelPath, carryLines); relErr != nil {
+					return fmt.Errorf("carrying over related links: %w", relErr)
+				}
+				updated, readErr := v.ReadFile(wikiRelPath)
+				if readErr != nil {
+					return fmt.Errorf("re-reading wiki copy: %w", readErr)
+				}
+				finalContent = updated
+			}
+			return nil
+		})
 		if err != nil {
 			slog.Error("failed to write wiki copy for note", "path", nf.Path, "error", err)
 			continue
 		}
 
 		// Sync wikilink edges incrementally
-		syncEdgesFromContent(db, wikiSlug, wikiContent)
+		syncEdgesFromContent(db, wikiSlug, finalContent)
 
 		// Auto-link: add backlinks to related pages
-		autoLinkRelated(db, v, wikiSlug, tags, wikiContent)
+		autoLinkRelated(db, v, wikiSlug, tags, finalContent)
 
 		// Index the wiki slug (not the notes/ path)
 		if err := v.UpdateIndex(wikiSlug, nf.Title, tags); err != nil {
