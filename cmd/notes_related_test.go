@@ -731,10 +731,10 @@ Version one.
 // links "must not be resurrected" in general and does not explicitly carve
 // out this hand-written-format-collision case. The test asserts the DESIRED
 // behavior (deletion sticks) and is skipped until the carry-over heuristic
-// can distinguish provenance (genuine auto-link vs. hand-written lookalike)
-// and this is tracked as a fixable issue, so it doesn't lock in the bug.
+// can distinguish provenance (genuine auto-link vs. hand-written lookalike).
+// Tracked as https://github.com/bamaas/LucidVault/issues/99.
 func TestProcessNotes_KnownLimitation_HandWrittenAutoLinkFormatSurvivesDeletion(t *testing.T) {
-	t.Skip("known limitation: AutoLinkedRelatedLines carries over by text format, not provenance, so a deleted hand-written lookalike line is resurrected; needs a tracked issue before fixing")
+	t.Skip("known limitation, see #99: AutoLinkedRelatedLines carries over by text format, not provenance, so a deleted hand-written lookalike line is resurrected")
 
 	tmpDir, db, v, _, en := setupTestEnv(t)
 	ctx := context.Background()
