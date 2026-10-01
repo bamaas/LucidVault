@@ -585,6 +585,137 @@ func TestProcessNotes_SkipsNoteWhenOldWikiCopyReadFails(t *testing.T) {
 	}
 }
 
+// TestProcessNotes_DropsCarriedOverLinkToDeletedPage verifies
+// dropLinksToMissingPages: when the old wiki copy's ## Related section has two
+// auto-linked lines, one pointing at a page that still exists and one
+// pointing at a page that was deleted, only the surviving page's link is
+// carried over into the rebuilt wiki copy (and gets a graph edge) — the
+// broken link is dropped rather than resurrected every rebuild.
+func TestProcessNotes_DropsCarriedOverLinkToDeletedPage(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	notePath := filepath.Join(tmpDir, "notes", "my-note.md")
+	if err := os.WriteFile(notePath, []byte(relatedNoteV1), 0o644); err != nil {
+		t.Fatalf("WriteFile v1: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	// Simulate two prior auto-links having landed in the old wiki copy: one to
+	// a page that still exists ("kept") and one to a page that was since
+	// deleted ("gone").
+	oldWiki := `---
+tags:
+  - golang
+  - testing
+---
+
+# Note
+
+Version one.
+
+## Related
+
+- [[kept]] — shared tags: golang, testing
+- [[gone]] — shared tags: golang, testing
+`
+	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
+	if err := os.WriteFile(noteWiki, []byte(oldWiki), 0o644); err != nil {
+		t.Fatalf("WriteFile oldWiki: %v", err)
+	}
+
+	if _, err := v.WriteWiki("kept.md", "# Kept\n\nStill here.\n"); err != nil {
+		t.Fatalf("WriteWiki kept: %v", err)
+	}
+	// wiki/gone.md is intentionally never created.
+
+	// User edits the note so its hash changes and a rebuild is triggered.
+	if err := os.WriteFile(notePath, []byte(relatedNoteV2), 0o644); err != nil {
+		t.Fatalf("WriteFile v2: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	after := readFile(t, noteWiki)
+	assertContains(t, after, "Version two")
+	assertContains(t, after, "[[kept]]")
+	assertNotContains(t, after, "[[gone]]")
+
+	out, err := db.GetOutboundEdges("my-note")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	for _, e := range out {
+		if e.ToSlug == "gone" {
+			t.Errorf("expected no outbound edge my-note -> gone, got edges %v", out)
+		}
+	}
+}
+
+// TestProcessNotes_DropsCarriedOverLinkToWhitespaceOnlyPage extends
+// TestProcessNotes_DropsCarriedOverLinkToDeletedPage: a wiki page that exists
+// on disk but is whitespace-only counts as missing (vault.FileHasContent
+// treats whitespace-only content as absent), so its carried-over link must
+// also be dropped.
+func TestProcessNotes_DropsCarriedOverLinkToWhitespaceOnlyPage(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	notePath := filepath.Join(tmpDir, "notes", "my-note.md")
+	if err := os.WriteFile(notePath, []byte(relatedNoteV1), 0o644); err != nil {
+		t.Fatalf("WriteFile v1: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	oldWiki := `---
+tags:
+  - golang
+  - testing
+---
+
+# Note
+
+Version one.
+
+## Related
+
+- [[kept]] — shared tags: golang, testing
+- [[gone]] — shared tags: golang, testing
+`
+	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
+	if err := os.WriteFile(noteWiki, []byte(oldWiki), 0o644); err != nil {
+		t.Fatalf("WriteFile oldWiki: %v", err)
+	}
+
+	if _, err := v.WriteWiki("kept.md", "# Kept\n\nStill here.\n"); err != nil {
+		t.Fatalf("WriteWiki kept: %v", err)
+	}
+	// wiki/gone.md exists but is whitespace-only, which FileHasContent treats
+	// as missing.
+	goneWiki := filepath.Join(tmpDir, "wiki", "gone.md")
+	if err := os.WriteFile(goneWiki, []byte("   \n\t\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile gone: %v", err)
+	}
+
+	if err := os.WriteFile(notePath, []byte(relatedNoteV2), 0o644); err != nil {
+		t.Fatalf("WriteFile v2: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	after := readFile(t, noteWiki)
+	assertContains(t, after, "[[kept]]")
+	assertNotContains(t, after, "[[gone]]")
+
+	out, err := db.GetOutboundEdges("my-note")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	for _, e := range out {
+		if e.ToSlug == "gone" {
+			t.Errorf("expected no outbound edge my-note -> gone, got edges %v", out)
+		}
+	}
+}
+
 // TestProcessNotes_KnownLimitation_HandWrittenAutoLinkFormatSurvivesDeletion
 // pins down an observed limitation of the carry-over heuristic in
 // vault.AutoLinkedRelatedLines: it cannot distinguish a genuine auto-link

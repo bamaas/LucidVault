@@ -130,7 +130,8 @@ func MergeRelatedLinks(content string, newLinks []string) string {
 // that were written by autoLinkRelated — i.e. list items matching the format
 // produced by BacklinkCandidate.BacklinkLine, identified by the
 // "— shared tags:" marker — with their leading "- " prefix stripped so the
-// result can be passed straight to UpdateRelatedSection. User-authored lines
+// result can be passed straight to MergeRelatedLinks (or UpdateRelatedSection).
+// User-authored lines
 // (no marker) are ignored. Returns nil if there is no ## Related section or
 // no matching lines.
 func AutoLinkedRelatedLines(content string) []string {
