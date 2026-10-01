@@ -441,6 +441,30 @@ Body two.
 	if got := strings.Count(after, "[[my-bookmark]]"); got != 1 {
 		t.Errorf("expected exactly 1 occurrence of [[my-bookmark]] (no duplicate), got %d:\n%s", got, after)
 	}
+	// The surviving line must be the user's own plain link, not the
+	// carried-over auto-link-formatted line — the dedup must keep the user's
+	// hand-written version, not silently swap in the auto-link text.
+	assertContains(t, after, "- [[my-bookmark]]")
+	assertNotContains(t, after, "— shared tags")
+
+	// Dedup must not drop the graph edge: the carried-over line is skipped as
+	// TEXT (to avoid a duplicate line in the rendered file), but the
+	// underlying my-note -> my-bookmark edge must still exist, since it was
+	// established when the auto-link was first written and nothing in this
+	// scenario removes the relationship.
+	out, err := db.GetOutboundEdges("my-note")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges: %v", err)
+	}
+	found := false
+	for _, e := range out {
+		if e.ToSlug == "my-bookmark" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected edge my-note -> my-bookmark to survive dedup, got edges %v", out)
+	}
 }
 
 // TestProcessNotes_NewNoteDoesNotCarryOverStaleWikiFile pins the new-note path
@@ -535,6 +559,14 @@ func TestProcessNotes_SkipsNoteWhenOldWikiCopyReadFails(t *testing.T) {
 	if !strings.Contains(logBuf.String(), "failed to write wiki copy for note") {
 		t.Errorf("expected the read failure to be logged, got: %s", logBuf.String())
 	}
+	// Pin down the specific branch: the outer log message alone would also be
+	// produced if WriteWiki itself failed on the same directory (since
+	// wikiRelPath still points at a directory). Assert the wrapped error text
+	// unique to the "reading old wiki copy" branch in cmd/main.go so this test
+	// can't pass with that branch removed or swallowed.
+	if !strings.Contains(logBuf.String(), "reading old wiki copy") {
+		t.Errorf("expected the logged error to come from the \"reading old wiki copy\" branch, got: %s", logBuf.String())
+	}
 
 	hashAfter, err := db.GetNoteHash(noteDBPath)
 	if err != nil {
@@ -554,7 +586,7 @@ func TestProcessNotes_SkipsNoteWhenOldWikiCopyReadFails(t *testing.T) {
 }
 
 // TestProcessNotes_KnownLimitation_HandWrittenAutoLinkFormatSurvivesDeletion
-// pins down an accepted limitation of the carry-over heuristic in
+// pins down an observed limitation of the carry-over heuristic in
 // vault.AutoLinkedRelatedLines: it cannot distinguish a genuine auto-link
 // (written by autoLinkRelated) from a user-authored line that merely matches
 // the same format ("- [[slug]] — shared tags: ..."). If a user hand-writes
@@ -562,10 +594,15 @@ func TestProcessNotes_SkipsNoteWhenOldWikiCopyReadFails(t *testing.T) {
 // OLD wiki copy (read during the next rebuild, before it is overwritten)
 // still contains the line, so processNotes "carries it over" into the new
 // wiki copy — resurrecting text the user explicitly removed from the note
-// body. This is accepted behavior (see docs/plans/plan-preserve-note-related-
-// on-rebuild.md, "Edge cases": only auto-link-format lines are carried over,
-// with no way to tell genuine ones from coincidentally-formatted user text).
-// This test documents it so a future change can't silently alter it.
+// body.
+//
+// docs/plans/plan-preserve-note-related-on-rebuild.md only says user-removed
+// links "must not be resurrected" in general and does not explicitly carve
+// out this hand-written-format-collision case — the plan does not bless this
+// specific behavior. This test documents the implementation's current,
+// observed behavior (a byproduct of carrying over by text format rather than
+// by provenance) so that a future fix for it is recognized as an intentional
+// improvement rather than mistaken for a regression against an approved spec.
 func TestProcessNotes_KnownLimitation_HandWrittenAutoLinkFormatSurvivesDeletion(t *testing.T) {
 	tmpDir, db, v, _, en := setupTestEnv(t)
 	ctx := context.Background()
