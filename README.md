@@ -134,7 +134,7 @@ lucidvault mcp --http :8080
 | `related_notes` | Get bidirectional related pages (outbound, inbound, both); not-found errors include similar-slug suggestions |
 | `expand_graph` | Expand seed slugs by traversing edges up to N hops |
 | `add_bookmark` | Add a URL to the inbox for pipeline processing |
-| `add_note` | Create a personal note in the knowledge base |
+| `add_note` | Create a personal note in the knowledge base; never overwrites — colliding filenames get a numeric suffix (e.g. `-2`) |
 | `update_wiki` | Update a section of a wiki page (preserves other sections) |
 | `edit_page` | Replace the whole body of a wiki page (preserves frontmatter, re-syncs edges) |
 | `delete_page` | Delete a page and all artifacts (returns dangling refs) |

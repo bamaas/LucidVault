@@ -2,11 +2,14 @@ package mcpserver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"lucidvault/internal/store"
@@ -801,39 +804,358 @@ func TestHandleAddNote(t *testing.T) {
 		}
 	})
 
-	t.Run("overwrite existing note with same title", func(t *testing.T) {
-		v, dir := setupTestVault(t)
+	t.Run("colliding titles keep both notes", func(t *testing.T) {
+		// A fresh, empty vault: setupTestVault's fixtures already seed
+		// notes/aks-thoughts.md, which would pre-empt the very collision
+		// this test is designed to exercise.
+		dir := t.TempDir()
+		v := vault.New(dir)
 
-		// Create the first version.
-		filename1, err := HandleAddNote(v, "Overwrite Me", "Original content.", []string{"v1"})
+		filename1, err := HandleAddNote(v, "AKS thoughts", "First note content.", []string{"v1"})
 		if err != nil {
 			t.Fatalf("unexpected error creating first note: %v", err)
 		}
+		if filename1 != "aks-thoughts.md" {
+			t.Fatalf("expected filename %q, got %q", "aks-thoughts.md", filename1)
+		}
 
-		// Create the second version with the same title.
-		filename2, err := HandleAddNote(v, "Overwrite Me", "Updated content.", []string{"v2"})
+		firstContentBefore, err := os.ReadFile(filepath.Join(dir, "notes", filename1))
+		if err != nil {
+			t.Fatalf("reading first note: %v", err)
+		}
+
+		filename2, err := HandleAddNote(v, "AKS Thoughts!", "Second note content.", []string{"v2"})
 		if err != nil {
 			t.Fatalf("unexpected error creating second note: %v", err)
 		}
-
-		// Both calls should return the same filename (same slug).
-		if filename1 != filename2 {
-			t.Errorf("expected same filename for same title, got %q and %q", filename1, filename2)
+		if filename2 != "aks-thoughts-2.md" {
+			t.Errorf("expected filename %q, got %q", "aks-thoughts-2.md", filename2)
 		}
 
-		// Read back and verify it has the new content.
-		content, err := os.ReadFile(filepath.Join(dir, "notes", filename2))
+		// The first file must be byte-for-byte unchanged by the second call.
+		firstContentAfter, err := os.ReadFile(filepath.Join(dir, "notes", filename1))
 		if err != nil {
-			t.Fatalf("reading overwritten file: %v", err)
+			t.Fatalf("re-reading first note: %v", err)
+		}
+		if string(firstContentAfter) != string(firstContentBefore) {
+			t.Errorf("expected first note to remain byte-for-byte unchanged by the second call\nbefore:\n%s\nafter:\n%s", firstContentBefore, firstContentAfter)
+		}
+		if strings.Contains(string(firstContentAfter), "Second note content.") {
+			t.Errorf("expected first note not to contain the second call's content, got:\n%s", firstContentAfter)
 		}
 
-		body := string(content)
-
-		if strings.Contains(body, "Original content") {
-			t.Error("expected original content to be overwritten")
+		secondContent, err := os.ReadFile(filepath.Join(dir, "notes", filename2))
+		if err != nil {
+			t.Fatalf("reading second note: %v", err)
 		}
-		if !strings.Contains(body, "Updated content.") {
-			t.Errorf("expected updated content, got:\n%s", body)
+		if !strings.Contains(string(secondContent), "Second note content.") {
+			t.Errorf("expected second note to contain the new content, got:\n%s", secondContent)
+		}
+
+		// The H1 heading and tags must reflect what the caller gave the
+		// second call, not anything derived from the colliding slug.
+		if !strings.Contains(string(secondContent), "# AKS Thoughts!") {
+			t.Errorf("expected second note H1 heading %q, got:\n%s", "# AKS Thoughts!", secondContent)
+		}
+		if !strings.Contains(string(secondContent), "v2") {
+			t.Errorf("expected second note tags to include %q, got:\n%s", "v2", secondContent)
+		}
+	})
+
+	t.Run("third collision gets a dash-3 suffix", func(t *testing.T) {
+		dir := t.TempDir()
+		v := vault.New(dir)
+
+		if _, err := HandleAddNote(v, "AKS thoughts", "First.", nil); err != nil {
+			t.Fatalf("unexpected error creating first note: %v", err)
+		}
+		if _, err := HandleAddNote(v, "AKS Thoughts!", "Second.", nil); err != nil {
+			t.Fatalf("unexpected error creating second note: %v", err)
+		}
+
+		filename3, err := HandleAddNote(v, "aks thoughts", "Third.", nil)
+		if err != nil {
+			t.Fatalf("unexpected error creating third note: %v", err)
+		}
+		if filename3 != "aks-thoughts-3.md" {
+			t.Errorf("expected filename %q, got %q", "aks-thoughts-3.md", filename3)
+		}
+
+		content, err := os.ReadFile(filepath.Join(dir, "notes", filename3))
+		if err != nil {
+			t.Fatalf("reading third note: %v", err)
+		}
+		if !strings.Contains(string(content), "Third.") {
+			t.Errorf("expected third note to contain its own content, got:\n%s", content)
+		}
+
+		// The first two notes must survive the third call untouched.
+		firstContent, err := os.ReadFile(filepath.Join(dir, "notes", "aks-thoughts.md"))
+		if err != nil {
+			t.Fatalf("reading first note: %v", err)
+		}
+		if !strings.Contains(string(firstContent), "First.") {
+			t.Errorf("expected first note to still contain %q, got:\n%s", "First.", firstContent)
+		}
+		if strings.Contains(string(firstContent), "Third.") {
+			t.Errorf("expected first note not to contain the third call's content, got:\n%s", firstContent)
+		}
+
+		secondContent, err := os.ReadFile(filepath.Join(dir, "notes", "aks-thoughts-2.md"))
+		if err != nil {
+			t.Fatalf("reading second note: %v", err)
+		}
+		if !strings.Contains(string(secondContent), "Second.") {
+			t.Errorf("expected second note to still contain %q, got:\n%s", "Second.", secondContent)
+		}
+		if strings.Contains(string(secondContent), "Third.") {
+			t.Errorf("expected second note not to contain the third call's content, got:\n%s", secondContent)
+		}
+	})
+
+	t.Run("exhausted suffixes returns error without modifying existing files", func(t *testing.T) {
+		dir := t.TempDir()
+		v := vault.New(dir)
+		notesDir := filepath.Join(dir, "notes")
+		if err := os.MkdirAll(notesDir, 0o755); err != nil {
+			t.Fatalf("creating notes dir: %v", err)
+		}
+
+		const slug = "exhausted-slug-note"
+
+		// All 100 filename slots: <slug>.md plus <slug>-2.md ... <slug>-100.md.
+		var filenames []string
+		filenames = append(filenames, slug+".md")
+		for n := 2; n <= 100; n++ {
+			filenames = append(filenames, fmt.Sprintf("%s-%d.md", slug, n))
+		}
+		if len(filenames) != 100 {
+			t.Fatalf("test setup error: expected 100 filenames, got %d", len(filenames))
+		}
+
+		existingContent := make(map[string]string, len(filenames))
+		for _, fn := range filenames {
+			content := fmt.Sprintf("existing content for %s\n", fn)
+			if err := os.WriteFile(filepath.Join(notesDir, fn), []byte(content), 0o644); err != nil {
+				t.Fatalf("pre-creating %s: %v", fn, err)
+			}
+			existingContent[fn] = content
+		}
+
+		_, err := HandleAddNote(v, "Exhausted Slug Note", "New content that must not land anywhere.", nil)
+		if err == nil {
+			t.Fatal("expected an error when all 100 filename slots are taken")
+		}
+		if !strings.Contains(err.Error(), slug) {
+			t.Errorf("expected error to name the slug %q, got: %v", slug, err)
+		}
+
+		// None of the 100 pre-created files may have been modified.
+		for _, fn := range filenames {
+			got, readErr := os.ReadFile(filepath.Join(notesDir, fn))
+			if readErr != nil {
+				t.Fatalf("reading %s: %v", fn, readErr)
+			}
+			if string(got) != existingContent[fn] {
+				t.Errorf("expected %s to remain unchanged\nbefore:\n%s\nafter:\n%s", fn, existingContent[fn], got)
+			}
+		}
+
+		// No extra file should have been created, and none should be missing.
+		entries, readDirErr := os.ReadDir(notesDir)
+		if readDirErr != nil {
+			t.Fatalf("reading notes dir: %v", readDirErr)
+		}
+		if len(entries) != 100 {
+			t.Errorf("expected exactly 100 files in notes dir, got %d", len(entries))
+		}
+	})
+
+	t.Run("pre-existing user file is not overwritten", func(t *testing.T) {
+		dir := t.TempDir()
+		v := vault.New(dir)
+		notesDir := filepath.Join(dir, "notes")
+		if err := os.MkdirAll(notesDir, 0o755); err != nil {
+			t.Fatalf("creating notes dir: %v", err)
+		}
+
+		const slug = "legacy-note"
+		userContent := "Just a note I wrote myself in Obsidian, no frontmatter.\n"
+		if err := os.WriteFile(filepath.Join(notesDir, slug+".md"), []byte(userContent), 0o644); err != nil {
+			t.Fatalf("pre-creating user file: %v", err)
+		}
+
+		filename, err := HandleAddNote(v, "Legacy Note", "Content written through MCP.", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if filename != slug+"-2.md" {
+			t.Errorf("expected filename %q, got %q", slug+"-2.md", filename)
+		}
+
+		originalAfter, err := os.ReadFile(filepath.Join(notesDir, slug+".md"))
+		if err != nil {
+			t.Fatalf("reading original user file: %v", err)
+		}
+		if string(originalAfter) != userContent {
+			t.Errorf("expected user-authored file to remain unchanged\nbefore:\n%s\nafter:\n%s", userContent, originalAfter)
+		}
+
+		newContent, err := os.ReadFile(filepath.Join(notesDir, filename))
+		if err != nil {
+			t.Fatalf("reading new note: %v", err)
+		}
+		if !strings.Contains(string(newContent), "Content written through MCP.") {
+			t.Errorf("expected new note to contain the MCP-provided content, got:\n%s", newContent)
+		}
+	})
+
+	t.Run("directory with slug name is treated as a collision", func(t *testing.T) {
+		// O_EXCL returns EEXIST for a pre-existing directory just as it does
+		// for a pre-existing file, so the suffix logic must skip it too.
+		dir := t.TempDir()
+		v := vault.New(dir)
+		notesDir := filepath.Join(dir, "notes")
+		if err := os.MkdirAll(notesDir, 0o755); err != nil {
+			t.Fatalf("creating notes dir: %v", err)
+		}
+
+		const slug = "dir-collision-note"
+		if err := os.MkdirAll(filepath.Join(notesDir, slug+".md"), 0o755); err != nil {
+			t.Fatalf("pre-creating colliding directory: %v", err)
+		}
+
+		filename, err := HandleAddNote(v, "Dir Collision Note", "Content.", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if filename != slug+"-2.md" {
+			t.Errorf("expected filename %q, got %q", slug+"-2.md", filename)
+		}
+	})
+
+	t.Run("concurrent colliding calls get distinct filenames", func(t *testing.T) {
+		dir := t.TempDir()
+		v := vault.New(dir)
+
+		const n = 20
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		filenames := make([]string, n)
+		errs := make([]error, n)
+
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				filename, err := HandleAddNote(v, "Race Note", fmt.Sprintf("body %d", i), nil)
+				filenames[i] = filename
+				errs[i] = err
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("goroutine %d: unexpected error: %v", i, err)
+			}
+		}
+
+		seen := make(map[string]int, n)
+		for _, filename := range filenames {
+			seen[filename]++
+		}
+		if len(seen) != n {
+			t.Errorf("expected %d distinct filenames, got %d distinct: %v", n, len(seen), filenames)
+		}
+		for filename, count := range seen {
+			if count != 1 {
+				t.Errorf("filename %q was claimed by %d goroutines, want exactly 1", filename, count)
+			}
+		}
+
+		notesDir := filepath.Join(dir, "notes")
+		entries, err := os.ReadDir(notesDir)
+		if err != nil {
+			t.Fatalf("reading notes dir: %v", err)
+		}
+		if len(entries) != n {
+			t.Errorf("expected exactly %d files in notes dir, got %d", n, len(entries))
+		}
+
+		// Each file must carry exactly one body marker, and every body index
+		// from 0..n-1 must appear exactly once across all files. Matching on
+		// "body %d\n" (not a bare substring) avoids "body 1" false-matching
+		// inside "body 10".
+		bodySeen := make(map[int]int, n)
+		for _, filename := range filenames {
+			content, readErr := os.ReadFile(filepath.Join(notesDir, filename))
+			if readErr != nil {
+				t.Fatalf("reading %s: %v", filename, readErr)
+			}
+			matches := 0
+			for i := 0; i < n; i++ {
+				if strings.Contains(string(content), fmt.Sprintf("body %d\n", i)) {
+					matches++
+					bodySeen[i]++
+				}
+			}
+			if matches != 1 {
+				t.Errorf("file %s: expected exactly one body marker, found %d\ncontent:\n%s", filename, matches, content)
+			}
+		}
+		for i := 0; i < n; i++ {
+			if bodySeen[i] != 1 {
+				t.Errorf("body %d expected to appear exactly once across all files, appeared %d times", i, bodySeen[i])
+			}
+		}
+	})
+
+	t.Run("notes dir not writable surfaces an error, not filename exhaustion", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("skipping: running as root bypasses directory permissions")
+		}
+
+		dir := t.TempDir()
+		v := vault.New(dir)
+		notesDir := filepath.Join(dir, "notes")
+		if err := os.MkdirAll(notesDir, 0o755); err != nil {
+			t.Fatalf("creating notes dir: %v", err)
+		}
+		if err := os.Chmod(notesDir, 0o555); err != nil {
+			t.Fatalf("chmod notes dir: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := os.Chmod(notesDir, 0o755); err != nil {
+				t.Fatalf("restoring notes dir permissions: %v", err)
+			}
+		})
+
+		probePath := filepath.Join(notesDir, "probe")
+		if err := os.WriteFile(probePath, nil, 0o644); err == nil {
+			_ = os.Remove(probePath)
+			t.Skip("filesystem does not enforce permissions")
+		}
+
+		_, err := HandleAddNote(v, "Permission Denied Note", "Some content.", nil)
+		if err == nil {
+			t.Fatal("expected an error when the notes dir is not writable")
+		}
+		if strings.Contains(err.Error(), "no available filename") {
+			t.Errorf("expected a permission error, not filename exhaustion, got: %v", err)
+		}
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("expected fs.ErrPermission, got: %v", err)
+		}
+
+		entries, readErr := os.ReadDir(notesDir)
+		if readErr != nil {
+			t.Fatalf("reading notes dir: %v", readErr)
+		}
+		if len(entries) != 0 {
+			t.Errorf("expected no file to be created, got %d entries", len(entries))
 		}
 	})
 
