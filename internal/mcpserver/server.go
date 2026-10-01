@@ -249,7 +249,7 @@ func registerTools(s *server.MCPServer, v *vault.Vault, db *store.Store, readToo
 
 	// add_note — Write
 	s.AddTool(mcp.NewTool("add_note",
-		mcp.WithDescription("Create a personal note in the knowledge base. The note will be auto-tagged and indexed by the pipeline. Use this to capture thoughts, reflections, or working notes."),
+		mcp.WithDescription("Create a personal note in the knowledge base. The note will be auto-tagged and indexed by the pipeline. Use this to capture thoughts, reflections, or working notes. If a note with the same filename already exists, a numeric suffix is added (e.g. `-2`); the returned filename is authoritative."),
 		mcp.WithString("title",
 			mcp.Required(),
 			mcp.Description("Note title (used for H1 heading and filename)"),
@@ -484,7 +484,7 @@ func RegisteredTools(readTools bool) []agentsmd.ToolInfo {
 		},
 		agentsmd.ToolInfo{
 			Name:        "add_note",
-			Description: "Create a personal note in the knowledge base.",
+			Description: "Create a personal note in the knowledge base. If a note with the same filename already exists, a numeric suffix is added (e.g. `-2`); the returned filename is authoritative.",
 			Parameters: []agentsmd.ParamInfo{
 				{Name: "title", Description: "Note title (used for H1 heading and filename)", Required: true},
 				{Name: "content", Description: "Markdown body of the note", Required: true},
