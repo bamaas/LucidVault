@@ -43,9 +43,7 @@ func (v *Vault) UpdateRelatedSection(relPath string, newLinks []string) error {
 	return nil
 }
 
-// MergeRelatedLinks merges newLinks into content's ## Related section and
-// returns the resulting content. It is pure (no I/O) so callers that build a
-// final file in memory before a single write can use it directly.
+// MergeRelatedLinks merges newLinks into content's ## Related section (no I/O).
 //   - If ## Related exists: append new links (skip duplicates).
 //   - If no ## Related but LucidVault footer exists: insert ## Related before footer.
 //   - If neither: append ## Related at end of file.
@@ -126,14 +124,10 @@ func MergeRelatedLinks(content string, newLinks []string) string {
 	return strings.Join(lines, "\n")
 }
 
-// AutoLinkedRelatedLines extracts the lines in content's ## Related section
-// that were written by autoLinkRelated — i.e. list items matching the format
-// produced by BacklinkCandidate.BacklinkLine, identified by the
-// "— shared tags:" marker — with their leading "- " prefix stripped so the
-// result can be passed straight to MergeRelatedLinks (or UpdateRelatedSection).
-// User-authored lines
-// (no marker) are ignored. Returns nil if there is no ## Related section or
-// no matching lines.
+// AutoLinkedRelatedLines returns the ## Related items written by autoLinkRelated
+// (identified by the "— shared tags:" marker), "- " prefix stripped so they can be
+// passed straight to MergeRelatedLinks. User-authored lines are ignored; returns
+// nil if none match.
 func AutoLinkedRelatedLines(content string) []string {
 	lines := strings.Split(content, "\n")
 

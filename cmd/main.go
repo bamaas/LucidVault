@@ -636,14 +636,8 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 			}
 		}
 
-		// Write wiki copy. For an existing note, carry over any auto-linked
-		// ## Related lines from the old wiki copy before it's overwritten (see
-		// docs/plans/plan-preserve-note-related-on-rebuild.md). The merge
-		// happens in memory and is written once, so a failure never leaves a
-		// half-updated wiki file: the note hash stays stale and the whole
-		// rebuild retries next cycle. Read-old and write run under one file
-		// lock so a concurrent MCP process (ADR-019) can't append a Related
-		// line in between.
+		// Carry over auto-linked ## Related lines from the old copy; merge in memory and
+		// write once under the file lock so a concurrent MCP writer (ADR-019) can't interleave.
 		wikiRelPath := filepath.Join("wiki", wikiFilename)
 		var wikiPath string
 		finalContent := wikiContent
@@ -1050,10 +1044,8 @@ func autoLinkRelated(db *store.Store, v *vault.Vault, slug string, tags []string
 	}
 }
 
-// dropLinksToMissingPages filters out carried-over Related links whose
-// target wiki page no longer exists. Without this, a broken edge carried
-// over on every note rebuild fights hygiene's FindBrokenEdges, which deletes
-// the same edge syncEdgesFromContent just recreated.
+// dropLinksToMissingPages drops carried-over links to deleted pages; otherwise
+// each rebuild recreates an edge that hygiene's FindBrokenEdges then deletes.
 func dropLinksToMissingPages(v *vault.Vault, links []string) []string {
 	var kept []string
 	for _, link := range links {
