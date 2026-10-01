@@ -801,39 +801,169 @@ func TestHandleAddNote(t *testing.T) {
 		}
 	})
 
-	t.Run("overwrite existing note with same title", func(t *testing.T) {
-		v, dir := setupTestVault(t)
+	t.Run("colliding titles keep both notes", func(t *testing.T) {
+		// A fresh, empty vault: setupTestVault's fixtures already seed
+		// notes/aks-thoughts.md, which would pre-empt the very collision
+		// this test is designed to exercise.
+		dir := t.TempDir()
+		v := vault.New(dir)
 
-		// Create the first version.
-		filename1, err := HandleAddNote(v, "Overwrite Me", "Original content.", []string{"v1"})
+		filename1, err := HandleAddNote(v, "AKS thoughts", "First note content.", []string{"v1"})
 		if err != nil {
 			t.Fatalf("unexpected error creating first note: %v", err)
 		}
+		if filename1 != "aks-thoughts.md" {
+			t.Fatalf("expected filename %q, got %q", "aks-thoughts.md", filename1)
+		}
 
-		// Create the second version with the same title.
-		filename2, err := HandleAddNote(v, "Overwrite Me", "Updated content.", []string{"v2"})
+		firstContentBefore, err := os.ReadFile(filepath.Join(dir, "notes", filename1))
+		if err != nil {
+			t.Fatalf("reading first note: %v", err)
+		}
+
+		filename2, err := HandleAddNote(v, "AKS Thoughts!", "Second note content.", []string{"v2"})
 		if err != nil {
 			t.Fatalf("unexpected error creating second note: %v", err)
 		}
-
-		// Both calls should return the same filename (same slug).
-		if filename1 != filename2 {
-			t.Errorf("expected same filename for same title, got %q and %q", filename1, filename2)
+		if filename2 != "aks-thoughts-2.md" {
+			t.Errorf("expected filename %q, got %q", "aks-thoughts-2.md", filename2)
 		}
 
-		// Read back and verify it has the new content.
-		content, err := os.ReadFile(filepath.Join(dir, "notes", filename2))
+		// The first file must be byte-for-byte unchanged by the second call.
+		firstContentAfter, err := os.ReadFile(filepath.Join(dir, "notes", filename1))
 		if err != nil {
-			t.Fatalf("reading overwritten file: %v", err)
+			t.Fatalf("re-reading first note: %v", err)
+		}
+		if string(firstContentAfter) != string(firstContentBefore) {
+			t.Errorf("expected first note to remain byte-for-byte unchanged by the second call\nbefore:\n%s\nafter:\n%s", firstContentBefore, firstContentAfter)
+		}
+		if strings.Contains(string(firstContentAfter), "Second note content.") {
+			t.Errorf("expected first note not to contain the second call's content, got:\n%s", firstContentAfter)
 		}
 
-		body := string(content)
-
-		if strings.Contains(body, "Original content") {
-			t.Error("expected original content to be overwritten")
+		secondContent, err := os.ReadFile(filepath.Join(dir, "notes", filename2))
+		if err != nil {
+			t.Fatalf("reading second note: %v", err)
 		}
-		if !strings.Contains(body, "Updated content.") {
-			t.Errorf("expected updated content, got:\n%s", body)
+		if !strings.Contains(string(secondContent), "Second note content.") {
+			t.Errorf("expected second note to contain the new content, got:\n%s", secondContent)
+		}
+	})
+
+	t.Run("third collision gets a dash-3 suffix", func(t *testing.T) {
+		dir := t.TempDir()
+		v := vault.New(dir)
+
+		if _, err := HandleAddNote(v, "AKS thoughts", "First.", nil); err != nil {
+			t.Fatalf("unexpected error creating first note: %v", err)
+		}
+		if _, err := HandleAddNote(v, "AKS Thoughts!", "Second.", nil); err != nil {
+			t.Fatalf("unexpected error creating second note: %v", err)
+		}
+
+		filename3, err := HandleAddNote(v, "aks thoughts", "Third.", nil)
+		if err != nil {
+			t.Fatalf("unexpected error creating third note: %v", err)
+		}
+		if filename3 != "aks-thoughts-3.md" {
+			t.Errorf("expected filename %q, got %q", "aks-thoughts-3.md", filename3)
+		}
+
+		content, err := os.ReadFile(filepath.Join(dir, "notes", filename3))
+		if err != nil {
+			t.Fatalf("reading third note: %v", err)
+		}
+		if !strings.Contains(string(content), "Third.") {
+			t.Errorf("expected third note to contain its own content, got:\n%s", content)
+		}
+	})
+
+	t.Run("exhausted suffixes returns error without modifying existing files", func(t *testing.T) {
+		dir := t.TempDir()
+		v := vault.New(dir)
+		notesDir := filepath.Join(dir, "notes")
+		if err := os.MkdirAll(notesDir, 0o755); err != nil {
+			t.Fatalf("creating notes dir: %v", err)
+		}
+
+		const slug = "exhausted-slug-note"
+
+		// All 100 filename slots: <slug>.md plus <slug>-2.md ... <slug>-100.md.
+		var filenames []string
+		filenames = append(filenames, slug+".md")
+		for n := 2; n <= 100; n++ {
+			filenames = append(filenames, fmt.Sprintf("%s-%d.md", slug, n))
+		}
+		if len(filenames) != 100 {
+			t.Fatalf("test setup error: expected 100 filenames, got %d", len(filenames))
+		}
+
+		existingContent := make(map[string]string, len(filenames))
+		for _, fn := range filenames {
+			content := fmt.Sprintf("existing content for %s\n", fn)
+			if err := os.WriteFile(filepath.Join(notesDir, fn), []byte(content), 0o644); err != nil {
+				t.Fatalf("pre-creating %s: %v", fn, err)
+			}
+			existingContent[fn] = content
+		}
+
+		_, err := HandleAddNote(v, "Exhausted Slug Note", "New content that must not land anywhere.", nil)
+		if err == nil {
+			t.Fatal("expected an error when all 100 filename slots are taken")
+		}
+		if !strings.Contains(err.Error(), slug) {
+			t.Errorf("expected error to name the slug %q, got: %v", slug, err)
+		}
+
+		// None of the pre-created files may have been modified (spot-check
+		// the first and last of the 100 slots).
+		for _, fn := range []string{filenames[0], filenames[len(filenames)-1]} {
+			got, readErr := os.ReadFile(filepath.Join(notesDir, fn))
+			if readErr != nil {
+				t.Fatalf("reading %s: %v", fn, readErr)
+			}
+			if string(got) != existingContent[fn] {
+				t.Errorf("expected %s to remain unchanged\nbefore:\n%s\nafter:\n%s", fn, existingContent[fn], got)
+			}
+		}
+	})
+
+	t.Run("pre-existing user file is not overwritten", func(t *testing.T) {
+		dir := t.TempDir()
+		v := vault.New(dir)
+		notesDir := filepath.Join(dir, "notes")
+		if err := os.MkdirAll(notesDir, 0o755); err != nil {
+			t.Fatalf("creating notes dir: %v", err)
+		}
+
+		const slug = "legacy-note"
+		userContent := "Just a note I wrote myself in Obsidian, no frontmatter.\n"
+		if err := os.WriteFile(filepath.Join(notesDir, slug+".md"), []byte(userContent), 0o644); err != nil {
+			t.Fatalf("pre-creating user file: %v", err)
+		}
+
+		filename, err := HandleAddNote(v, "Legacy Note", "Content written through MCP.", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if filename != slug+"-2.md" {
+			t.Errorf("expected filename %q, got %q", slug+"-2.md", filename)
+		}
+
+		originalAfter, err := os.ReadFile(filepath.Join(notesDir, slug+".md"))
+		if err != nil {
+			t.Fatalf("reading original user file: %v", err)
+		}
+		if string(originalAfter) != userContent {
+			t.Errorf("expected user-authored file to remain unchanged\nbefore:\n%s\nafter:\n%s", userContent, originalAfter)
+		}
+
+		newContent, err := os.ReadFile(filepath.Join(notesDir, filename))
+		if err != nil {
+			t.Fatalf("reading new note: %v", err)
+		}
+		if !strings.Contains(string(newContent), "Content written through MCP.") {
+			t.Errorf("expected new note to contain the MCP-provided content, got:\n%s", newContent)
 		}
 	})
 
