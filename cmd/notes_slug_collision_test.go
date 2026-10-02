@@ -815,12 +815,14 @@ func TestResolveNoteWikiSlug(t *testing.T) {
 // against (see the ADR-029 "vault not yet reprocessed since the one-time
 // duplicate repair" case): a leftover duplicate pointer from before a note
 // was deleted must never cause the deletion reconcile to tear down a page
-// another, still-live note has since (re)claimed. Deliberately not
-// pre-written: once a real file already sits at wiki/foo.md, any note
-// sharing that slug in the DB is forced through fresh resolution by the
-// one-time repair and finds the slot "taken" by its own old content, so it
-// gets suffixed away — which would defeat the scenario rather than exercise
-// the branch under test.
+// another, still-live note has since (re)claimed. "keep" has no DB record of
+// its own here, so it resolves via rule 2 (first free slug), not rule 1 —
+// unlike TestProcessNotes_LiveNoteSharesStoredWikiPathWithDeletedNote, which
+// covers the rule-1 case: a live note that already owns the shared slug.
+// That test pre-writes wiki/foo.md and confirms the live note keeps the bare
+// slug rather than being suffixed, now that rule 1 (via
+// store.NotesSharingWikiPath + scannedPaths filtering) correctly ignores a
+// sharer whose own file is no longer on disk.
 func TestProcessNotes_DeleteNoteWithSharedWikiPath(t *testing.T) {
 	tmpDir, db, v, _, en := setupTestEnv(t)
 	ctx := context.Background()
@@ -992,4 +994,89 @@ func TestProcessNotes_SlugCollision_DeleteBothNotesInSharedGroup(t *testing.T) {
 	}
 	indexContent := readFile(t, filepath.Join(tmpDir, "index.md"))
 	assertNotContains(t, indexContent, "[[foo]]")
+}
+
+// TestProcessNotes_MoveReclaimsBareSlugAfterReconcileReorder covers the
+// review-round-2 fix: moving a note from one folder to another must not
+// permanently push it onto a suffixed slug. Before this fix, processNotes
+// ran the new/changed-note loop (which calls resolveNoteWikiSlug) BEFORE the
+// deletion reconcile. A note moved from notes/a/foo.md to notes/b/foo.md has
+// no DB record at its new path, so it was resolved as if brand new (rule 2)
+// while wiki/foo.md was still held by the OLD path's record — not yet
+// reconciled away — so it was wrongly suffixed to wiki/foo-2.md. The
+// deletion reconcile then ran and deleted wiki/foo.md (and its [[foo]] index
+// entry) because notes/a/foo.md was gone, leaving every existing [[foo]]
+// link elsewhere in the vault dangling, and permanently stuck the moved
+// note on foo-2 (every later cycle reuses its own stored wiki_path via rule
+// 1). Running the deletion reconcile BEFORE the processing loop frees
+// wiki/foo.md first, so the moved note correctly reclaims the bare "foo"
+// slug instead.
+//
+// "bar" links to [[foo]] so the test also pins down that the wikilink edge
+// into foo survives the move rather than being dropped or left dangling:
+// bar is processed once (establishing the edge) and is never rewritten, so
+// if the move caused foo's slug to change, bar's stored edge would still
+// point at the old slug and GetInboundEdges("foo") would come back empty.
+func TestProcessNotes_MoveReclaimsBareSlugAfterReconcileReorder(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	fooContent := noteContent("Foo", "golang", "Original content, soon to move.")
+	oldPath := writeNoteFile(t, tmpDir, "notes/a/foo.md", fooContent)
+	barContent := noteContent("Bar", "golang", "Links to [[foo]].")
+	writeNoteFile(t, tmpDir, "notes/bar.md", barContent)
+
+	processNotes(ctx, en, db, v)
+
+	rec := findNoteRecord(t, db, "notes/a/foo.md")
+	if rec.WikiPath != "wiki/foo.md" {
+		t.Fatalf("expected initial note to resolve to wiki/foo.md, got %q", rec.WikiPath)
+	}
+	inbound, err := db.GetInboundEdges("foo")
+	if err != nil {
+		t.Fatalf("GetInboundEdges: %v", err)
+	}
+	if len(inbound) != 1 || inbound[0].FromSlug != "bar" {
+		t.Fatalf("expected bar -> foo inbound edge before the move, got %+v", inbound)
+	}
+
+	// Move the note: delete the old file, write the same content at a new path.
+	if err := os.Remove(oldPath); err != nil {
+		t.Fatalf("removing old note file: %v", err)
+	}
+	writeNoteFile(t, tmpDir, "notes/b/foo.md", fooContent)
+
+	processNotes(ctx, en, db, v)
+
+	// The moved note must resolve to the bare slug, not foo-2.
+	recMoved := findNoteRecord(t, db, "notes/b/foo.md")
+	if recMoved.WikiPath != "wiki/foo.md" {
+		t.Fatalf("expected moved note to resolve to wiki/foo.md, got %q", recMoved.WikiPath)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "foo-2.md")); !os.IsNotExist(err) {
+		t.Errorf("expected no wiki/foo-2.md to be created for the moved note, stat err: %v", err)
+	}
+
+	// The old path's DB record must be gone.
+	if noteRecordExists(t, db, "notes/a/foo.md") {
+		t.Error("expected the DB record for the old path notes/a/foo.md to be removed")
+	}
+
+	// wiki/foo.md must hold the moved note's content, with the [[foo]] index
+	// entry present exactly once (not lost, not duplicated under a suffix).
+	wikiContent := readFile(t, filepath.Join(tmpDir, "wiki", "foo.md"))
+	assertContains(t, wikiContent, "Original content, soon to move.")
+
+	indexContent := readFile(t, filepath.Join(tmpDir, "index.md"))
+	assertContains(t, indexContent, "[[foo]]")
+	assertNotContains(t, indexContent, "[[foo-2]]")
+
+	// The bar -> foo edge must survive the move, not be left dangling.
+	inbound, err = db.GetInboundEdges("foo")
+	if err != nil {
+		t.Fatalf("GetInboundEdges after move: %v", err)
+	}
+	if len(inbound) != 1 || inbound[0].FromSlug != "bar" {
+		t.Fatalf("expected bar -> foo inbound edge to survive the move, got %+v", inbound)
+	}
 }

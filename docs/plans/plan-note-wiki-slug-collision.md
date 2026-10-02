@@ -94,7 +94,13 @@ Failing tests first (spec-only subagent), then minimal implementation.
 ## Edge Cases
 
 - Note renamed/moved: it's a delete + add under the current model; the new path claims
-  a slug fresh. Unchanged behaviour.
+  a slug fresh. `processNotes` runs the deletion reconcile BEFORE the new/changed-note
+  loop (review round 2 fix) specifically so this works correctly: the old path's DB
+  record and `wiki/<slug>.md` page are freed first, so the new path's fresh rule-2
+  resolution finds the bare slug free and reclaims it instead of being pushed onto
+  `<slug>-2`. Running the loop first (the original, buggy order) would resolve the new
+  path while the old page was still live, permanently and cumulatively suffixing the
+  moved note and orphaning every existing `[[<slug>]]` link elsewhere in the vault.
 - Bookmark created later with a note's slug: still overwrites (bookmark writer is out of
   scope, see ADR-029). File a follow-up issue.
 - A user hand-deletes `wiki/foo-2.md`: next content change re-claims via rule 1

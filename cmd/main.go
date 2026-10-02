@@ -571,6 +571,62 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 		scannedPaths[nf.Path] = struct{}{}
 	}
 
+	// Reconcile deletions BEFORE processing new/changed notes. A note moved
+	// from one folder to another (e.g. notes/a/foo.md -> notes/b/foo.md)
+	// has no DB record at its new path, so resolveNoteWikiSlug below would
+	// treat it as brand new and suffix it (rule 2) unless the old path's
+	// wiki page is freed first. Running the reconcile first frees that slug
+	// so the moved note reclaims its bare "foo" slug instead of permanently
+	// shifting to "foo-2" (see docs/adr/029-note-wiki-slug-claim-with-suffix.md).
+	if ctx.Err() != nil {
+		slog.Info("shutdown requested, skipping notes deletion reconcile")
+	} else {
+		dbNotes, err := db.ListNotes()
+		if err != nil {
+			slog.Error("failed to list notes from db", "error", err)
+		} else {
+			var deleted int
+			for _, rec := range dbNotes {
+				if _, exists := scannedPaths[rec.Path]; exists {
+					continue
+				}
+				// Another note record may still claim this wiki_path (e.g. a
+				// vault not yet reprocessed since the one-time duplicate
+				// repair). In that case only drop this record — the page and
+				// index entry belong to the surviving note.
+				shared, err := db.NoteWikiPathShared(rec.Path, rec.WikiPath)
+				if err != nil {
+					slog.Error("failed to check shared wiki path for deleted note", "path", rec.Path, "error", err)
+					continue
+				}
+				if !shared {
+					// Remove index entry by the resolved slug, not the filename.
+					wikiSlug := strings.TrimSuffix(filepath.Base(rec.WikiPath), ".md")
+					if wikiSlug != "" {
+						if err := v.RemoveFromIndex(wikiSlug); err != nil {
+							slog.Error("failed to remove note from index", "path", rec.Path, "error", err)
+							continue
+						}
+					}
+					if rec.WikiPath != "" {
+						if err := v.DeleteFile(rec.WikiPath); err != nil {
+							slog.Error("failed to delete wiki copy for note", "path", rec.WikiPath, "error", err)
+						}
+					}
+				}
+				if err := db.DeleteNote(rec.Path); err != nil {
+					slog.Error("failed to delete note record", "path", rec.Path, "error", err)
+				} else {
+					slog.Info("note removed", "path", rec.Path)
+					deleted++
+				}
+			}
+			if deleted > 0 {
+				slog.Info("reconciled deleted notes", "count", deleted)
+			}
+		}
+	}
+
 	// Read index and soul for tag suggestion context
 	index, err := v.ReadIndex()
 	if err != nil {
@@ -712,55 +768,6 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 		} else {
 			slog.Info("note updated", "path", nf.Path, "wiki", wikiPath)
 			updated++
-		}
-	}
-
-	// Reconcile deletions: remove DB records and wiki copies for notes no longer on disk
-	if ctx.Err() != nil {
-		return
-	}
-	dbNotes, err := db.ListNotes()
-	if err != nil {
-		slog.Error("failed to list notes from db", "error", err)
-	} else {
-		var deleted int
-		for _, rec := range dbNotes {
-			if _, exists := scannedPaths[rec.Path]; exists {
-				continue
-			}
-			// Another note record may still claim this wiki_path (e.g. a
-			// vault not yet reprocessed since the one-time duplicate
-			// repair). In that case only drop this record — the page and
-			// index entry belong to the surviving note.
-			shared, err := db.NoteWikiPathShared(rec.Path, rec.WikiPath)
-			if err != nil {
-				slog.Error("failed to check shared wiki path for deleted note", "path", rec.Path, "error", err)
-				continue
-			}
-			if !shared {
-				// Remove index entry by the resolved slug, not the filename.
-				wikiSlug := strings.TrimSuffix(filepath.Base(rec.WikiPath), ".md")
-				if wikiSlug != "" {
-					if err := v.RemoveFromIndex(wikiSlug); err != nil {
-						slog.Error("failed to remove note from index", "path", rec.Path, "error", err)
-						continue
-					}
-				}
-				if rec.WikiPath != "" {
-					if err := v.DeleteFile(rec.WikiPath); err != nil {
-						slog.Error("failed to delete wiki copy for note", "path", rec.WikiPath, "error", err)
-					}
-				}
-			}
-			if err := db.DeleteNote(rec.Path); err != nil {
-				slog.Error("failed to delete note record", "path", rec.Path, "error", err)
-			} else {
-				slog.Info("note removed", "path", rec.Path)
-				deleted++
-			}
-		}
-		if deleted > 0 {
-			slog.Info("reconciled deleted notes", "count", deleted)
 		}
 	}
 
