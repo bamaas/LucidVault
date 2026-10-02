@@ -22,11 +22,8 @@ func (c BacklinkCandidate) BacklinkLine(newSlug string) string {
 }
 
 // UpdateRelatedSection appends backlinks to a wiki file's ## Related section.
-//   - If ## Related exists: append new links (skip duplicates).
-//   - If no ## Related but LucidVault footer exists: insert ## Related before footer.
-//   - If neither: append ## Related at end of file.
-//
-// Footer detection: a line that is exactly "---" followed by a line starting with "*Source:".
+// It is a thin file-based wrapper around MergeRelatedLinks; see that
+// function for the merge rules.
 func (v *Vault) UpdateRelatedSection(relPath string, newLinks []string) error {
 	absPath := filepath.Join(v.BasePath, relPath)
 	data, err := os.ReadFile(absPath)
@@ -35,6 +32,24 @@ func (v *Vault) UpdateRelatedSection(relPath string, newLinks []string) error {
 	}
 
 	content := string(data)
+	result := MergeRelatedLinks(content, newLinks)
+	if result == content {
+		return nil
+	}
+
+	if err := os.WriteFile(absPath, []byte(result), 0o644); err != nil {
+		return fmt.Errorf("writing file %s: %w", relPath, err)
+	}
+	return nil
+}
+
+// MergeRelatedLinks merges newLinks into content's ## Related section (no I/O).
+//   - If ## Related exists: append new links (skip duplicates).
+//   - If no ## Related but LucidVault footer exists: insert ## Related before footer.
+//   - If neither: append ## Related at end of file.
+//
+// Footer detection: a line that is exactly "---" followed by a line starting with "*Source:".
+func MergeRelatedLinks(content string, newLinks []string) string {
 	lines := strings.Split(content, "\n")
 
 	// Find ## Related section index
@@ -69,7 +84,7 @@ func (v *Vault) UpdateRelatedSection(relPath string, newLinks []string) error {
 			toAdd = append(toAdd, "- "+link)
 		}
 		if len(toAdd) == 0 {
-			return nil
+			return content
 		}
 
 		// Find insertion point: after last non-empty line in the Related section
@@ -106,11 +121,42 @@ func (v *Vault) UpdateRelatedSection(relPath string, newLinks []string) error {
 		lines = append(lines, "")
 	}
 
-	result := strings.Join(lines, "\n")
-	if err := os.WriteFile(absPath, []byte(result), 0o644); err != nil {
-		return fmt.Errorf("writing file %s: %w", relPath, err)
+	return strings.Join(lines, "\n")
+}
+
+// AutoLinkedRelatedLines returns the ## Related items written by autoLinkRelated
+// (identified by the "— shared tags:" marker), "- " prefix stripped so they can be
+// passed straight to MergeRelatedLinks. User-authored lines are ignored; returns
+// nil if none match.
+func AutoLinkedRelatedLines(content string) []string {
+	lines := strings.Split(content, "\n")
+
+	relatedIdx := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "## Related" {
+			relatedIdx = i
+			break
+		}
 	}
-	return nil
+	if relatedIdx < 0 {
+		return nil
+	}
+
+	var result []string
+	for i := relatedIdx + 1; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "# ") || strings.HasPrefix(line, "---") {
+			break
+		}
+		if !strings.Contains(line, "— shared tags:") {
+			continue
+		}
+		result = append(result, strings.TrimPrefix(line, "- "))
+	}
+	return result
 }
 
 // FindRelatedByTags reads index.md and finds pages sharing 2+ tags with newTags.
@@ -247,6 +293,13 @@ func extractSlugFromLink(line string) string {
 		return line[start+2 : end]
 	}
 	return ""
+}
+
+// ExtractSlugFromLink is the exported form of extractSlugFromLink, for
+// callers outside this package that need to resolve a Related-section link
+// line (e.g. from AutoLinkedRelatedLines) back to its target slug.
+func ExtractSlugFromLink(line string) string {
+	return extractSlugFromLink(line)
 }
 
 // indexEntry is a local representation of a parsed index.md line.

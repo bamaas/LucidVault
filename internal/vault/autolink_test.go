@@ -3,6 +3,7 @@ package vault
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -482,6 +483,155 @@ func TestBacklinkLine_Format(t *testing.T) {
 	expected := "[[new-page]] — shared tags: go, networking"
 	if line != expected {
 		t.Errorf("expected %q, got %q", expected, line)
+	}
+}
+
+// --- AutoLinkedRelatedLines tests ---
+//
+// AutoLinkedRelatedLines extracts only the lines in a ## Related section that
+// were written by autoLinkRelated (the format produced by
+// BacklinkCandidate.BacklinkLine, identified by the "— shared tags:" marker),
+// stripped of their leading "- " prefix so the result can be fed straight
+// back into UpdateRelatedSection/MergeRelatedLinks. See
+// docs/plans/plan-preserve-note-related-on-rebuild.md.
+//
+// Its section-boundary detection is a separate inline loop from
+// findRelatedSectionEnd/collectExistingLinks; the cases below pin down its
+// current contract precisely so the two don't silently drift apart.
+
+func TestAutoLinkedRelatedLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{
+			name: "extracts auto-link line from Related section, stripped of leading dash",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[auto-link]] — shared tags: go, testing\n",
+			want: []string{"[[auto-link]] — shared tags: go, testing"},
+		},
+		{
+			name: "extracts only the auto-link line, ignoring a user line without the marker",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[manual-link]]\n" +
+				"- [[auto-link]] — shared tags: go\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			name: "ignores lines in other sections",
+			content: "# Test\n\n## Summary\n\n" +
+				"- [[other]] — shared tags: go\n\n" +
+				"## Related\n\n" +
+				"- [[auto-link]] — shared tags: go\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			name: "ignores lines outside the Related section entirely",
+			content: "# Test\n\n" +
+				"- [[stray]] — shared tags: go\n\n" +
+				"## Related\n\n" +
+				"- [[auto-link]] — shared tags: go\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			name: "stops at the next heading after the Related section",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[auto-link]] — shared tags: go\n\n" +
+				"## Another Section\n\n" +
+				"- [[not-related]] — shared tags: go\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			name: "returns all auto-link lines in order when there are several",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[one]] — shared tags: go\n" +
+				"- [[two]] — shared tags: rust, testing\n",
+			want: []string{
+				"[[one]] — shared tags: go",
+				"[[two]] — shared tags: rust, testing",
+			},
+		},
+		{
+			name: "returns nil when Related section has only user-written lines",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[manual-link]]\n" +
+				"- [[another-manual]]\n",
+			want: nil,
+		},
+		{
+			name:    "returns nil when there is no Related section at all",
+			content: "# Test\n\nJust a body mentioning [[some-link]].\n",
+			want:    nil,
+		},
+		{
+			name:    "returns nil for empty content",
+			content: "",
+			want:    nil,
+		},
+		{
+			// Pins the current implementation's section-boundary detection,
+			// which stops at a "---" line (as well as at the next heading).
+			name: "stops at a --- line inside the Related section",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[auto-link]] — shared tags: go\n\n" +
+				"---\n" +
+				"- [[not-related]] — shared tags: go\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			// Only a "## "/"# " heading (or "---") ends the section — a
+			// sub-heading one level deeper does not, per the plan's "section
+			// end via findRelatedSectionEnd" contract.
+			name: "does not stop at a ### sub-heading inside the Related section",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[auto-link]] — shared tags: go\n\n" +
+				"### Sub\n\n" +
+				"- [[also-related]] — shared tags: rust\n",
+			want: []string{
+				"[[auto-link]] — shared tags: go",
+				"[[also-related]] — shared tags: rust",
+			},
+		},
+		{
+			name: "handles CRLF line endings via TrimSpace",
+			content: "# Test\r\n\r\n## Related\r\n\r\n" +
+				"- [[auto-link]] — shared tags: go\r\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			name: "auto-link-formatted line missing the leading dash is returned unchanged",
+			content: "# Test\n\n## Related\n\n" +
+				"[[auto-link]] — shared tags: go\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			name: "indented auto-link line is trimmed and still extracted",
+			content: "# Test\n\n## Related\n\n" +
+				"  - [[auto-link]] — shared tags: go\n",
+			want: []string{"[[auto-link]] — shared tags: go"},
+		},
+		{
+			// Only the FIRST ## Related section counts: the loop breaks at
+			// the next "## " heading ("## Another"), so it never reaches the
+			// second "## Related" section below it.
+			name: "a second ## Related section later in the file is ignored",
+			content: "# Test\n\n## Related\n\n" +
+				"- [[first]] — shared tags: go\n\n" +
+				"## Another\n\n" +
+				"## Related\n\n" +
+				"- [[second]] — shared tags: go\n",
+			want: []string{"[[first]] — shared tags: go"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := AutoLinkedRelatedLines(tt.content)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("AutoLinkedRelatedLines(%q) = %#v, want %#v", tt.content, got, tt.want)
+			}
+		})
 	}
 }
 

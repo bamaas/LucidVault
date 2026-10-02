@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -634,18 +636,46 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 			}
 		}
 
-		// Write wiki copy
-		wikiPath, err := v.WriteWiki(wikiFilename, wikiContent)
+		// Carry over auto-linked ## Related lines from the old copy; merge in memory and
+		// write once under the file lock so a concurrent MCP writer (ADR-019) can't interleave.
+		wikiRelPath := filepath.Join("wiki", wikiFilename)
+		var wikiPath string
+		finalContent := wikiContent
+		err = db.WithFileLock(func() error {
+			var carryLines []string
+			if existingHash != "" {
+				oldContent, readErr := v.ReadFile(wikiRelPath)
+				switch {
+				case readErr == nil:
+					carryLines = dropLinksToMissingPages(v, vault.AutoLinkedRelatedLines(oldContent))
+				case errors.Is(readErr, fs.ErrNotExist):
+					// Old wiki copy missing — nothing to carry over.
+				default:
+					return fmt.Errorf("reading old wiki copy: %w", readErr)
+				}
+			}
+
+			if len(carryLines) > 0 {
+				finalContent = vault.MergeRelatedLinks(wikiContent, carryLines)
+			}
+
+			p, writeErr := v.WriteWiki(wikiFilename, finalContent)
+			if writeErr != nil {
+				return fmt.Errorf("writing wiki copy: %w", writeErr)
+			}
+			wikiPath = p
+			return nil
+		})
 		if err != nil {
 			slog.Error("failed to write wiki copy for note", "path", nf.Path, "error", err)
 			continue
 		}
 
 		// Sync wikilink edges incrementally
-		syncEdgesFromContent(db, wikiSlug, wikiContent)
+		syncEdgesFromContent(db, wikiSlug, finalContent)
 
 		// Auto-link: add backlinks to related pages
-		autoLinkRelated(db, v, wikiSlug, tags, wikiContent)
+		autoLinkRelated(db, v, wikiSlug, tags, finalContent)
 
 		// Index the wiki slug (not the notes/ path)
 		if err := v.UpdateIndex(wikiSlug, nf.Title, tags); err != nil {
@@ -1012,6 +1042,19 @@ func autoLinkRelated(db *store.Store, v *vault.Vault, slug string, tags []string
 
 		slog.Info("auto-linked related page", "from", slug, "to", c.Slug, "shared_tags", c.SharedTags)
 	}
+}
+
+// dropLinksToMissingPages drops carried-over links to deleted pages; otherwise
+// each rebuild recreates an edge that hygiene's FindBrokenEdges then deletes.
+func dropLinksToMissingPages(v *vault.Vault, links []string) []string {
+	var kept []string
+	for _, link := range links {
+		slug := vault.ExtractSlugFromLink(link)
+		if slug == "" || v.FileHasContent("wiki/"+slug+".md") {
+			kept = append(kept, link)
+		}
+	}
+	return kept
 }
 
 func runMCP(args []string) {
