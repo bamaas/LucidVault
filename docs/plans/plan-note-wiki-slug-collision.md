@@ -1,7 +1,7 @@
 # Plan: Note Wiki Slugs Never Collide
 
 > Fixes issue #95. Decision: `docs/adr/029-note-wiki-slug-claim-with-suffix.md`
-> (status Proposed — accept before implementing).
+> (Accepted).
 
 ## Problem
 
@@ -68,7 +68,7 @@ Failing tests first (spec-only subagent), then minimal implementation.
 
 ### 5. Docs
 
-- ADR-029 → Accepted.
+- ADR-029 already Accepted; no change.
 - `CONTEXT.md`: define "wiki slug (note)" as assigned once, stored in the notes record.
 - `README.md`: one line under notes — "same-named notes get `-2`, `-3` wiki pages".
 

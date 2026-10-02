@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (amends ADR-014 "Auto-tag notes via wiki copies")
+Accepted (amends ADR-014 "Auto-tag notes via wiki copies")
 
 ## Context
 
