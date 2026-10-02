@@ -218,47 +218,34 @@ func (s *Store) NoteWikiPathShared(path, wikiPath string) (bool, error) {
 }
 
 // RepairDuplicateNoteWikiPaths fixes vaults hit by issue #95: when more than
-// one note record shares the same wiki_path, it keeps the record whose path
-// sorts first and clears the content_hash of the rest, so the next scan
-// treats them as changed and resolves them a fresh (suffixed) slug. Idempotent
-// once wiki_path values are unique.
+// one note record shares the same wiki_path, it clears the content_hash of
+// every record in that duplicate group, so the next scan treats all of them
+// as changed and each resolves (via resolveNoteWikiSlug) its own, possibly
+// suffixed, slug fresh — the same rule used for any other fresh collision.
+// Scan order, not this repair, decides which one lands on the bare slug.
+// Idempotent once wiki_path values are unique.
 func (s *Store) RepairDuplicateNoteWikiPaths() (int, error) {
 	rows, err := s.db.Query(`
-		SELECT path, wiki_path FROM notes
+		SELECT path FROM notes
 		WHERE wiki_path != '' AND wiki_path IN (
 			SELECT wiki_path FROM notes WHERE wiki_path != '' GROUP BY wiki_path HAVING COUNT(*) > 1
 		)
-		ORDER BY wiki_path, path
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("querying duplicate note wiki paths: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	type dupRow struct {
-		path     string
-		wikiPath string
-	}
-	var dups []dupRow
+	var toClear []string
 	for rows.Next() {
-		var d dupRow
-		if err := rows.Scan(&d.path, &d.wikiPath); err != nil {
+		var path string
+		if err := rows.Scan(&path); err != nil {
 			return 0, fmt.Errorf("scanning duplicate note row: %w", err)
 		}
-		dups = append(dups, d)
+		toClear = append(toClear, path)
 	}
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("iterating duplicate note rows: %w", err)
-	}
-
-	seen := make(map[string]bool, len(dups))
-	var toClear []string
-	for _, d := range dups {
-		if seen[d.wikiPath] {
-			toClear = append(toClear, d.path)
-			continue
-		}
-		seen[d.wikiPath] = true
 	}
 
 	for _, path := range toClear {

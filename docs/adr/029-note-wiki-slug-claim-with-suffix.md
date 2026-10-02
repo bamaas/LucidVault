@@ -24,7 +24,7 @@ A note's wiki slug is assigned once — the basename slug if `wiki/<slug>.md` is
 - The slug is stable after the first write: renaming nothing, editing the note keeps its page. Which of two colliding notes gets the bare slug depends on scan order the first time; accepted, because the alternative (deterministic path slugs) costs a migration.
 - "Free" means: no file at `wiki/<slug>.md`, or the file is the one this note's DB record already owns. A bookmark page, a hand-written wiki page, an MCP-created page or another note's page are all "taken" without the pipeline needing to know which kind it is.
 - The deletion reconcile and the update path derive the index slug from `notes.wiki_path`, not from the filename, so deleting one of two same-named notes no longer removes the other's page.
-- Vaults already hit by #95 hold two note records with the same `wiki_path`. A one-time repair clears the content hash of every record but one in each duplicate group, so the next cycle reprocesses them and they claim their own (suffixed) page.
+- Vaults already hit by #95 hold two note records with the same `wiki_path`. A one-time repair clears the content hash of every record in each duplicate group (not just all-but-one), so the next cycle reprocesses all of them and each claims its own, possibly suffixed, page — scan order decides who lands on the bare slug, same as any other fresh collision.
 - Out of scope: the bookmark pipeline still writes `wiki/<GenerateSlug(title)>.md` unconditionally, so a *new* bookmark can still overwrite a note's (or another bookmark's) page. Same class of bug, different writer; tracked separately.
 - Shares the `-N` suffix convention and the 100-attempt cap with `add_note` (#97), so users see one naming rule for "name already taken".
 

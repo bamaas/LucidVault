@@ -61,9 +61,11 @@ Failing tests first (spec-only subagent), then minimal implementation.
 ### 4. One-time repair for vaults already hit by #95
 
 - At the start of `processNotes`: for each `wiki_path` held by more than one note
-  record, keep the record whose `path` sorts first and clear the content hash of the
-  rest (`UPDATE notes SET content_hash = '' …`). The next pass of the same cycle
-  reprocesses them; rule 1 sends them to rule 2 because their path is shared.
+  record, clear the content hash of every record in that duplicate group
+  (`UPDATE notes SET content_hash = '' …`), not just all-but-one. The next pass of
+  the same cycle reprocesses all of them; rule 1 sends them to rule 2 because their
+  path is shared, and each claims its own (possibly suffixed) slug — scan order
+  decides who lands on the bare slug, same as any other fresh collision.
 - Idempotent: once paths are unique the query returns nothing.
 
 ### 5. Docs

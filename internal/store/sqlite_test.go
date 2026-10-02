@@ -136,6 +136,9 @@ func TestGetNote_Found(t *testing.T) {
 	if rec.Path != "notes/foo.md" || rec.ContentHash != "abc123" || rec.WikiPath != "wiki/foo.md" {
 		t.Errorf("rec = %+v, want path=notes/foo.md hash=abc123 wikiPath=wiki/foo.md", rec)
 	}
+	if rec.LastProcessed.IsZero() {
+		t.Error("expected LastProcessed to be set for an existing note")
+	}
 }
 
 func TestGetNote_NotFound(t *testing.T) {
@@ -188,6 +191,25 @@ func TestNoteWikiPathShared_Shared(t *testing.T) {
 	}
 }
 
+func TestNoteWikiPathShared_DifferentWikiPath(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/a/foo.md", "hash-a", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote a: %v", err)
+	}
+	if err := s.UpsertNote("notes/b/bar.md", "hash-b", "wiki/bar.md"); err != nil {
+		t.Fatalf("UpsertNote b: %v", err)
+	}
+
+	shared, err := s.NoteWikiPathShared("notes/a/foo.md", "wiki/foo.md")
+	if err != nil {
+		t.Fatalf("NoteWikiPathShared: %v", err)
+	}
+	if shared {
+		t.Error("expected shared = false when the other record has a different wiki_path")
+	}
+}
+
 func TestNoteWikiPathShared_EmptyWikiPath(t *testing.T) {
 	s := newTestStore(t)
 
@@ -200,7 +222,7 @@ func TestNoteWikiPathShared_EmptyWikiPath(t *testing.T) {
 	}
 }
 
-func TestRepairDuplicateNoteWikiPaths_KeepsFirstClearsRest(t *testing.T) {
+func TestRepairDuplicateNoteWikiPaths_ClearsAllInGroup(t *testing.T) {
 	s := newTestStore(t)
 
 	if err := s.UpsertNote("notes/b/foo.md", "hash-b", "wiki/foo.md"); err != nil {
@@ -214,16 +236,16 @@ func TestRepairDuplicateNoteWikiPaths_KeepsFirstClearsRest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RepairDuplicateNoteWikiPaths: %v", err)
 	}
-	if repaired != 1 {
-		t.Fatalf("repaired = %d, want 1", repaired)
+	if repaired != 2 {
+		t.Fatalf("repaired = %d, want 2 (every record in the duplicate group, not all-but-one)", repaired)
 	}
 
 	recA, _, err := s.GetNote("notes/a/foo.md")
 	if err != nil {
 		t.Fatalf("GetNote a: %v", err)
 	}
-	if recA.ContentHash != "hash-a" {
-		t.Errorf("expected the lexicographically-first path's hash to survive, got %q", recA.ContentHash)
+	if recA.ContentHash != "" {
+		t.Errorf("expected a's content_hash to be cleared too, got %q", recA.ContentHash)
 	}
 
 	recB, _, err := s.GetNote("notes/b/foo.md")
@@ -232,6 +254,113 @@ func TestRepairDuplicateNoteWikiPaths_KeepsFirstClearsRest(t *testing.T) {
 	}
 	if recB.ContentHash != "" {
 		t.Errorf("expected the duplicate's content_hash to be cleared, got %q", recB.ContentHash)
+	}
+}
+
+func TestRepairDuplicateNoteWikiPaths_ThreeRecordsSharingOnePath(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/a/foo.md", "hash-a", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote a: %v", err)
+	}
+	if err := s.UpsertNote("notes/b/foo.md", "hash-b", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote b: %v", err)
+	}
+	if err := s.UpsertNote("notes/c/foo.md", "hash-c", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote c: %v", err)
+	}
+
+	repaired, err := s.RepairDuplicateNoteWikiPaths()
+	if err != nil {
+		t.Fatalf("RepairDuplicateNoteWikiPaths: %v", err)
+	}
+	if repaired != 3 {
+		t.Fatalf("repaired = %d, want 3", repaired)
+	}
+
+	for _, path := range []string{"notes/a/foo.md", "notes/b/foo.md", "notes/c/foo.md"} {
+		rec, _, err := s.GetNote(path)
+		if err != nil {
+			t.Fatalf("GetNote %s: %v", path, err)
+		}
+		if rec.ContentHash != "" {
+			t.Errorf("expected content_hash cleared for %s, got %q", path, rec.ContentHash)
+		}
+	}
+}
+
+func TestRepairDuplicateNoteWikiPaths_TwoSeparateGroups(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/a1/foo.md", "hash-a1", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote a1: %v", err)
+	}
+	if err := s.UpsertNote("notes/a2/foo.md", "hash-a2", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote a2: %v", err)
+	}
+	if err := s.UpsertNote("notes/b1/bar.md", "hash-b1", "wiki/bar.md"); err != nil {
+		t.Fatalf("UpsertNote b1: %v", err)
+	}
+	if err := s.UpsertNote("notes/b2/bar.md", "hash-b2", "wiki/bar.md"); err != nil {
+		t.Fatalf("UpsertNote b2: %v", err)
+	}
+	if err := s.UpsertNote("notes/unique.md", "hash-u", "wiki/unique.md"); err != nil {
+		t.Fatalf("UpsertNote unique: %v", err)
+	}
+
+	repaired, err := s.RepairDuplicateNoteWikiPaths()
+	if err != nil {
+		t.Fatalf("RepairDuplicateNoteWikiPaths: %v", err)
+	}
+	if repaired != 4 {
+		t.Fatalf("repaired = %d, want 4 (two separate duplicate groups of two)", repaired)
+	}
+
+	for _, path := range []string{"notes/a1/foo.md", "notes/a2/foo.md", "notes/b1/bar.md", "notes/b2/bar.md"} {
+		rec, _, err := s.GetNote(path)
+		if err != nil {
+			t.Fatalf("GetNote %s: %v", path, err)
+		}
+		if rec.ContentHash != "" {
+			t.Errorf("expected content_hash cleared for %s, got %q", path, rec.ContentHash)
+		}
+	}
+
+	recUnique, _, err := s.GetNote("notes/unique.md")
+	if err != nil {
+		t.Fatalf("GetNote unique: %v", err)
+	}
+	if recUnique.ContentHash != "hash-u" {
+		t.Errorf("expected the unrelated unique record's hash to survive untouched, got %q", recUnique.ContentHash)
+	}
+}
+
+func TestRepairDuplicateNoteWikiPaths_EmptyWikiPathsNotTreatedAsDuplicates(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/a.md", "hash-a", ""); err != nil {
+		t.Fatalf("UpsertNote a: %v", err)
+	}
+	if err := s.UpsertNote("notes/b.md", "hash-b", ""); err != nil {
+		t.Fatalf("UpsertNote b: %v", err)
+	}
+
+	repaired, err := s.RepairDuplicateNoteWikiPaths()
+	if err != nil {
+		t.Fatalf("RepairDuplicateNoteWikiPaths: %v", err)
+	}
+	if repaired != 0 {
+		t.Errorf("repaired = %d, want 0 — two empty wiki_path values must not count as a duplicate", repaired)
+	}
+
+	for _, path := range []string{"notes/a.md", "notes/b.md"} {
+		rec, _, err := s.GetNote(path)
+		if err != nil {
+			t.Fatalf("GetNote %s: %v", path, err)
+		}
+		if rec.ContentHash == "" {
+			t.Errorf("expected content_hash to survive untouched for %s, got empty", path)
+		}
 	}
 }
 
@@ -461,5 +590,43 @@ func TestListNotes(t *testing.T) {
 		if r.LastProcessed.IsZero() {
 			t.Error("beta LastProcessed should not be zero")
 		}
+	}
+}
+
+// --- Error paths: operations against a closed store ---
+
+func TestGetNote_AfterClose(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, _, err := s.GetNote("notes/foo.md")
+	if err == nil {
+		t.Error("expected an error from GetNote on a closed store")
+	}
+}
+
+func TestNoteWikiPathShared_AfterClose(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := s.NoteWikiPathShared("notes/a/foo.md", "wiki/foo.md")
+	if err == nil {
+		t.Error("expected an error from NoteWikiPathShared on a closed store")
+	}
+}
+
+func TestRepairDuplicateNoteWikiPaths_AfterClose(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := s.RepairDuplicateNoteWikiPaths()
+	if err == nil {
+		t.Error("expected an error from RepairDuplicateNoteWikiPaths on a closed store")
 	}
 }

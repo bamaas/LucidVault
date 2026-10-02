@@ -523,6 +523,40 @@ tags:
 	assertContains(t, after, "Version one")
 	assertNotContains(t, after, "[[leftover-bookmark]]")
 	assertNotContains(t, after, "## Related")
+
+	// The above only proves the carry-over guard isn't needed on a brand-new
+	// note (existingHash == ""). Now exercise the REAL guard: give the note's
+	// own resolved page (my-note-2.md) a legitimate auto-linked ## Related
+	// section, edit the note again (existingHash != "" this time), and
+	// verify the auto-linked line correctly carries forward from the note's
+	// OWN prior page — while the unrelated stray file's stale content still
+	// never leaks in.
+	relatedPage := relatedBookmarkWiki
+	if _, err := v.WriteWiki("related-page.md", relatedPage); err != nil {
+		t.Fatalf("WriteWiki related-page: %v", err)
+	}
+	syncEdgesFromContent(db, "related-page", relatedPage)
+	if err := v.UpdateIndex("related-page", "Related Page", []string{"golang", "testing"}); err != nil {
+		t.Fatalf("UpdateIndex related-page: %v", err)
+	}
+	autoLinkRelated(db, v, "related-page", []string{"golang", "testing"}, relatedPage)
+
+	withRelated := readFile(t, noteWiki)
+	assertContains(t, withRelated, "- [[related-page]] — shared tags: golang, testing")
+
+	if err := os.WriteFile(notePath, []byte(relatedNoteV2), 0o644); err != nil {
+		t.Fatalf("WriteFile v2: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	final := readFile(t, noteWiki)
+	assertContains(t, final, "Version two")
+	// Legitimate current-cycle auto-link content from this note's own prior
+	// page must survive the rebuild.
+	assertContains(t, final, "- [[related-page]] — shared tags: golang, testing")
+	// The unrelated stray file's content must never leak into this note's
+	// page, even now that the real carry-over guard is exercised.
+	assertNotContains(t, final, "[[leftover-bookmark]]")
 }
 
 // TestProcessNotes_SkipsNoteWhenOldWikiCopyReadFails verifies that when
