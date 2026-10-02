@@ -1012,11 +1012,14 @@ func TestProcessNotes_SlugCollision_DeleteBothNotesInSharedGroup(t *testing.T) {
 // wiki/foo.md first, so the moved note correctly reclaims the bare "foo"
 // slug instead.
 //
-// "bar" links to [[foo]] so the test also pins down that the wikilink edge
-// into foo survives the move rather than being dropped or left dangling:
-// bar is processed once (establishing the edge) and is never rewritten, so
-// if the move caused foo's slug to change, bar's stored edge would still
-// point at the old slug and GetInboundEdges("foo") would come back empty.
+// "bar" links to [[foo]] so the test also pins down that the reconcile
+// reorder doesn't drop edges into a page it isn't deleting: bar is processed
+// once (establishing the bar -> foo edge) and is never rewritten or deleted,
+// so the edge must still be there after the move. This assertion alone
+// would also pass under the OLD buggy ordering (bar's edge is keyed by
+// slug "foo" regardless of which file currently owns that slug); the
+// assertions below on recMoved.WikiPath and the absence of wiki/foo-2.md
+// are what actually prove the fix.
 func TestProcessNotes_MoveReclaimsBareSlugAfterReconcileReorder(t *testing.T) {
 	tmpDir, db, v, _, en := setupTestEnv(t)
 	ctx := context.Background()
@@ -1057,6 +1060,16 @@ func TestProcessNotes_MoveReclaimsBareSlugAfterReconcileReorder(t *testing.T) {
 		t.Errorf("expected no wiki/foo-2.md to be created for the moved note, stat err: %v", err)
 	}
 
+	// The moved note must own no outbound edges under a "foo-2" slug: if the
+	// move had wrongly suffixed it, this is where that would show up.
+	outboundFoo2, err := db.GetOutboundEdges("foo-2")
+	if err != nil {
+		t.Fatalf("GetOutboundEdges(foo-2): %v", err)
+	}
+	if len(outboundFoo2) != 0 {
+		t.Errorf("expected no edges owned by a foo-2 slug, got %+v", outboundFoo2)
+	}
+
 	// The old path's DB record must be gone.
 	if noteRecordExists(t, db, "notes/a/foo.md") {
 		t.Error("expected the DB record for the old path notes/a/foo.md to be removed")
@@ -1068,7 +1081,9 @@ func TestProcessNotes_MoveReclaimsBareSlugAfterReconcileReorder(t *testing.T) {
 	assertContains(t, wikiContent, "Original content, soon to move.")
 
 	indexContent := readFile(t, filepath.Join(tmpDir, "index.md"))
-	assertContains(t, indexContent, "[[foo]]")
+	if count := strings.Count(indexContent, "[[foo]]"); count != 1 {
+		t.Errorf("expected exactly one [[foo]] entry in index.md, got %d: %q", count, indexContent)
+	}
 	assertNotContains(t, indexContent, "[[foo-2]]")
 
 	// The bar -> foo edge must survive the move, not be left dangling.

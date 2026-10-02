@@ -34,7 +34,7 @@ Domain glossary for LucidVault. Pure terminology — no implementation details.
 
 **Slug**: A URL-safe, filesystem-safe identifier derived from a page title. Used as the filename for raw and wiki pages.
 
-**Wiki Slug (Note)**: A note's slug, assigned once and stored in its database record (`notes.wiki_path`) rather than recomputed from the filename on every cycle. Starts as the note's basename; if that's already claimed by another page, the first free `<slug>-2`, `<slug>-3`, ... is claimed instead. Stable after the first write, so renaming nothing and editing the note keeps its page.
+**Wiki Slug (Note)**: A note's slug, assigned once and remembered for that note rather than recomputed from the filename on every cycle. Starts as the note's basename; if that's already claimed by another page, the first free `<slug>-2`, `<slug>-3`, ... is claimed instead. Stable after the first write: editing the note keeps its page; only moving or renaming it can reassign a slug.
 
 ## State
 

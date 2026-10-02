@@ -21,7 +21,7 @@ A note's wiki slug is assigned once — the basename slug if `wiki/<slug>.md` is
 ## Consequences
 
 - No migration. Existing non-colliding notes keep their slug and wiki path unchanged; only a note that would collide gets a suffix.
-- The slug is stable after the first write: renaming nothing, editing the note keeps its page. Which of two colliding notes gets the bare slug depends on scan order the first time; accepted, because the alternative (deterministic path slugs) costs a migration.
+- The slug is stable after the first write: editing the note keeps its page; only moving or renaming it can reassign a slug. Which of two colliding notes gets the bare slug depends on scan order the first time; accepted, because the alternative (deterministic path slugs) costs a migration.
 - "Free" means: `wiki/<slug>.md` has no content, or the file is the one this note's DB record already owns. A bookmark page, a hand-written wiki page, an MCP-created page or another note's page are all "taken" without the pipeline needing to know which kind it is.
 - The deletion reconcile and the update path derive the index slug from `notes.wiki_path`, not from the filename, so deleting one of two same-named notes no longer removes the other's page.
 - Vaults already hit by #95 hold two note records with the same `wiki_path`. A one-time repair clears the content hash of every record in each duplicate group (not just all-but-one), so the next cycle reprocesses all of them. Each one except the last one scanned is suffixed, and the last one keeps the bare slug. Rule 1's shared check only counts a sibling still present in the current scan, so a live note's own stored `wiki_path` is never pushed off it by a leftover record belonging to a note no longer on disk — that case is left for the deletion reconcile to clean up.
@@ -31,4 +31,4 @@ A note's wiki slug is assigned once — the basename slug if `wiki/<slug>.md` is
 ## Verify-with
 
 - `go test ./cmd/ -run TestProcessNotes_SlugCollision` — the repro from #95: bookmark `wiki/foo.md`, `notes/a/foo.md`, `notes/b/foo.md` produce three distinct pages and the bookmark page is untouched.
-- `grep -n "TitleFromFilename" cmd/main.go` returns only the first-assignment site, never the update or deletion path.
+- `grep -n "TitleFromFilename(nf.Path)" cmd/main.go` returns only the first-assignment site (`resolveNoteWikiSlug`), never the update or deletion path. (A plain `grep -n "TitleFromFilename" cmd/main.go` also matches an unrelated, pre-existing hygiene fallback that derives a wiki *page's* display title from its filename when the page has no frontmatter title or H1 — ignore that hit.)
