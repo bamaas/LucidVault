@@ -1,3 +1,9 @@
+## v0.26.3 (2026-10-02)
+
+### Fix
+
+- **notes**: preserve auto-linked ## Related on note wiki rebuild (#100)
+
 ## v0.26.2 (2026-10-01)
 
 ### Fix
