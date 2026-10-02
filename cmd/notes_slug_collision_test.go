@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -800,69 +799,76 @@ func TestProcessNotes_DeleteNoteWithSharedWikiPath(t *testing.T) {
 	}
 }
 
-// TestProcessNotes_DeletionSkipsRecordWhenSharedCheckFails covers the error
-// branch of the deletion-reconcile's NoteWikiPathShared check (cmd/main.go,
-// around line 727-730, just before the "reconcile deletions" section's shared
-// check): when the check itself fails, the record must be left alone this
-// cycle — neither its wiki page/index entry nor its own DB record may be
-// removed — so the deletion is safely retried on the next poll cycle instead
-// of either silently losing the page (if the delete branch ran anyway) or
-// silently losing the record without ever resolving the page (if just the
-// DB delete ran anyway).
+// TestProcessNotes_LiveNoteSharesStoredWikiPathWithDeletedNote covers the
+// interaction documented in the plan and ADR-029 between rule-1 resolution
+// and the deletion reconcile: a LIVE note ("keep") whose own stored
+// wiki_path is "wiki/foo.md" shares that path with a DELETED note's ("gone")
+// leftover DB record. Even though "keep" is the only real claimant, its
+// rule-1 check (NoteWikiPathShared) still reports the path as shared — "gone"
+// is never itself reprocessed, since its file is gone — so "keep" falls
+// through to rule 2 and claims a suffixed slug instead of reusing "foo"
+// directly. The deletion-reconcile pass later in the same cycle then finds
+// "gone"'s record no longer shared (by then "keep" has moved its own
+// wiki_path off "wiki/foo.md") and cleans up the stale bare-slug page and its
+// index entry.
 //
-// Closing the whole store is not enough to exercise this branch: processNotes
-// calls db.ListNotes() immediately before the loop that calls
-// NoteWikiPathShared, and a closed store would make ListNotes fail first,
-// which skips the entire "else" block (including the loop) — never reaching
-// line 727. Store.NoteWikiPathSharedErrForTest (internal/store/sqlite.go) is
-// a minimal test-only seam added specifically because no existing pattern in
-// this package could make NoteWikiPathShared fail in isolation while
-// ListNotes keeps working: both query the same notes table and columns, so
-// any schema-level corruption (e.g. dropping wiki_path) breaks both calls
-// identically.
-func TestProcessNotes_DeletionSkipsRecordWhenSharedCheckFails(t *testing.T) {
+// wiki/foo.md is pre-written with stale legacy content and indexed before
+// processNotes runs, simulating the page as it was left by whichever note
+// last owned it before "gone" was deleted. This matters for the resolution
+// mechanics, not just the cleanup assertion: rule 2 only returns the bare
+// "foo" slug if wiki/foo.md has no content, so without this the test
+// wouldn't actually exercise a suffix — "keep" would land right back on
+// "foo" and the scenario this test documents (shared-but-sole-claimant still
+// gets suffixed) would never happen.
+func TestProcessNotes_LiveNoteSharesStoredWikiPathWithDeletedNote(t *testing.T) {
 	tmpDir, db, v, _, en := setupTestEnv(t)
 	ctx := context.Background()
 
-	// "gone" is already absent from disk (never scanned this cycle), so the
-	// deletion-reconcile loop reaches it; no other note exists, so scanning
-	// and the per-note processing loop are no-ops and can't call
-	// NoteWikiPathShared themselves, keeping the injected failure isolated to
-	// the branch under test.
-	if err := db.UpsertNote("notes/gone/foo.md", "stale-hash", "wiki/foo.md"); err != nil {
-		t.Fatalf("seeding stale gone record: %v", err)
+	keepContent := noteContent("Keep", "golang", "Live note content that must land on a suffixed slug.")
+	writeNoteFile(t, tmpDir, "notes/keep/foo.md", keepContent)
+
+	// "keep" already has a DB record pointing at the bare slug, same as any
+	// note that was previously processed successfully.
+	if err := db.UpsertNote("notes/keep/foo.md", "stale-keep-hash", "wiki/foo.md"); err != nil {
+		t.Fatalf("seeding keep's existing record: %v", err)
 	}
-	if _, err := v.WriteWiki("foo.md", "pre-existing page\n"); err != nil {
-		t.Fatalf("WriteWiki foo: %v", err)
+	// "gone"'s file no longer exists on disk this cycle, but its stale DB
+	// record still claims the same wiki_path as keep's.
+	if err := db.UpsertNote("notes/gone/foo.md", "stale-gone-hash", "wiki/foo.md"); err != nil {
+		t.Fatalf("seeding gone's stale record: %v", err)
+	}
+
+	legacyWikiContent := "legacy shared content, now stale\n"
+	if _, err := v.WriteWiki("foo.md", legacyWikiContent); err != nil {
+		t.Fatalf("seeding legacy wiki/foo.md: %v", err)
 	}
 	if err := v.UpdateIndex("foo", "Foo", []string{"golang"}); err != nil {
 		t.Fatalf("UpdateIndex foo: %v", err)
 	}
 
-	db.NoteWikiPathSharedErrForTest = errors.New("injected NoteWikiPathShared failure")
-
-	var logBuf bytes.Buffer
-	prevLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
-	t.Cleanup(func() { slog.SetDefault(prevLogger) })
-
 	processNotes(ctx, en, db, v)
 
-	if !strings.Contains(logBuf.String(), "failed to check shared wiki path for deleted note") {
-		t.Errorf("expected the shared-check failure to be logged, got: %s", logBuf.String())
+	// "keep" resolved via rule 2 onto a suffixed slug, not the bare one it
+	// used to own — the shared check forced it off "foo".
+	recKeep := findNoteRecord(t, db, "notes/keep/foo.md")
+	if recKeep.WikiPath != "wiki/foo-2.md" {
+		t.Fatalf("expected notes/keep/foo.md to resolve to wiki/foo-2.md, got %q", recKeep.WikiPath)
 	}
+	keepWikiContent := readFile(t, filepath.Join(tmpDir, "wiki", "foo-2.md"))
+	assertContains(t, keepWikiContent, "Live note content that must land on a suffixed slug.")
 
-	// The record must survive for a retry next cycle — not deleted from the
-	// DB despite the failed check.
-	if !noteRecordExists(t, db, "notes/gone/foo.md") {
-		t.Error("expected the DB record for notes/gone/foo.md to survive a failed shared check")
+	// "gone"'s stale record is gone, and now that it's no longer shared with
+	// a live record, the deletion reconcile removed the stale bare-slug page
+	// and index entry it left behind — not orphaned.
+	if noteRecordExists(t, db, "notes/gone/foo.md") {
+		t.Error("expected the DB record for notes/gone/foo.md to be removed")
 	}
-	// Its page and index entry must also be left alone: the failed check must
-	// not fall through to the delete-page branch either.
-	pageContent := readFile(t, filepath.Join(tmpDir, "wiki", "foo.md"))
-	assertContains(t, pageContent, "pre-existing page")
+	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "foo.md")); !os.IsNotExist(err) {
+		t.Errorf("expected the stale wiki/foo.md page to be removed, stat err: %v", err)
+	}
 	indexContent := readFile(t, filepath.Join(tmpDir, "index.md"))
-	assertContains(t, indexContent, "[[foo]]")
+	assertContains(t, indexContent, "[[foo-2]]")
+	assertNotContains(t, indexContent, "[[foo]]")
 }
 
 // TestProcessNotes_SlugCollision_DeleteBothNotesInSharedGroup covers deleting

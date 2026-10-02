@@ -63,17 +63,22 @@ Failing tests first (spec-only subagent), then minimal implementation.
 - At the start of `processNotes`: for each `wiki_path` held by more than one note
   record, clear the content hash of every record in that duplicate group
   (`UPDATE notes SET content_hash = '' …`), not just all-but-one. The next pass of
-  the same cycle reprocesses all of them; rule 1 sends them to rule 2 because their
-  path is shared, and each claims its own (possibly suffixed) slug — scan order
-  decides who lands on the bare slug, same as any other fresh collision.
-- Precisely: scan order decides which single record in the group is processed
-  *last* in that cycle; by then every other record has already moved to a
-  suffixed slug, so rule 1 finds the path no longer shared and that last
-  record simply reuses the bare slug via rule 1 — it does not itself go
-  through rule 2. Separately, a live note that happens to share its stored
-  `wiki_path` with a now-deleted note's leftover DB record resolves via rule 2
-  (suffixed) even though it is the only real claimant, until the deletion
-  reconcile cleans up that stale record.
+  the same cycle reprocesses all of them. Rule 1's shared check
+  (`NoteWikiPathShared`) only sees a sibling's *current* `wiki_path`, and that only
+  changes once the sibling itself resolves and is re-upserted later in this same
+  loop — so a record still finds the path shared, and falls through to rule 2,
+  for as long as any sibling hasn't resolved yet; rule 2 in turn reuses the bare
+  slug rather than suffixing only if `wiki/<slug>.md` happens to have no content
+  on disk at that exact moment. In the common case — the bare-slug file already
+  exists from before the repair — this means every record but one goes through
+  rule 2 and gets suffixed, while the one record left once all its siblings have
+  already resolved away finds the path no longer shared and reuses it via rule 1;
+  scan order decides which record that is, same as any other fresh collision.
+  Separately, a live note that happens to share its stored `wiki_path` with a
+  now-deleted note's leftover DB record resolves via rule 2 (suffixed) even
+  though it is the only real claimant — that leftover record is never itself
+  reprocessed, since its file is gone, so the shared check never clears — until
+  the deletion reconcile cleans up the stale record later in the same cycle.
 - Idempotent: once paths are unique the query returns nothing.
 
 ### 5. Docs

@@ -11,19 +11,6 @@ import (
 
 type Store struct {
 	db *sql.DB
-
-	// NoteWikiPathSharedErrForTest is a test-only error-injection seam: when
-	// non-nil, NoteWikiPathShared returns it immediately instead of running
-	// its query. Production code never sets this.
-	//
-	// It exists because integration tests in other packages (e.g. cmd's
-	// processNotes deletion-reconcile tests) need NoteWikiPathShared to fail
-	// while the rest of the store keeps working — closing the whole store
-	// isn't enough, since processNotes calls ListNotes() immediately before
-	// the loop that calls NoteWikiPathShared, and a closed store would make
-	// ListNotes fail first and skip that loop entirely, never reaching the
-	// branch under test.
-	NoteWikiPathSharedErrForTest error
 }
 
 type NoteRecord struct {
@@ -219,9 +206,6 @@ func (s *Store) GetNote(path string) (NoteRecord, bool, error) {
 // claims wikiPath. Used to decide whether a note may keep reusing its stored
 // wiki_path or must resolve a fresh slug (ADR-029).
 func (s *Store) NoteWikiPathShared(path, wikiPath string) (bool, error) {
-	if s.NoteWikiPathSharedErrForTest != nil {
-		return false, s.NoteWikiPathSharedErrForTest
-	}
 	if wikiPath == "" {
 		return false, nil
 	}
