@@ -34,7 +34,7 @@ your Obsidian vault, ready to query from Claude Code, a browser, or any synced d
 - **Enrich** - LLM (Ollama Cloud, free) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** - Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **MCP server** - Built-in MCP server exposes the vault as structured retrieval primitives for any AI client (Claude Code, Cursor, Windsurf, OpenClaw). Supports stdio and Streamable HTTP transports
-- **Notes indexing** - Personal notes in `notes/` are automatically scanned and get a wiki copy in `wiki/` with tags. Notes without tags are auto-tagged via the LLM; notes with existing tags keep them as-is
+- **Notes indexing** - Personal notes in `notes/` are automatically scanned and get a wiki copy in `wiki/` with tags. Notes without tags are auto-tagged via the LLM; notes with existing tags keep them as-is. Same-named notes (or a note named like an existing page) never overwrite each other - colliding slugs get `-2`, `-3`, ... wiki pages
 - **Multi-device sync** - Access your vault from any device (phone, tablet, laptop) using [Obsidian LiveSync](https://github.com/vrtmrz/obsidian-livesync). Self-hosted via CouchDB - zero LucidVault code changes needed
 
 ## Getting started
