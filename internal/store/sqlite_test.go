@@ -119,6 +119,149 @@ func TestDeleteNote(t *testing.T) {
 	}
 }
 
+func TestGetNote_Found(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/foo.md", "abc123", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote: %v", err)
+	}
+
+	rec, ok, err := s.GetNote("notes/foo.md")
+	if err != nil {
+		t.Fatalf("GetNote: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok = true for existing note")
+	}
+	if rec.Path != "notes/foo.md" || rec.ContentHash != "abc123" || rec.WikiPath != "wiki/foo.md" {
+		t.Errorf("rec = %+v, want path=notes/foo.md hash=abc123 wikiPath=wiki/foo.md", rec)
+	}
+}
+
+func TestGetNote_NotFound(t *testing.T) {
+	s := newTestStore(t)
+
+	rec, ok, err := s.GetNote("notes/nonexistent.md")
+	if err != nil {
+		t.Fatalf("GetNote: %v", err)
+	}
+	if ok {
+		t.Error("expected ok = false for missing note")
+	}
+	if rec != (NoteRecord{}) {
+		t.Errorf("expected zero-value NoteRecord, got %+v", rec)
+	}
+}
+
+func TestNoteWikiPathShared_NotShared(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/a/foo.md", "hash-a", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote: %v", err)
+	}
+
+	shared, err := s.NoteWikiPathShared("notes/a/foo.md", "wiki/foo.md")
+	if err != nil {
+		t.Fatalf("NoteWikiPathShared: %v", err)
+	}
+	if shared {
+		t.Error("expected shared = false when no other note record shares the wiki_path")
+	}
+}
+
+func TestNoteWikiPathShared_Shared(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/a/foo.md", "hash-a", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote a: %v", err)
+	}
+	if err := s.UpsertNote("notes/b/foo.md", "hash-b", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote b: %v", err)
+	}
+
+	shared, err := s.NoteWikiPathShared("notes/a/foo.md", "wiki/foo.md")
+	if err != nil {
+		t.Fatalf("NoteWikiPathShared: %v", err)
+	}
+	if !shared {
+		t.Error("expected shared = true when another note record has the same wiki_path")
+	}
+}
+
+func TestNoteWikiPathShared_EmptyWikiPath(t *testing.T) {
+	s := newTestStore(t)
+
+	shared, err := s.NoteWikiPathShared("notes/a/foo.md", "")
+	if err != nil {
+		t.Fatalf("NoteWikiPathShared: %v", err)
+	}
+	if shared {
+		t.Error("expected shared = false for an empty wiki_path")
+	}
+}
+
+func TestRepairDuplicateNoteWikiPaths_KeepsFirstClearsRest(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/b/foo.md", "hash-b", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote b: %v", err)
+	}
+	if err := s.UpsertNote("notes/a/foo.md", "hash-a", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote a: %v", err)
+	}
+
+	repaired, err := s.RepairDuplicateNoteWikiPaths()
+	if err != nil {
+		t.Fatalf("RepairDuplicateNoteWikiPaths: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want 1", repaired)
+	}
+
+	recA, _, err := s.GetNote("notes/a/foo.md")
+	if err != nil {
+		t.Fatalf("GetNote a: %v", err)
+	}
+	if recA.ContentHash != "hash-a" {
+		t.Errorf("expected the lexicographically-first path's hash to survive, got %q", recA.ContentHash)
+	}
+
+	recB, _, err := s.GetNote("notes/b/foo.md")
+	if err != nil {
+		t.Fatalf("GetNote b: %v", err)
+	}
+	if recB.ContentHash != "" {
+		t.Errorf("expected the duplicate's content_hash to be cleared, got %q", recB.ContentHash)
+	}
+}
+
+func TestRepairDuplicateNoteWikiPaths_NoopWhenUnique(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/a/foo.md", "hash-a", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote a: %v", err)
+	}
+	if err := s.UpsertNote("notes/b/bar.md", "hash-b", "wiki/bar.md"); err != nil {
+		t.Fatalf("UpsertNote b: %v", err)
+	}
+
+	repaired, err := s.RepairDuplicateNoteWikiPaths()
+	if err != nil {
+		t.Fatalf("RepairDuplicateNoteWikiPaths: %v", err)
+	}
+	if repaired != 0 {
+		t.Errorf("repaired = %d, want 0 when wiki_path values are already unique", repaired)
+	}
+
+	recA, _, err := s.GetNote("notes/a/foo.md")
+	if err != nil {
+		t.Fatalf("GetNote a: %v", err)
+	}
+	if recA.ContentHash != "hash-a" {
+		t.Errorf("expected hash-a to survive a no-op repair, got %q", recA.ContentHash)
+	}
+}
+
 func TestListBookmarks(t *testing.T) {
 	s := newTestStore(t)
 

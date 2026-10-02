@@ -473,6 +473,14 @@ Body two.
 // auto-link-format ## Related line, processNotes must not inherit that stale
 // content, because carry-over only reads the OLD wiki copy when the DB
 // already has a record for the note (existingHash != "").
+//
+// Updated for ADR-029 (issue #95): a pre-existing wiki/<slug>.md with real
+// content is "taken" regardless of who wrote it — the pipeline can't tell a
+// leftover file from a hand-written or bookmark page, so it must not be
+// read or overwritten. The new note now resolves to the next free suffixed
+// slug (my-note-2.md) instead of clobbering my-note.md; this still proves
+// the stale ## Related content is never inherited, since the stale file is
+// never even read.
 func TestProcessNotes_NewNoteDoesNotCarryOverStaleWikiFile(t *testing.T) {
 	tmpDir, db, v, _, en := setupTestEnv(t)
 	ctx := context.Background()
@@ -502,7 +510,15 @@ tags:
 	// No DB record exists yet for notes/my-note.md — this is the new-note path.
 	processNotes(ctx, en, db, v)
 
-	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
+	// The stale, unowned file is left completely untouched (ADR-029: "taken"
+	// without the pipeline needing to know which kind it is).
+	staleAfter := readFile(t, filepath.Join(tmpDir, "wiki", "my-note.md"))
+	if staleAfter != staleWiki {
+		t.Errorf("expected stale wiki/my-note.md to be untouched\nbefore:\n%s\nafter:\n%s", staleWiki, staleAfter)
+	}
+
+	// The note itself is suffixed onto the next free slug, with no carry-over.
+	noteWiki := filepath.Join(tmpDir, "wiki", "my-note-2.md")
 	after := readFile(t, noteWiki)
 	assertContains(t, after, "Version one")
 	assertNotContains(t, after, "[[leftover-bookmark]]")

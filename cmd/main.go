@@ -551,6 +551,12 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 
 	slog.Info("scanning notes")
 
+	if repaired, err := db.RepairDuplicateNoteWikiPaths(); err != nil {
+		slog.Error("failed to repair duplicate note wiki paths", "error", err)
+	} else if repaired > 0 {
+		slog.Info("repaired duplicate note wiki paths", "count", repaired)
+	}
+
 	scanned, err := notes.Scan(v.BasePath)
 	if err != nil {
 		slog.Error("failed to scan notes", "error", err)
@@ -583,11 +589,12 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 			break
 		}
 
-		existingHash, err := db.GetNoteHash(nf.Path)
+		rec, recExists, err := db.GetNote(nf.Path)
 		if err != nil {
-			slog.Error("failed to check note hash", "path", nf.Path, "error", err)
+			slog.Error("failed to check note record", "path", nf.Path, "error", err)
 			continue
 		}
+		existingHash := rec.ContentHash
 
 		if existingHash == nf.ContentHash {
 			skipped++
@@ -624,24 +631,27 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 		body := notes.StripFrontmatter(content)
 		wikiContent := buildNoteWikiContent(nf.Title, tags, body)
 
-		// Wiki slug from filename: "notes/sub/my-note.md" → "my-note"
-		wikiSlug := notes.TitleFromFilename(nf.Path)
-		wikiFilename := wikiSlug + ".md"
-
-		// Remove old index entry (may be under old slug)
-		if existingHash != "" {
-			if err := v.RemoveFromIndex(wikiSlug); err != nil {
-				slog.Error("failed to remove old index entry for note", "path", nf.Path, "error", err)
-				continue
-			}
-		}
-
-		// Carry over auto-linked ## Related lines from the old copy; merge in memory and
-		// write once under the file lock so a concurrent MCP writer (ADR-019) can't interleave.
-		wikiRelPath := filepath.Join("wiki", wikiFilename)
-		var wikiPath string
+		// Resolve the wiki slug, remove any old index entry, carry over
+		// ## Related lines, and write the wiki copy — all inside the file
+		// lock, so a concurrent MCP writer (ADR-019) can't claim the same
+		// slug in between the existence check and the write (ADR-029).
+		var wikiSlug, wikiPath string
 		finalContent := wikiContent
 		err = db.WithFileLock(func() error {
+			slug, slugErr := resolveNoteWikiSlug(db, v, rec, recExists, nf)
+			if slugErr != nil {
+				return slugErr
+			}
+			wikiSlug = slug
+			wikiFilename := wikiSlug + ".md"
+			wikiRelPath := filepath.Join("wiki", wikiFilename)
+
+			if existingHash != "" {
+				if err := v.RemoveFromIndex(wikiSlug); err != nil {
+					return fmt.Errorf("removing old index entry: %w", err)
+				}
+			}
+
 			var carryLines []string
 			if existingHash != "" {
 				oldContent, readErr := v.ReadFile(wikiRelPath)
@@ -710,16 +720,28 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 			if _, exists := scannedPaths[rec.Path]; exists {
 				continue
 			}
-			// Remove index entry by wiki slug
-			wikiSlug := notes.TitleFromFilename(rec.Path)
-			if err := v.RemoveFromIndex(wikiSlug); err != nil {
-				slog.Error("failed to remove note from index", "path", rec.Path, "error", err)
+			// Another note record may still claim this wiki_path (e.g. a
+			// vault not yet reprocessed since the one-time duplicate
+			// repair). In that case only drop this record — the page and
+			// index entry belong to the surviving note.
+			shared, err := db.NoteWikiPathShared(rec.Path, rec.WikiPath)
+			if err != nil {
+				slog.Error("failed to check shared wiki path for deleted note", "path", rec.Path, "error", err)
 				continue
 			}
-			// Delete wiki copy if it exists
-			if rec.WikiPath != "" {
-				if err := v.DeleteFile(rec.WikiPath); err != nil {
-					slog.Error("failed to delete wiki copy for note", "path", rec.WikiPath, "error", err)
+			if !shared {
+				// Remove index entry by the resolved slug, not the filename.
+				wikiSlug := strings.TrimSuffix(filepath.Base(rec.WikiPath), ".md")
+				if wikiSlug != "" {
+					if err := v.RemoveFromIndex(wikiSlug); err != nil {
+						slog.Error("failed to remove note from index", "path", rec.Path, "error", err)
+						continue
+					}
+				}
+				if rec.WikiPath != "" {
+					if err := v.DeleteFile(rec.WikiPath); err != nil {
+						slog.Error("failed to delete wiki copy for note", "path", rec.WikiPath, "error", err)
+					}
 				}
 			}
 			if err := db.DeleteNote(rec.Path); err != nil {
@@ -735,6 +757,36 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 	}
 
 	slog.Info("notes cycle complete", "indexed", indexed, "updated", updated, "skipped", skipped)
+}
+
+// resolveNoteWikiSlug implements the ADR-029 slug resolution rules:
+//  1. Reuse the note's stored wiki_path slug if no other note record shares
+//     it.
+//  2. Otherwise claim the first free "<base>", "<base>-2", ... "<base>-100"
+//     slug, where "free" means wiki/<candidate>.md has no content. Returns
+//     an error if all 100 candidates are taken.
+func resolveNoteWikiSlug(db *store.Store, v *vault.Vault, rec store.NoteRecord, recExists bool, nf notes.NoteFile) (string, error) {
+	if recExists && rec.WikiPath != "" {
+		shared, err := db.NoteWikiPathShared(nf.Path, rec.WikiPath)
+		if err != nil {
+			return "", fmt.Errorf("checking shared wiki path for %q: %w", nf.Path, err)
+		}
+		if !shared {
+			return strings.TrimSuffix(filepath.Base(rec.WikiPath), ".md"), nil
+		}
+	}
+
+	base := notes.TitleFromFilename(nf.Path)
+	for n := 1; n <= 100; n++ {
+		candidate := base
+		if n > 1 {
+			candidate = fmt.Sprintf("%s-%d", base, n)
+		}
+		if !v.FileHasContent("wiki/" + candidate + ".md") {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no free wiki slug for %q: all suffixes 1-100 taken", nf.Path)
 }
 
 func buildNoteWikiContent(title string, tags []string, body string) string {
