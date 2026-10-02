@@ -183,6 +183,92 @@ func (s *Store) GetNoteHash(path string) (string, error) {
 	return hash, nil
 }
 
+// GetNote returns the full note record for path and whether it exists.
+func (s *Store) GetNote(path string) (NoteRecord, bool, error) {
+	var rec NoteRecord
+	var lastProcessed string
+	err := s.db.QueryRow("SELECT path, content_hash, wiki_path, last_processed FROM notes WHERE path = ?", path).
+		Scan(&rec.Path, &rec.ContentHash, &rec.WikiPath, &lastProcessed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return NoteRecord{}, false, nil
+	}
+	if err != nil {
+		return NoteRecord{}, false, fmt.Errorf("querying note %q: %w", path, err)
+	}
+	rec.LastProcessed, err = time.Parse(time.RFC3339, lastProcessed)
+	if err != nil {
+		return NoteRecord{}, false, fmt.Errorf("parsing last_processed for note %q: %w", path, err)
+	}
+	return rec, true, nil
+}
+
+// NoteWikiPathShared reports whether a note record other than path already
+// claims wikiPath. Used to decide whether a note may keep reusing its stored
+// wiki_path or must resolve a fresh slug (ADR-029).
+func (s *Store) NoteWikiPathShared(path, wikiPath string) (bool, error) {
+	if wikiPath == "" {
+		return false, nil
+	}
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM notes WHERE wiki_path = ? AND path != ?", wikiPath, path).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("checking shared wiki_path %q: %w", wikiPath, err)
+	}
+	return count > 0, nil
+}
+
+// NotesSharingWikiPath returns the paths of note records other than path
+// that already claim wikiPath. Unlike NoteWikiPathShared, it returns the
+// sharers themselves so the caller can tell a still-live claim apart from a
+// leftover record belonging to a note no longer on disk (ADR-029).
+func (s *Store) NotesSharingWikiPath(path, wikiPath string) ([]string, error) {
+	if wikiPath == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query("SELECT path FROM notes WHERE wiki_path = ? AND path != ?", wikiPath, path)
+	if err != nil {
+		return nil, fmt.Errorf("querying notes sharing wiki_path %q: %w", wikiPath, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var sharers []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("scanning note sharing wiki_path %q: %w", wikiPath, err)
+		}
+		sharers = append(sharers, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating notes sharing wiki_path %q: %w", wikiPath, err)
+	}
+	return sharers, nil
+}
+
+// RepairDuplicateNoteWikiPaths fixes vaults hit by issue #95: when more than
+// one note record shares the same wiki_path, it clears the content_hash of
+// every record in that duplicate group, so the next scan treats all of them
+// as changed and each resolves (via resolveNoteWikiSlug) its own, possibly
+// suffixed, slug fresh — the same rule used for any other fresh collision.
+// Scan order, not this repair, decides which one lands on the bare slug.
+// Idempotent once wiki_path values are unique.
+func (s *Store) RepairDuplicateNoteWikiPaths() (int, error) {
+	res, err := s.db.Exec(`
+		UPDATE notes SET content_hash = ''
+		WHERE wiki_path != '' AND wiki_path IN (
+			SELECT wiki_path FROM notes WHERE wiki_path != '' GROUP BY wiki_path HAVING COUNT(*) > 1
+		)
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("clearing content_hash for duplicate note wiki paths: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting repaired duplicate note wiki paths: %w", err)
+	}
+	return int(affected), nil
+}
+
 func (s *Store) UpsertNote(path, contentHash, wikiPath string) error {
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO notes (path, content_hash, wiki_path, last_processed) VALUES (?, ?, ?, ?)`,
