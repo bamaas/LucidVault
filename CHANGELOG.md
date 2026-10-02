@@ -1,3 +1,9 @@
+## v0.26.2 (2026-10-01)
+
+### Fix
+
+- **mcpserver**: add_note never overwrites an existing note (#98)
+
 ## v0.26.1 (2026-09-25)
 
 ### Fix
