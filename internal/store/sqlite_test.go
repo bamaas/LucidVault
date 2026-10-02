@@ -222,6 +222,93 @@ func TestNoteWikiPathShared_EmptyWikiPath(t *testing.T) {
 	}
 }
 
+func TestNotesSharingWikiPath_EmptyWikiPath(t *testing.T) {
+	s := newTestStore(t)
+
+	sharers, err := s.NotesSharingWikiPath("notes/a/foo.md", "")
+	if err != nil {
+		t.Fatalf("NotesSharingWikiPath: %v", err)
+	}
+	if len(sharers) != 0 {
+		t.Errorf("expected no sharers for an empty wiki_path, got %v", sharers)
+	}
+}
+
+func TestNotesSharingWikiPath_ExcludesSelf(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/a/foo.md", "hash-a", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote: %v", err)
+	}
+
+	sharers, err := s.NotesSharingWikiPath("notes/a/foo.md", "wiki/foo.md")
+	if err != nil {
+		t.Fatalf("NotesSharingWikiPath: %v", err)
+	}
+	if len(sharers) != 0 {
+		t.Errorf("expected the passed-in path to be excluded from its own sharers, got %v", sharers)
+	}
+}
+
+func TestNotesSharingWikiPath_ReturnsMultipleSharers(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/a/foo.md", "hash-a", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote a: %v", err)
+	}
+	if err := s.UpsertNote("notes/b/foo.md", "hash-b", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote b: %v", err)
+	}
+	if err := s.UpsertNote("notes/c/foo.md", "hash-c", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote c: %v", err)
+	}
+
+	sharers, err := s.NotesSharingWikiPath("notes/a/foo.md", "wiki/foo.md")
+	if err != nil {
+		t.Fatalf("NotesSharingWikiPath: %v", err)
+	}
+	want := map[string]bool{"notes/b/foo.md": true, "notes/c/foo.md": true}
+	if len(sharers) != len(want) {
+		t.Fatalf("sharers = %v, want exactly %v", sharers, want)
+	}
+	for _, p := range sharers {
+		if !want[p] {
+			t.Errorf("unexpected sharer %q, want one of %v", p, want)
+		}
+	}
+}
+
+func TestNotesSharingWikiPath_DifferentWikiPathNotMatched(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertNote("notes/a/foo.md", "hash-a", "wiki/foo.md"); err != nil {
+		t.Fatalf("UpsertNote a: %v", err)
+	}
+	if err := s.UpsertNote("notes/b/bar.md", "hash-b", "wiki/bar.md"); err != nil {
+		t.Fatalf("UpsertNote b: %v", err)
+	}
+
+	sharers, err := s.NotesSharingWikiPath("notes/a/foo.md", "wiki/foo.md")
+	if err != nil {
+		t.Fatalf("NotesSharingWikiPath: %v", err)
+	}
+	if len(sharers) != 0 {
+		t.Errorf("expected a record with a different wiki_path not to be matched, got %v", sharers)
+	}
+}
+
+func TestNotesSharingWikiPath_AfterClose(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := s.NotesSharingWikiPath("notes/a/foo.md", "wiki/foo.md")
+	if err == nil {
+		t.Error("expected an error from NotesSharingWikiPath on a closed store")
+	}
+}
+
 func TestRepairDuplicateNoteWikiPaths_ClearsAllInGroup(t *testing.T) {
 	s := newTestStore(t)
 

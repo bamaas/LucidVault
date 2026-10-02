@@ -24,7 +24,8 @@ notes/bar.md     → wiki/bar-2.md    (wiki/bar.md is a bookmark page)
 Slug resolution for a note `nf`:
 
 1. If the DB record for `nf.Path` has a non-empty `wiki_path` **and** no other note
-   record shares it, reuse it (slug = basename of `wiki_path` without `.md`).
+   record whose source file is still present in the current scan shares it, reuse
+   it (slug = basename of `wiki_path` without `.md`).
 2. Otherwise start from `notes.TitleFromFilename(nf.Path)` and take the first
    candidate `<slug>`, `<slug>-2` … `<slug>-100` where `wiki/<candidate>.md` has no
    content. Cap reached → log an error naming the slug and skip the note; nothing is

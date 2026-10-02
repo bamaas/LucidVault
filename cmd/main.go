@@ -745,6 +745,33 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 			continue
 		}
 
+		// Persist the slug claim right away, before the edge-sync/auto-link/
+		// index side effects below run. If one of those fails and the loop
+		// continues, the wiki page written above would otherwise be an
+		// orphan with no DB record — on the next cycle resolveNoteWikiSlug
+		// would see wiki/<slug>.md already has content (its own prior write)
+		// and permanently suffix the note onto <slug>-2 instead of letting
+		// it reclaim <slug> (see docs/adr/029). The empty content hash is a
+		// placeholder: it never matches nf.ContentHash, so the note is still
+		// picked up for reprocessing next cycle, and the UpsertNote at the
+		// end of this loop overwrites it with the real hash once every side
+		// effect below has succeeded.
+		//
+		// This must run AFTER WithFileLock has returned, not inside its
+		// callback: WithFileLock holds BEGIN EXCLUSIVE on a dedicated
+		// connection obtained via db.Conn, separate from the pooled *sql.DB
+		// connection UpsertNote's Exec would use. In WAL mode a second
+		// connection's write while that transaction is still open fails
+		// immediately with SQLITE_BUSY rather than queuing behind it
+		// (verified empirically against modernc.org/sqlite) — writing from
+		// inside the callback would make every note's early claim fail. By
+		// the time WithFileLock returns successfully its COMMIT has already
+		// run and the write lock is free, so writing here is safe.
+		if err := db.UpsertNote(nf.Path, "", wikiPath); err != nil {
+			slog.Error("failed to persist early slug claim for note", "path", nf.Path, "error", err)
+			continue
+		}
+
 		// Sync wikilink edges incrementally
 		syncEdgesFromContent(db, wikiSlug, finalContent)
 
@@ -780,7 +807,11 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 //     over from a note that no longer exists on disk doesn't count as a
 //     collision — it's cleaned up separately by the deletion reconcile.
 //  2. Otherwise claim the first free "<base>", "<base>-2", ... "<base>-100"
-//     slug, where "free" means wiki/<candidate>.md has no content. Returns
+//     slug, where "free" means both wiki/<candidate>.md has no content AND
+//     no other note record already claims that wiki_path. The latter check
+//     catches a hand-deleted wiki page whose owning note record hasn't been
+//     reprocessed yet — without it, a new note could claim the same
+//     wiki_path as that still-live record, creating a duplicate. Returns
 //     an error if all 100 candidates are taken.
 func resolveNoteWikiSlug(db *store.Store, v *vault.Vault, rec store.NoteRecord, recExists bool, nf notes.NoteFile, scannedPaths map[string]struct{}) (string, error) {
 	if recExists && rec.WikiPath != "" {
@@ -806,7 +837,22 @@ func resolveNoteWikiSlug(db *store.Store, v *vault.Vault, rec store.NoteRecord, 
 		if n > 1 {
 			candidate = fmt.Sprintf("%s-%d", base, n)
 		}
-		if !v.FileHasContent("wiki/" + candidate + ".md") {
+		candidateWikiPath := "wiki/" + candidate + ".md"
+		if v.FileHasContent(candidateWikiPath) {
+			continue
+		}
+		// The file may be missing or empty (e.g. hand-deleted by the user)
+		// while another note's DB record still claims this wiki_path. That
+		// record is guaranteed to belong to a currently-scanned note: the
+		// deletion reconcile at the top of processNotes already removed any
+		// record whose own source file is no longer in scannedPaths before
+		// this loop ever runs. Skip the candidate rather than create a
+		// second record pointing at the same wiki_path.
+		sharers, err := db.NotesSharingWikiPath(nf.Path, candidateWikiPath)
+		if err != nil {
+			return "", fmt.Errorf("checking shared wiki path for candidate %q: %w", candidateWikiPath, err)
+		}
+		if len(sharers) == 0 {
 			return candidate, nil
 		}
 	}

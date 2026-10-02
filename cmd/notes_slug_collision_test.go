@@ -1095,3 +1095,109 @@ func TestProcessNotes_MoveReclaimsBareSlugAfterReconcileReorder(t *testing.T) {
 		t.Fatalf("expected bar -> foo inbound edge to survive the move, got %+v", inbound)
 	}
 }
+
+// TestProcessNotes_RetriesSlugClaimAfterPostWriteFailure is a review-round-4
+// regression test: a failure in a post-write side effect (here, UpdateIndex)
+// must not leave the wiki page orphaned with no DB record. Without the fix,
+// the first (failed) cycle writes wiki/foo.md but never persists a note
+// record for it, so the second cycle sees wiki/foo.md already has content
+// and permanently suffixes the note onto wiki/foo-2.md instead of letting it
+// reclaim wiki/foo.md.
+func TestProcessNotes_RetriesSlugClaimAfterPostWriteFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("skipping: running as root bypasses file permissions")
+	}
+
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	writeNoteFile(t, tmpDir, "notes/foo.md", noteContent("Foo", "delta", "Content one."))
+
+	// Force UpdateIndex to fail on the first cycle: by the time it runs,
+	// WriteWiki has already created wiki/foo.md and (with the fix) the
+	// early slug claim has already been persisted.
+	indexPath := filepath.Join(tmpDir, "index.md")
+	if err := os.Chmod(indexPath, 0o444); err != nil {
+		t.Fatalf("chmod index.md: %v", err)
+	}
+
+	processNotes(ctx, en, db, v)
+
+	if err := os.Chmod(indexPath, 0o644); err != nil {
+		t.Fatalf("restoring index.md permissions: %v", err)
+	}
+
+	// wiki/foo.md is the orphan left by the failed first cycle; no suffixed
+	// copy should exist yet.
+	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "foo.md")); err != nil {
+		t.Fatalf("expected wiki/foo.md to exist after the first (failed) cycle: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "foo-2.md")); !os.IsNotExist(err) {
+		t.Fatal("expected no wiki/foo-2.md to be created after the first (failed) cycle")
+	}
+
+	// Second cycle: UpdateIndex now succeeds, so the note should fully
+	// complete processing and reclaim the bare slug.
+	processNotes(ctx, en, db, v)
+
+	rec := findNoteRecord(t, db, "notes/foo.md")
+	if rec.WikiPath != "wiki/foo.md" {
+		t.Errorf("expected the note to reclaim wiki/foo.md on retry, got %q", rec.WikiPath)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "foo-2.md")); !os.IsNotExist(err) {
+		t.Error("expected no wiki/foo-2.md to be created after the retry succeeds")
+	}
+
+	indexContent := readFile(t, indexPath)
+	assertContains(t, indexContent, "[[foo]]")
+}
+
+// TestProcessNotes_SkipsCandidateStillClaimedByOtherLiveNoteRecord is a
+// review-round-4 regression test for resolveNoteWikiSlug's rule 2: a
+// candidate slug whose wiki file has no content (e.g. hand-deleted by the
+// user) must still be skipped if another live note's DB record claims it.
+// Otherwise a brand-new note could claim the same wiki_path, creating a
+// duplicate that the repair mechanism round-trips depending on scan order.
+func TestProcessNotes_SkipsCandidateStillClaimedByOtherLiveNoteRecord(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	// Note A claims the bare "foo" slug on the first cycle.
+	writeNoteFile(t, tmpDir, "notes/a/foo.md", noteContent("Note A", "alpha", "Content from note A."))
+	processNotes(ctx, en, db, v)
+
+	recA := findNoteRecord(t, db, "notes/a/foo.md")
+	if recA.WikiPath != "wiki/foo.md" {
+		t.Fatalf("expected note A to claim wiki/foo.md, got %q", recA.WikiPath)
+	}
+
+	// Hand-delete the wiki page the DB record still points at, without
+	// touching note A's source file or its DB record.
+	if err := os.Remove(filepath.Join(tmpDir, "wiki", "foo.md")); err != nil {
+		t.Fatalf("removing wiki/foo.md: %v", err)
+	}
+
+	// A brand-new, unrelated note with the same basename appears before
+	// note A is reprocessed (note A's content is unchanged, so it will be
+	// skipped as unchanged on the next cycle).
+	writeNoteFile(t, tmpDir, "notes/x/foo.md", noteContent("Note X", "chi", "Content from note X."))
+
+	processNotes(ctx, en, db, v)
+
+	recX := findNoteRecord(t, db, "notes/x/foo.md")
+	if recX.WikiPath == "" {
+		t.Fatal("expected the new note to resolve to some wiki_path")
+	}
+	if recX.WikiPath == "wiki/foo.md" {
+		t.Fatalf("expected the new note NOT to claim wiki/foo.md while note A's record still claims it, got %q", recX.WikiPath)
+	}
+
+	// Exactly one note record claims wiki/foo.md — no duplicate.
+	sharers, err := db.NotesSharingWikiPath("", "wiki/foo.md")
+	if err != nil {
+		t.Fatalf("NotesSharingWikiPath: %v", err)
+	}
+	if len(sharers) != 1 {
+		t.Fatalf("expected exactly one note record to claim wiki/foo.md, got %v", sharers)
+	}
+}
