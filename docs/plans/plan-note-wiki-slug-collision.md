@@ -28,8 +28,10 @@ Slug resolution for a note `nf`:
    it (slug = basename of `wiki_path` without `.md`).
 2. Otherwise start from `notes.TitleFromFilename(nf.Path)` and take the first
    candidate `<slug>`, `<slug>-2` … `<slug>-100` where `wiki/<candidate>.md` has no
-   content. Cap reached → log an error naming the slug and skip the note; nothing is
-   overwritten.
+   content **and** no other note record already claims that candidate's `wiki_path`
+   (`NotesSharingWikiPath`) — this second check catches a hand-deleted wiki page
+   whose owning note record hasn't been reprocessed yet. Cap reached → log an error
+   naming the slug and skip the note; nothing is overwritten.
 
 The existence check and the write happen inside the existing `db.WithFileLock`
 block, so a concurrent MCP writer (ADR-019) cannot claim the same file in between.
@@ -48,7 +50,12 @@ Failing tests first (spec-only subagent), then minimal implementation.
 - `NotesSharingWikiPath(path, wikiPath string) ([]string, error)` — the paths of
   other note records sharing `wikiPath`. Used by rule 1, which only counts a sharer
   as a real collision if its path is still in the current scan (`scannedPaths`) —
-  a leftover record from a deleted note doesn't count (round-1 review fix).
+  a leftover record from a deleted note doesn't count (round-1 review fix). Rule 2
+  uses it too, for each candidate slug in turn, to catch a hand-deleted wiki page
+  whose owning note record hasn't been reprocessed yet; unlike rule 1 it doesn't
+  need the `scannedPaths` filter, because the deletion reconcile (section 3) already
+  runs before this loop and removes any record whose own source file is no longer
+  scanned.
 
 ### 2. Slug resolution — `cmd/main.go`
 
@@ -56,6 +63,18 @@ Failing tests first (spec-only subagent), then minimal implementation.
   implementing the two rules above. Called inside `WithFileLock`, before `WriteWiki`.
 - Old-index removal and `## Related` carry-over read from the **resolved** slug's
   path, not the recomputed one.
+- Right after `WithFileLock` returns successfully (i.e. once the wiki page has been
+  written), persist the resolved `wiki_path` via a dedicated
+  `db.UpsertNote(nf.Path, existingHash, wikiPath)` call — before the edge-sync,
+  auto-link and index side effects run. Without this early claim, a failure in one
+  of those side effects would leave the just-written wiki page orphaned with no DB
+  record, and the next cycle's rule 2 would see `wiki/<slug>.md` already has
+  content and permanently suffix the note onto `<slug>-2` instead of letting it
+  reclaim `<slug>` on retry. The early claim persists `existingHash` (never `""`
+  for an existing note reaching this point, since the unchanged-content skip check
+  already returned otherwise), not `""` — so a retry's own carry-over check still
+  reads the old wiki copy's auto-linked `## Related` lines forward instead of
+  treating the retry as a brand-new note.
 
 ### 3. Deletion reconcile — `cmd/main.go`
 

@@ -1152,6 +1152,118 @@ func TestProcessNotes_RetriesSlugClaimAfterPostWriteFailure(t *testing.T) {
 	assertContains(t, indexContent, "[[foo]]")
 }
 
+// TestProcessNotes_RetryAfterPostWriteFailurePreservesRelatedCarryOver is a
+// round-5 review regression test: the early slug claim (cmd/main.go ~line
+// 770, persisted right after WriteWiki succeeds but before UpdateIndex and
+// the final UpsertNote) must store the note's real existingHash, not "".
+// Otherwise, when UpdateIndex fails afterwards and the loop retries on the
+// next cycle, the retry reads existingHash == "" from the DB and skips the
+// "if existingHash != {}" branch that reads the OLD wiki copy — silently
+// dropping the auto-linked ## Related section that autoLinkRelated had
+// written, instead of carrying it forward like every other successful
+// rebuild does.
+//
+// Failure injection follows TestProcessNotes_RetriesSlugClaimAfterPostWriteFailure
+// above: chmod index.md read-only so UpdateIndex's write fails. The twist
+// here is that this note already has an index.md entry from a prior cycle
+// (its FIRST cycle, unlike that test's brand-new note), and RemoveFromIndex
+// — called earlier in the same WithFileLock callback, before WriteWiki and
+// the early claim — would itself fail (and abort before WriteWiki even
+// runs) if it still had to remove that entry under the same read-only
+// permissions. So the entry is stripped via a direct RemoveFromIndex call
+// before chmod'ing, making RemoveFromIndex a no-op on the cycle under test
+// and isolating the injected failure to UpdateIndex alone — the only
+// error-returning call between the early claim and the final UpsertNote
+// (syncEdgesFromContent and autoLinkRelated don't return errors, so they
+// can't be used to abort the loop; there is no test-only field on
+// *vault.Vault or *store.Store to inject a failure more directly).
+func TestProcessNotes_RetryAfterPostWriteFailurePreservesRelatedCarryOver(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("skipping: running as root bypasses file permissions")
+	}
+
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	writeNoteFile(t, tmpDir, "notes/my-note.md", noteContent("Note", "golang", "Version one."))
+	processNotes(ctx, en, db, v)
+
+	recBefore := findNoteRecord(t, db, "notes/my-note.md")
+	if recBefore.ContentHash == "" {
+		t.Fatal("expected the note to be recorded with a non-empty content hash after the first cycle")
+	}
+
+	// Simulate a prior autoLinkRelated run having added a ## Related section
+	// to the note's wiki copy, linking to another live page.
+	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
+	oldWikiWithRelated := "---\ntags:\n  - golang\n---\n\n# Note\n\nVersion one.\n\n## Related\n\n- [[other]] — shared tags: golang\n"
+	if err := os.WriteFile(noteWiki, []byte(oldWikiWithRelated), 0o644); err != nil {
+		t.Fatalf("WriteFile oldWikiWithRelated: %v", err)
+	}
+	if _, err := v.WriteWiki("other.md", "# Other\n\nStill here.\n"); err != nil {
+		t.Fatalf("WriteWiki other: %v", err)
+	}
+
+	// Strip the "[[my-note]]" entry the first cycle added, so the second
+	// cycle's RemoveFromIndex call is a no-op (see comment above the test).
+	indexPath := filepath.Join(tmpDir, "index.md")
+	if err := v.RemoveFromIndex("my-note"); err != nil {
+		t.Fatalf("RemoveFromIndex: %v", err)
+	}
+	assertNotContains(t, readFile(t, indexPath), "[[my-note]]")
+
+	// User edits the note so its hash changes and a rebuild is triggered.
+	writeNoteFile(t, tmpDir, "notes/my-note.md", noteContent("Note", "golang", "Version two."))
+
+	// Force UpdateIndex to fail on this cycle: by the time it runs, WriteWiki
+	// has already rebuilt wiki/my-note.md (with the carried-over Related
+	// line) and the early slug claim has already been persisted.
+	if err := os.Chmod(indexPath, 0o444); err != nil {
+		t.Fatalf("chmod index.md: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+	processNotes(ctx, en, db, v)
+	slog.SetDefault(prevLogger)
+
+	if err := os.Chmod(indexPath, 0o644); err != nil {
+		t.Fatalf("restoring index.md permissions: %v", err)
+	}
+
+	if !strings.Contains(logBuf.String(), "failed to update index for note") {
+		t.Fatalf("expected the injected UpdateIndex failure to be logged, got: %s", logBuf.String())
+	}
+
+	// WriteWiki already ran (and carried the Related line forward) before
+	// the injected UpdateIndex failure.
+	midCycle := readFile(t, noteWiki)
+	assertContains(t, midCycle, "Version two")
+	assertContains(t, midCycle, "[[other]] — shared tags: golang")
+
+	// The early claim must persist the real existingHash, not "" — otherwise
+	// the next cycle treats the note as brand new and skips the carry-over
+	// read entirely.
+	recAfterFailure := findNoteRecord(t, db, "notes/my-note.md")
+	if recAfterFailure.ContentHash != recBefore.ContentHash {
+		t.Fatalf("expected the early claim to persist existingHash %q, got %q", recBefore.ContentHash, recAfterFailure.ContentHash)
+	}
+
+	// Retry cycle: UpdateIndex now succeeds.
+	processNotes(ctx, en, db, v)
+
+	after := readFile(t, noteWiki)
+	assertContains(t, after, "Version two")
+	assertContains(t, after, "[[other]] — shared tags: golang")
+
+	recAfterRetry := findNoteRecord(t, db, "notes/my-note.md")
+	if recAfterRetry.ContentHash == "" || recAfterRetry.ContentHash == recBefore.ContentHash {
+		t.Fatalf("expected the retry to persist the note's new content hash, got %q", recAfterRetry.ContentHash)
+	}
+	assertContains(t, readFile(t, indexPath), "[[my-note]]")
+}
+
 // TestProcessNotes_SkipsCandidateStillClaimedByOtherLiveNoteRecord is a
 // review-round-4 regression test for resolveNoteWikiSlug's rule 2: a
 // candidate slug whose wiki file has no content (e.g. hand-deleted by the

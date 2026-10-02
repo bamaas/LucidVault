@@ -751,11 +751,17 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 		// orphan with no DB record — on the next cycle resolveNoteWikiSlug
 		// would see wiki/<slug>.md already has content (its own prior write)
 		// and permanently suffix the note onto <slug>-2 instead of letting
-		// it reclaim <slug> (see docs/adr/029). The empty content hash is a
-		// placeholder: it never matches nf.ContentHash, so the note is still
-		// picked up for reprocessing next cycle, and the UpsertNote at the
-		// end of this loop overwrites it with the real hash once every side
-		// effect below has succeeded.
+		// it reclaim <slug> (see docs/adr/029). Re-persisting existingHash
+		// (never "" for an existing note reaching this point, since the skip
+		// check above already returned when existingHash == nf.ContentHash)
+		// rather than clearing it to "" keeps the record's content_hash at
+		// its pre-cycle value: it still never matches nf.ContentHash, so the
+		// note is still picked up for reprocessing next cycle, but a retry's
+		// own existingHash != "" check (above) still carries the old wiki
+		// copy's auto-linked ## Related lines forward instead of treating the
+		// retry as a brand-new note. The UpsertNote at the end of this loop
+		// overwrites it with the real new hash once every side effect below
+		// has succeeded.
 		//
 		// This must run AFTER WithFileLock has returned, not inside its
 		// callback: WithFileLock holds BEGIN EXCLUSIVE on a dedicated
@@ -767,7 +773,7 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 		// inside the callback would make every note's early claim fail. By
 		// the time WithFileLock returns successfully its COMMIT has already
 		// run and the write lock is free, so writing here is safe.
-		if err := db.UpsertNote(nf.Path, "", wikiPath); err != nil {
+		if err := db.UpsertNote(nf.Path, existingHash, wikiPath); err != nil {
 			slog.Error("failed to persist early slug claim for note", "path", nf.Path, "error", err)
 			continue
 		}
