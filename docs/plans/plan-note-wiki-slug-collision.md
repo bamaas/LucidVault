@@ -66,6 +66,14 @@ Failing tests first (spec-only subagent), then minimal implementation.
   the same cycle reprocesses all of them; rule 1 sends them to rule 2 because their
   path is shared, and each claims its own (possibly suffixed) slug — scan order
   decides who lands on the bare slug, same as any other fresh collision.
+- Precisely: scan order decides which single record in the group is processed
+  *last* in that cycle; by then every other record has already moved to a
+  suffixed slug, so rule 1 finds the path no longer shared and that last
+  record simply reuses the bare slug via rule 1 — it does not itself go
+  through rule 2. Separately, a live note that happens to share its stored
+  `wiki_path` with a now-deleted note's leftover DB record resolves via rule 2
+  (suffixed) even though it is the only real claimant, until the deletion
+  reconcile cleans up that stale record.
 - Idempotent: once paths are unique the query returns nothing.
 
 ### 5. Docs

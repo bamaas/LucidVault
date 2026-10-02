@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -349,8 +350,25 @@ func TestProcessNotes_SlugCollision_RepairsPreExistingDuplicateWikiPath(t *testi
 	// And the wiki page on disk as the old code left it: whichever note was
 	// processed last fully overwrote the file. Neither note's real hash
 	// matches this content — it's stale "last writer wins" legacy content.
-	if _, err := v.WriteWiki("foo.md", "legacy shared content, last writer wins\n"); err != nil {
+	//
+	// It also carries a legitimate auto-link-format ## Related line, pointing
+	// at a page ("kept") that genuinely exists, to pin down the carry-over
+	// guard at cmd/main.go's "if existingHash != \"\"" check (around line
+	// 656): RepairDuplicateNoteWikiPaths clears both records' content_hash,
+	// so BOTH notes hit processNotes with existingHash == "" (first-time at
+	// this slug, from each note's own perspective) even though recExists is
+	// true for both — the guard must stop either of them from reading and
+	// inheriting this stale file's content. The target must be a real page:
+	// dropLinksToMissingPages would otherwise strip the link regardless of
+	// whether the guard ran, masking a regression (verified by temporarily
+	// changing the guard to "if true" — the whole cmd suite stayed green
+	// without this assertion in place).
+	legacyWikiContent := "legacy shared content, last writer wins\n\n## Related\n\n- [[kept]] — shared tags: golang, testing\n"
+	if _, err := v.WriteWiki("foo.md", legacyWikiContent); err != nil {
 		t.Fatalf("seeding legacy wiki/foo.md: %v", err)
+	}
+	if _, err := v.WriteWiki("kept.md", "# Kept\n\nStill here.\n"); err != nil {
+		t.Fatalf("WriteWiki kept: %v", err)
 	}
 
 	processNotes(ctx, en, db, v)
@@ -393,6 +411,16 @@ func TestProcessNotes_SlugCollision_RepairsPreExistingDuplicateWikiPath(t *testi
 	default:
 		t.Fatalf("expected one of the two notes to resolve to wiki/foo.md, got a=%q b=%q", recA.WikiPath, recB.WikiPath)
 	}
+
+	// The carry-over guard (cmd/main.go: "if existingHash != \"\"" before
+	// reading the OLD wiki copy) must stop the stale legacy ## Related line
+	// from leaking onto whichever note resolved to the bare "foo" slug: by
+	// the time that note is processed, RepairDuplicateNoteWikiPaths has
+	// already cleared its content_hash, so existingHash == "" even though a
+	// DB record already existed for it — the first-time-at-this-slug path
+	// must never read the old (stale, not-its-own) wiki/foo.md content.
+	assertNotContains(t, fooContent, "[[kept]]")
+	assertNotContains(t, fooContent, "## Related")
 }
 
 // TestProcessNotes_NoCollision_SlugUnchanged is the plan's fifth test case
@@ -672,6 +700,19 @@ func TestResolveNoteWikiSlug(t *testing.T) {
 			notePath:  "notes/a/foo.md",
 			wantErr:   true,
 		},
+		{
+			name: "NoteWikiPathShared error propagates (cmd/main.go rule 1 error branch)",
+			setup: func(t *testing.T, db *store.Store, _ *vault.Vault) {
+				t.Helper()
+				if err := db.Close(); err != nil {
+					t.Fatalf("Close: %v", err)
+				}
+			},
+			rec:       store.NoteRecord{Path: "notes/a/foo.md", WikiPath: "wiki/foo-5.md"},
+			recExists: true,
+			notePath:  "notes/a/foo.md",
+			wantErr:   true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -757,4 +798,126 @@ func TestProcessNotes_DeleteNoteWithSharedWikiPath(t *testing.T) {
 	if !noteRecordExists(t, db, "notes/keep/foo.md") {
 		t.Error("expected the DB record for notes/keep/foo.md to survive")
 	}
+}
+
+// TestProcessNotes_DeletionSkipsRecordWhenSharedCheckFails covers the error
+// branch of the deletion-reconcile's NoteWikiPathShared check (cmd/main.go,
+// around line 727-730, just before the "reconcile deletions" section's shared
+// check): when the check itself fails, the record must be left alone this
+// cycle — neither its wiki page/index entry nor its own DB record may be
+// removed — so the deletion is safely retried on the next poll cycle instead
+// of either silently losing the page (if the delete branch ran anyway) or
+// silently losing the record without ever resolving the page (if just the
+// DB delete ran anyway).
+//
+// Closing the whole store is not enough to exercise this branch: processNotes
+// calls db.ListNotes() immediately before the loop that calls
+// NoteWikiPathShared, and a closed store would make ListNotes fail first,
+// which skips the entire "else" block (including the loop) — never reaching
+// line 727. Store.NoteWikiPathSharedErrForTest (internal/store/sqlite.go) is
+// a minimal test-only seam added specifically because no existing pattern in
+// this package could make NoteWikiPathShared fail in isolation while
+// ListNotes keeps working: both query the same notes table and columns, so
+// any schema-level corruption (e.g. dropping wiki_path) breaks both calls
+// identically.
+func TestProcessNotes_DeletionSkipsRecordWhenSharedCheckFails(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	// "gone" is already absent from disk (never scanned this cycle), so the
+	// deletion-reconcile loop reaches it; no other note exists, so scanning
+	// and the per-note processing loop are no-ops and can't call
+	// NoteWikiPathShared themselves, keeping the injected failure isolated to
+	// the branch under test.
+	if err := db.UpsertNote("notes/gone/foo.md", "stale-hash", "wiki/foo.md"); err != nil {
+		t.Fatalf("seeding stale gone record: %v", err)
+	}
+	if _, err := v.WriteWiki("foo.md", "pre-existing page\n"); err != nil {
+		t.Fatalf("WriteWiki foo: %v", err)
+	}
+	if err := v.UpdateIndex("foo", "Foo", []string{"golang"}); err != nil {
+		t.Fatalf("UpdateIndex foo: %v", err)
+	}
+
+	db.NoteWikiPathSharedErrForTest = errors.New("injected NoteWikiPathShared failure")
+
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+	t.Cleanup(func() { slog.SetDefault(prevLogger) })
+
+	processNotes(ctx, en, db, v)
+
+	if !strings.Contains(logBuf.String(), "failed to check shared wiki path for deleted note") {
+		t.Errorf("expected the shared-check failure to be logged, got: %s", logBuf.String())
+	}
+
+	// The record must survive for a retry next cycle — not deleted from the
+	// DB despite the failed check.
+	if !noteRecordExists(t, db, "notes/gone/foo.md") {
+		t.Error("expected the DB record for notes/gone/foo.md to survive a failed shared check")
+	}
+	// Its page and index entry must also be left alone: the failed check must
+	// not fall through to the delete-page branch either.
+	pageContent := readFile(t, filepath.Join(tmpDir, "wiki", "foo.md"))
+	assertContains(t, pageContent, "pre-existing page")
+	indexContent := readFile(t, filepath.Join(tmpDir, "index.md"))
+	assertContains(t, indexContent, "[[foo]]")
+}
+
+// TestProcessNotes_SlugCollision_DeleteBothNotesInSharedGroup covers deleting
+// TWO notes that share one wiki_path record across the deletion-reconcile
+// loop: the first one processed must only drop its own DB record (the page is
+// still claimed by the second, live-in-the-DB record at that point in the
+// loop); the second one processed must then see the path as no longer shared
+// (the first's record is already gone) and correctly remove the page and
+// index entry. If this ordering broke, the page could be orphaned forever —
+// never cleaned up because every pass sees "shared" and defers to the other
+// record, which itself has already been deleted.
+//
+// Both records are seeded directly via UpsertNote, pointing at the same
+// wiki_path, mirroring the legacy pre-fix duplicate state (as in
+// TestProcessNotes_SlugCollision_RepairsPreExistingDuplicateWikiPath and
+// TestProcessNotes_DeleteNoteWithSharedWikiPath) rather than produced via a
+// real collision+resolve cycle: letting both note files exist on disk and
+// running processNotes once would trigger RepairDuplicateNoteWikiPaths and
+// split them onto distinct slugs before any deletion is ever reconciled,
+// which would defeat this scenario rather than exercise it. Neither file is
+// ever written to notes/ — functionally equivalent to writing both and then
+// deleting them before the next cycle, which is what the deletion-reconcile
+// loop actually observes either way (it only compares the DB against the
+// current scan, not history).
+func TestProcessNotes_SlugCollision_DeleteBothNotesInSharedGroup(t *testing.T) {
+	tmpDir, db, v, _, en := setupTestEnv(t)
+	ctx := context.Background()
+
+	if err := db.UpsertNote("notes/a/foo.md", "stale-hash-a", "wiki/foo.md"); err != nil {
+		t.Fatalf("seeding stale record a: %v", err)
+	}
+	if err := db.UpsertNote("notes/b/foo.md", "stale-hash-b", "wiki/foo.md"); err != nil {
+		t.Fatalf("seeding stale record b: %v", err)
+	}
+	if _, err := v.WriteWiki("foo.md", "shared legacy page\n"); err != nil {
+		t.Fatalf("WriteWiki foo: %v", err)
+	}
+	if err := v.UpdateIndex("foo", "Foo", []string{"golang"}); err != nil {
+		t.Fatalf("UpdateIndex foo: %v", err)
+	}
+
+	processNotes(ctx, en, db, v)
+
+	// No orphan: both DB records are gone, and the once-shared page and its
+	// index entry are gone too — regardless of which record the deletion
+	// loop happened to visit first.
+	if noteRecordExists(t, db, "notes/a/foo.md") {
+		t.Error("expected the DB record for notes/a/foo.md to be removed")
+	}
+	if noteRecordExists(t, db, "notes/b/foo.md") {
+		t.Error("expected the DB record for notes/b/foo.md to be removed")
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "foo.md")); !os.IsNotExist(err) {
+		t.Errorf("expected wiki/foo.md to be removed once both sharing records are deleted, stat err: %v", err)
+	}
+	indexContent := readFile(t, filepath.Join(tmpDir, "index.md"))
+	assertNotContains(t, indexContent, "[[foo]]")
 }
