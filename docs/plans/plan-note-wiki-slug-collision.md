@@ -26,8 +26,8 @@ Slug resolution for a note `nf`:
 1. If the DB record for `nf.Path` has a non-empty `wiki_path` **and** no other note
    record shares it, reuse it (slug = basename of `wiki_path` without `.md`).
 2. Otherwise start from `notes.TitleFromFilename(nf.Path)` and take the first
-   candidate `<slug>`, `<slug>-2` … `<slug>-100` where `wiki/<candidate>.md` does not
-   exist. Cap reached → log an error naming the slug and skip the note; nothing is
+   candidate `<slug>`, `<slug>-2` … `<slug>-100` where `wiki/<candidate>.md` has no
+   content. Cap reached → log an error naming the slug and skip the note; nothing is
    overwritten.
 
 The existence check and the write happen inside the existing `db.WithFileLock`
@@ -43,12 +43,16 @@ Failing tests first (spec-only subagent), then minimal implementation.
   `WikiPath`. Replaces the `GetNoteHash` call in `processNotes` (one query instead of
   two).
 - `NoteWikiPathShared(path, wikiPath string) (bool, error)` — true when another note
-  record has the same `wiki_path`. Used by rule 1 and by the deletion reconcile.
+  record has the same `wiki_path`. Used by the deletion reconcile.
+- `NotesSharingWikiPath(path, wikiPath string) ([]string, error)` — the paths of
+  other note records sharing `wikiPath`. Used by rule 1, which only counts a sharer
+  as a real collision if its path is still in the current scan (`scannedPaths`) —
+  a leftover record from a deleted note doesn't count (round-1 review fix).
 
 ### 2. Slug resolution — `cmd/main.go`
 
-- New helper `resolveNoteWikiSlug(db, v, rec, nf) (string, error)` implementing the
-  two rules above. Called inside `WithFileLock`, before `WriteWiki`.
+- New helper `resolveNoteWikiSlug(db, v, rec, recExists, nf, scannedPaths) (string, error)`
+  implementing the two rules above. Called inside `WithFileLock`, before `WriteWiki`.
 - Old-index removal and `## Related` carry-over read from the **resolved** slug's
   path, not the recomputed one.
 
@@ -61,24 +65,13 @@ Failing tests first (spec-only subagent), then minimal implementation.
 ### 4. One-time repair for vaults already hit by #95
 
 - At the start of `processNotes`: for each `wiki_path` held by more than one note
-  record, clear the content hash of every record in that duplicate group
-  (`UPDATE notes SET content_hash = '' …`), not just all-but-one. The next pass of
-  the same cycle reprocesses all of them. Rule 1's shared check
-  (`NoteWikiPathShared`) only sees a sibling's *current* `wiki_path`, and that only
-  changes once the sibling itself resolves and is re-upserted later in this same
-  loop — so a record still finds the path shared, and falls through to rule 2,
-  for as long as any sibling hasn't resolved yet; rule 2 in turn reuses the bare
-  slug rather than suffixing only if `wiki/<slug>.md` happens to have no content
-  on disk at that exact moment. In the common case — the bare-slug file already
-  exists from before the repair — this means every record but one goes through
-  rule 2 and gets suffixed, while the one record left once all its siblings have
-  already resolved away finds the path no longer shared and reuses it via rule 1;
-  scan order decides which record that is, same as any other fresh collision.
-  Separately, a live note that happens to share its stored `wiki_path` with a
-  now-deleted note's leftover DB record resolves via rule 2 (suffixed) even
-  though it is the only real claimant — that leftover record is never itself
-  reprocessed, since its file is gone, so the shared check never clears — until
-  the deletion reconcile cleans up the stale record later in the same cycle.
+  record, clear the content hash of every record in that duplicate group in one
+  atomic statement, not just all-but-one. The next pass of the same cycle
+  reprocesses all of them: each one except the last one scanned is suffixed, and
+  the last one keeps the bare slug.
+- A live note's own stored `wiki_path` is never pushed off it by a leftover
+  record belonging to a note no longer on disk — rule 1's shared check only
+  counts a sharer still present in the current scan (`scannedPaths`).
 - Idempotent: once paths are unique the query returns nothing.
 
 ### 5. Docs

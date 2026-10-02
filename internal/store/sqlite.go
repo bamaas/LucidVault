@@ -217,6 +217,34 @@ func (s *Store) NoteWikiPathShared(path, wikiPath string) (bool, error) {
 	return count > 0, nil
 }
 
+// NotesSharingWikiPath returns the paths of note records other than path
+// that already claim wikiPath. Unlike NoteWikiPathShared, it returns the
+// sharers themselves so the caller can tell a still-live claim apart from a
+// leftover record belonging to a note no longer on disk (ADR-029).
+func (s *Store) NotesSharingWikiPath(path, wikiPath string) ([]string, error) {
+	if wikiPath == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query("SELECT path FROM notes WHERE wiki_path = ? AND path != ?", wikiPath, path)
+	if err != nil {
+		return nil, fmt.Errorf("querying notes sharing wiki_path %q: %w", wikiPath, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var sharers []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("scanning note sharing wiki_path %q: %w", wikiPath, err)
+		}
+		sharers = append(sharers, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating notes sharing wiki_path %q: %w", wikiPath, err)
+	}
+	return sharers, nil
+}
+
 // RepairDuplicateNoteWikiPaths fixes vaults hit by issue #95: when more than
 // one note record shares the same wiki_path, it clears the content_hash of
 // every record in that duplicate group, so the next scan treats all of them
@@ -225,35 +253,20 @@ func (s *Store) NoteWikiPathShared(path, wikiPath string) (bool, error) {
 // Scan order, not this repair, decides which one lands on the bare slug.
 // Idempotent once wiki_path values are unique.
 func (s *Store) RepairDuplicateNoteWikiPaths() (int, error) {
-	rows, err := s.db.Query(`
-		SELECT path FROM notes
+	res, err := s.db.Exec(`
+		UPDATE notes SET content_hash = ''
 		WHERE wiki_path != '' AND wiki_path IN (
 			SELECT wiki_path FROM notes WHERE wiki_path != '' GROUP BY wiki_path HAVING COUNT(*) > 1
 		)
 	`)
 	if err != nil {
-		return 0, fmt.Errorf("querying duplicate note wiki paths: %w", err)
+		return 0, fmt.Errorf("clearing content_hash for duplicate note wiki paths: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var toClear []string
-	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
-			return 0, fmt.Errorf("scanning duplicate note row: %w", err)
-		}
-		toClear = append(toClear, path)
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting repaired duplicate note wiki paths: %w", err)
 	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterating duplicate note rows: %w", err)
-	}
-
-	for _, path := range toClear {
-		if _, err := s.db.Exec("UPDATE notes SET content_hash = '' WHERE path = ?", path); err != nil {
-			return 0, fmt.Errorf("clearing content_hash for %q: %w", path, err)
-		}
-	}
-	return len(toClear), nil
+	return int(affected), nil
 }
 
 func (s *Store) UpsertNote(path, contentHash, wikiPath string) error {

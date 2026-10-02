@@ -369,6 +369,18 @@ func TestProcessNotes_SlugCollision_RepairsPreExistingDuplicateWikiPath(t *testi
 	if _, err := v.WriteWiki("kept.md", "# Kept\n\nStill here.\n"); err != nil {
 		t.Fatalf("WriteWiki kept: %v", err)
 	}
+	// And a stale index.md entry for "foo", as the legacy "last writer
+	// wins" state would have left it: whichever note's title happened to
+	// be indexed last. Round-1 review fix: RemoveFromIndex(wikiSlug) must
+	// now run unconditionally inside the file lock, even though both
+	// records hit this cycle with existingHash == "" (RepairDuplicateNoteWikiPaths
+	// just cleared it) — otherwise UpdateIndex below is a no-op because an
+	// entry for "foo" already exists, and this stale title/tags would
+	// survive indefinitely instead of being refreshed to the resolving
+	// note's own title/tags.
+	if err := v.UpdateIndex("foo", "Stale Legacy Title", []string{"stale"}); err != nil {
+		t.Fatalf("seeding stale index entry for foo: %v", err)
+	}
 
 	processNotes(ctx, en, db, v)
 
@@ -420,6 +432,22 @@ func TestProcessNotes_SlugCollision_RepairsPreExistingDuplicateWikiPath(t *testi
 	// must never read the old (stale, not-its-own) wiki/foo.md content.
 	assertNotContains(t, fooContent, "[[kept]]")
 	assertNotContains(t, fooContent, "## Related")
+
+	// The index entry for "foo" must be refreshed to whichever note
+	// actually resolved to it — never left holding the stale legacy
+	// title/tags seeded above (round-1 review fix: RemoveFromIndex must
+	// run unconditionally, not only when existingHash != "").
+	indexContent := readFile(t, filepath.Join(tmpDir, "index.md"))
+	assertNotContains(t, indexContent, "Stale Legacy Title")
+	assertNotContains(t, indexContent, "[stale]")
+	switch {
+	case recA.WikiPath == "wiki/foo.md":
+		assertContains(t, indexContent, "[[foo]] — Note A")
+		assertContains(t, indexContent, "[alpha]")
+	case recB.WikiPath == "wiki/foo.md":
+		assertContains(t, indexContent, "[[foo]] — Note B")
+		assertContains(t, indexContent, "[beta]")
+	}
 }
 
 // TestProcessNotes_NoCollision_SlugUnchanged is the plan's fifth test case
@@ -588,13 +616,14 @@ func newResolveTestEnv(t *testing.T) (*store.Store, *vault.Vault) {
 // as free, and both edges of the 100-candidate cap.
 func TestResolveNoteWikiSlug(t *testing.T) {
 	tests := []struct {
-		name      string
-		setup     func(t *testing.T, db *store.Store, v *vault.Vault)
-		rec       store.NoteRecord
-		recExists bool
-		notePath  string
-		wantSlug  string
-		wantErr   bool
+		name         string
+		setup        func(t *testing.T, db *store.Store, v *vault.Vault)
+		rec          store.NoteRecord
+		recExists    bool
+		notePath     string
+		scannedPaths []string
+		wantSlug     string
+		wantErr      bool
 	}{
 		{
 			name: "reuses the stored wiki_path when no other record shares it",
@@ -623,10 +652,36 @@ func TestResolveNoteWikiSlug(t *testing.T) {
 					t.Fatalf("WriteWiki: %v", err)
 				}
 			},
-			rec:       store.NoteRecord{Path: "notes/a/foo.md", WikiPath: "wiki/foo.md"},
-			recExists: true,
-			notePath:  "notes/a/foo.md",
-			wantSlug:  "foo-2",
+			rec:          store.NoteRecord{Path: "notes/a/foo.md", WikiPath: "wiki/foo.md"},
+			recExists:    true,
+			notePath:     "notes/a/foo.md",
+			scannedPaths: []string{"notes/a/foo.md", "notes/b/foo.md"},
+			wantSlug:     "foo-2",
+		},
+		{
+			// ADR-029 / issue 95 round-1 review: a stored wiki_path shared
+			// only with a record whose own note no longer exists on disk is
+			// not a real collision — that leftover record is cleaned up
+			// separately by the deletion reconcile, so rule 1 must still
+			// reuse the bare slug here instead of falling through to rule 2.
+			name: "stored wiki_path shared only with a deleted note's leftover record resolves via rule 1",
+			setup: func(t *testing.T, db *store.Store, v *vault.Vault) {
+				t.Helper()
+				if err := db.UpsertNote("notes/a/foo.md", "hash-a", "wiki/foo.md"); err != nil {
+					t.Fatalf("UpsertNote a: %v", err)
+				}
+				if err := db.UpsertNote("notes/gone/foo.md", "hash-gone", "wiki/foo.md"); err != nil {
+					t.Fatalf("UpsertNote gone: %v", err)
+				}
+				if _, err := v.WriteWiki("foo.md", "taken\n"); err != nil {
+					t.Fatalf("WriteWiki: %v", err)
+				}
+			},
+			rec:          store.NoteRecord{Path: "notes/a/foo.md", WikiPath: "wiki/foo.md"},
+			recExists:    true,
+			notePath:     "notes/a/foo.md",
+			scannedPaths: []string{"notes/a/foo.md"},
+			wantSlug:     "foo",
 		},
 		{
 			name: "a record with an empty stored wiki_path resolves fresh",
@@ -700,7 +755,7 @@ func TestResolveNoteWikiSlug(t *testing.T) {
 			wantErr:   true,
 		},
 		{
-			name: "NoteWikiPathShared error propagates (cmd/main.go rule 1 error branch)",
+			name: "NotesSharingWikiPath error propagates (cmd/main.go rule 1 error branch)",
 			setup: func(t *testing.T, db *store.Store, _ *vault.Vault) {
 				t.Helper()
 				if err := db.Close(); err != nil {
@@ -722,7 +777,11 @@ func TestResolveNoteWikiSlug(t *testing.T) {
 			}
 
 			nf := notes.NoteFile{Path: tt.notePath}
-			slug, err := resolveNoteWikiSlug(db, v, tt.rec, tt.recExists, nf)
+			scannedPaths := map[string]struct{}{tt.notePath: {}}
+			for _, p := range tt.scannedPaths {
+				scannedPaths[p] = struct{}{}
+			}
+			slug, err := resolveNoteWikiSlug(db, v, tt.rec, tt.recExists, nf, scannedPaths)
 
 			if tt.wantErr {
 				if err == nil {
@@ -803,28 +862,25 @@ func TestProcessNotes_DeleteNoteWithSharedWikiPath(t *testing.T) {
 // interaction documented in the plan and ADR-029 between rule-1 resolution
 // and the deletion reconcile: a LIVE note ("keep") whose own stored
 // wiki_path is "wiki/foo.md" shares that path with a DELETED note's ("gone")
-// leftover DB record. Even though "keep" is the only real claimant, its
-// rule-1 check (NoteWikiPathShared) still reports the path as shared — "gone"
-// is never itself reprocessed, since its file is gone — so "keep" falls
-// through to rule 2 and claims a suffixed slug instead of reusing "foo"
-// directly. The deletion-reconcile pass later in the same cycle then finds
-// "gone"'s record no longer shared (by then "keep" has moved its own
-// wiki_path off "wiki/foo.md") and cleans up the stale bare-slug page and its
-// index entry.
+// leftover DB record. "keep" is the only real claimant, so resolveNoteWikiSlug's
+// rule-1 check must see the stored slug as unshared — a record belonging to
+// a note no longer in the current scan doesn't count as a collision (round-1
+// review fix) — and "keep" reuses "foo" directly instead of being pushed onto
+// a suffix. The deletion-reconcile pass later in the same cycle then drops
+// "gone"'s now-stale DB record; "keep"'s page and index entry, which the
+// shared check there finds still live, are left untouched.
 //
 // wiki/foo.md is pre-written with stale legacy content and indexed before
 // processNotes runs, simulating the page as it was left by whichever note
-// last owned it before "gone" was deleted. This matters for the resolution
-// mechanics, not just the cleanup assertion: rule 2 only returns the bare
-// "foo" slug if wiki/foo.md has no content, so without this the test
-// wouldn't actually exercise a suffix — "keep" would land right back on
-// "foo" and the scenario this test documents (shared-but-sole-claimant still
-// gets suffixed) would never happen.
+// last owned it before "gone" was deleted. This also pins down that "keep"'s
+// reprocessing overwrites that stale content with its own, and refreshes the
+// index entry's title/tags rather than leaving them stale (round-1 review
+// fix: RemoveFromIndex is now called unconditionally).
 func TestProcessNotes_LiveNoteSharesStoredWikiPathWithDeletedNote(t *testing.T) {
 	tmpDir, db, v, _, en := setupTestEnv(t)
 	ctx := context.Background()
 
-	keepContent := noteContent("Keep", "golang", "Live note content that must land on a suffixed slug.")
+	keepContent := noteContent("Keep", "golang", "Live note content that must keep the bare slug.")
 	writeNoteFile(t, tmpDir, "notes/keep/foo.md", keepContent)
 
 	// "keep" already has a DB record pointing at the bare slug, same as any
@@ -848,27 +904,37 @@ func TestProcessNotes_LiveNoteSharesStoredWikiPathWithDeletedNote(t *testing.T) 
 
 	processNotes(ctx, en, db, v)
 
-	// "keep" resolved via rule 2 onto a suffixed slug, not the bare one it
-	// used to own — the shared check forced it off "foo".
+	// "keep" must reuse the bare slug it already owned — the leftover
+	// "gone" record must not be treated as a live collision.
 	recKeep := findNoteRecord(t, db, "notes/keep/foo.md")
-	if recKeep.WikiPath != "wiki/foo-2.md" {
-		t.Fatalf("expected notes/keep/foo.md to resolve to wiki/foo-2.md, got %q", recKeep.WikiPath)
+	if recKeep.WikiPath != "wiki/foo.md" {
+		t.Fatalf("expected notes/keep/foo.md to keep wiki/foo.md, got %q", recKeep.WikiPath)
 	}
-	keepWikiContent := readFile(t, filepath.Join(tmpDir, "wiki", "foo-2.md"))
-	assertContains(t, keepWikiContent, "Live note content that must land on a suffixed slug.")
+	keepWikiContent := readFile(t, filepath.Join(tmpDir, "wiki", "foo.md"))
+	assertContains(t, keepWikiContent, "Live note content that must keep the bare slug.")
+	assertNotContains(t, keepWikiContent, "legacy shared content, now stale")
 
-	// "gone"'s stale record is gone, and now that it's no longer shared with
-	// a live record, the deletion reconcile removed the stale bare-slug page
-	// and index entry it left behind — not orphaned.
+	// No suffixed page is ever created for "keep".
+	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "foo-2.md")); !os.IsNotExist(err) {
+		t.Errorf("expected no wiki/foo-2.md to be created, stat err: %v", err)
+	}
+
+	// "gone"'s stale record is removed, but "keep"'s page is still shared
+	// (by "keep" itself) at reconcile time, so the deletion reconcile must
+	// not delete the file or the index entry.
 	if noteRecordExists(t, db, "notes/gone/foo.md") {
 		t.Error("expected the DB record for notes/gone/foo.md to be removed")
 	}
-	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "foo.md")); !os.IsNotExist(err) {
-		t.Errorf("expected the stale wiki/foo.md page to be removed, stat err: %v", err)
+	if _, err := os.Stat(filepath.Join(tmpDir, "wiki", "foo.md")); os.IsNotExist(err) {
+		t.Error("expected wiki/foo.md to survive — it still belongs to the live note \"keep\"")
 	}
+
+	// The index entry must be refreshed to "keep"'s own title, not left
+	// holding the stale "Foo" title seeded before processNotes ran.
 	indexContent := readFile(t, filepath.Join(tmpDir, "index.md"))
-	assertContains(t, indexContent, "[[foo-2]]")
-	assertNotContains(t, indexContent, "[[foo]]")
+	assertContains(t, indexContent, "[[foo]] — Keep")
+	assertNotContains(t, indexContent, "[[foo]] — Foo")
+	assertNotContains(t, indexContent, "[[foo-2]]")
 }
 
 // TestProcessNotes_SlugCollision_DeleteBothNotesInSharedGroup covers deleting

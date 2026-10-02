@@ -638,7 +638,7 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 		var wikiSlug, wikiPath string
 		finalContent := wikiContent
 		err = db.WithFileLock(func() error {
-			slug, slugErr := resolveNoteWikiSlug(db, v, rec, recExists, nf)
+			slug, slugErr := resolveNoteWikiSlug(db, v, rec, recExists, nf, scannedPaths)
 			if slugErr != nil {
 				return slugErr
 			}
@@ -646,10 +646,18 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 			wikiFilename := wikiSlug + ".md"
 			wikiRelPath := filepath.Join("wiki", wikiFilename)
 
-			if existingHash != "" {
-				if err := v.RemoveFromIndex(wikiSlug); err != nil {
-					return fmt.Errorf("removing old index entry: %w", err)
-				}
+			// Unconditional: after RepairDuplicateNoteWikiPaths clears
+			// content_hash for every record in a duplicate group,
+			// existingHash == "" for all of them, including the one that
+			// ends up keeping the bare slug — UpdateIndex below is a no-op
+			// if an entry already exists, so without this the index could
+			// keep the OTHER (wrong) note's title/tags indefinitely. Safe
+			// because rule 1 only returns a slug this note already owns
+			// unshared, and rule 2 only returns a slug whose file is
+			// empty/missing, so no other live page can legitimately own
+			// this index entry at this point.
+			if err := v.RemoveFromIndex(wikiSlug); err != nil {
+				return fmt.Errorf("removing old index entry: %w", err)
 			}
 
 			var carryLines []string
@@ -760,16 +768,25 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 }
 
 // resolveNoteWikiSlug implements the ADR-029 slug resolution rules:
-//  1. Reuse the note's stored wiki_path slug if no other note record shares
-//     it.
+//  1. Reuse the note's stored wiki_path slug if no other note record whose
+//     own source file is still in scannedPaths shares it. A record left
+//     over from a note that no longer exists on disk doesn't count as a
+//     collision — it's cleaned up separately by the deletion reconcile.
 //  2. Otherwise claim the first free "<base>", "<base>-2", ... "<base>-100"
 //     slug, where "free" means wiki/<candidate>.md has no content. Returns
 //     an error if all 100 candidates are taken.
-func resolveNoteWikiSlug(db *store.Store, v *vault.Vault, rec store.NoteRecord, recExists bool, nf notes.NoteFile) (string, error) {
+func resolveNoteWikiSlug(db *store.Store, v *vault.Vault, rec store.NoteRecord, recExists bool, nf notes.NoteFile, scannedPaths map[string]struct{}) (string, error) {
 	if recExists && rec.WikiPath != "" {
-		shared, err := db.NoteWikiPathShared(nf.Path, rec.WikiPath)
+		sharers, err := db.NotesSharingWikiPath(nf.Path, rec.WikiPath)
 		if err != nil {
 			return "", fmt.Errorf("checking shared wiki path for %q: %w", nf.Path, err)
+		}
+		shared := false
+		for _, sharer := range sharers {
+			if _, live := scannedPaths[sharer]; live {
+				shared = true
+				break
+			}
 		}
 		if !shared {
 			return strings.TrimSuffix(filepath.Base(rec.WikiPath), ".md"), nil
