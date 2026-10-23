@@ -1,3 +1,9 @@
+## v0.26.4 (2026-10-02)
+
+### Fix
+
+- **notes**: claim note wiki slugs once, suffix on collision (#101)
+
 ## v0.26.3 (2026-10-02)
 
 ### Fix

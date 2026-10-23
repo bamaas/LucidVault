@@ -473,6 +473,14 @@ Body two.
 // auto-link-format ## Related line, processNotes must not inherit that stale
 // content, because carry-over only reads the OLD wiki copy when the DB
 // already has a record for the note (existingHash != "").
+//
+// Updated for ADR-029 (issue #95): a pre-existing wiki/<slug>.md with real
+// content is "taken" regardless of who wrote it — the pipeline can't tell a
+// leftover file from a hand-written or bookmark page, so it must not be
+// read or overwritten. The new note now resolves to the next free suffixed
+// slug (my-note-2.md) instead of clobbering my-note.md; this still proves
+// the stale ## Related content is never inherited, since the stale file is
+// never even read.
 func TestProcessNotes_NewNoteDoesNotCarryOverStaleWikiFile(t *testing.T) {
 	tmpDir, db, v, _, en := setupTestEnv(t)
 	ctx := context.Background()
@@ -502,11 +510,53 @@ tags:
 	// No DB record exists yet for notes/my-note.md — this is the new-note path.
 	processNotes(ctx, en, db, v)
 
-	noteWiki := filepath.Join(tmpDir, "wiki", "my-note.md")
+	// The stale, unowned file is left completely untouched (ADR-029: "taken"
+	// without the pipeline needing to know which kind it is).
+	staleAfter := readFile(t, filepath.Join(tmpDir, "wiki", "my-note.md"))
+	if staleAfter != staleWiki {
+		t.Errorf("expected stale wiki/my-note.md to be untouched\nbefore:\n%s\nafter:\n%s", staleWiki, staleAfter)
+	}
+
+	// The note itself is suffixed onto the next free slug, with no carry-over.
+	noteWiki := filepath.Join(tmpDir, "wiki", "my-note-2.md")
 	after := readFile(t, noteWiki)
 	assertContains(t, after, "Version one")
 	assertNotContains(t, after, "[[leftover-bookmark]]")
 	assertNotContains(t, after, "## Related")
+
+	// The above only proves the carry-over guard isn't needed on a brand-new
+	// note (existingHash == ""). Now exercise the REAL guard: give the note's
+	// own resolved page (my-note-2.md) a legitimate auto-linked ## Related
+	// section, edit the note again (existingHash != "" this time), and
+	// verify the auto-linked line correctly carries forward from the note's
+	// OWN prior page — while the unrelated stray file's stale content still
+	// never leaks in.
+	relatedPage := relatedBookmarkWiki
+	if _, err := v.WriteWiki("related-page.md", relatedPage); err != nil {
+		t.Fatalf("WriteWiki related-page: %v", err)
+	}
+	syncEdgesFromContent(db, "related-page", relatedPage)
+	if err := v.UpdateIndex("related-page", "Related Page", []string{"golang", "testing"}); err != nil {
+		t.Fatalf("UpdateIndex related-page: %v", err)
+	}
+	autoLinkRelated(db, v, "related-page", []string{"golang", "testing"}, relatedPage)
+
+	withRelated := readFile(t, noteWiki)
+	assertContains(t, withRelated, "- [[related-page]] — shared tags: golang, testing")
+
+	if err := os.WriteFile(notePath, []byte(relatedNoteV2), 0o644); err != nil {
+		t.Fatalf("WriteFile v2: %v", err)
+	}
+	processNotes(ctx, en, db, v)
+
+	final := readFile(t, noteWiki)
+	assertContains(t, final, "Version two")
+	// Legitimate current-cycle auto-link content from this note's own prior
+	// page must survive the rebuild.
+	assertContains(t, final, "- [[related-page]] — shared tags: golang, testing")
+	// The unrelated stray file's content must never leak into this note's
+	// page, even now that the real carry-over guard is exercised.
+	assertNotContains(t, final, "[[leftover-bookmark]]")
 }
 
 // TestProcessNotes_SkipsNoteWhenOldWikiCopyReadFails verifies that when
