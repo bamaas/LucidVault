@@ -136,6 +136,13 @@ docs/plans/
 2. `/decompose docs/plans/plan-feature.md` — (large features only) break plan into sub-plans
 3. `/deliver docs/plans/plan-feature.md` — implement + test + review + PR (loops per sub-plan if decomposed)
 
+### Bug workflow
+
+GitHub issues are the only bug record — no plan files or ADRs per bug.
+
+1. `/bug "<description>"` or `/bug N` — verify, deduplicate, set priority (`P0-critical`…`P3-low`) and `cluster/<name>`, post a `## Fix direction` comment; `needs-decision` when an ADR is needed
+2. `/fix [N | all]` — one cluster → regression test `TestIssueN_*` + fix + test + review → one PR with `Fixes #N`
+
 ## Workflow
 
 - **Commit after every feature or fix** — When you complete a new feature or bug fix, present a summary of the changes for review. On approval, create a git commit immediately. Do not batch multiple features/fixes into a single commit.
