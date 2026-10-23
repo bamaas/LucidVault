@@ -1,3 +1,9 @@
+## v0.26.5 (2026-10-23)
+
+### Fix
+
+- **deps**: bump go toolchain to 1.26.10 for stdlib security fixes (#103)
+
 ## v0.26.4 (2026-10-02)
 
 ### Fix
