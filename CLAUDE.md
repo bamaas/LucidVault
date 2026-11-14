@@ -96,6 +96,8 @@ mise run lint:commits          # Check commit message (used by commit-msg hook)
 - `VAULT_PATH` — (required) Path to Obsidian vault
 - `RAINDROP_ACCESS_TOKEN` — (optional) Enables Raindrop.io as an inbox feeder
 - `SUPADATA_API_KEY` — (optional) Supadata API key for YouTube transcript extraction
+- `SUPADATA_LANG` — (optional, default: empty) Preferred YouTube transcript language (ISO 639-1), sent as `lang` to Supadata via `YouTubeClient.SetLang`. Empty sends no preference (Supadata returns its first track).
+- `OLLAMA_BASE_URL` — (optional, default: `https://ollama.com`) Ollama API endpoint, applied with `enrich.Client.SetBaseURL`. Trailing slash trimmed. For self-hosted Ollama.
 - `HYGIENE_INTERVAL` — (optional, default: 10) Run vault hygiene every Nth poll cycle
 - `MCP_HTTP_ADDR` — (optional, default: empty/off) Serve the MCP server over HTTP in-process with the pipeline (e.g. `:8080`), sharing the same `*store.Store` and `*vault.Vault`. The MCP server can run in-process — no second container or process — which keeps SQLite writes safe.
 - `MCP_ALLOWED_HOST` — (optional, default: `localhost,127.0.0.1`) Comma-separated Host-header allowlist for the in-process MCP server; `*` or empty disables the guard (for Kubernetes ClusterIP + NetworkPolicy)

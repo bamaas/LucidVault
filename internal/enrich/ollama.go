@@ -78,7 +78,8 @@ func NewClient(apiKey, model string, maxRetries, delayMs int) *Client {
 	}
 }
 
-// SetBaseURL overrides the Ollama API endpoint (used in tests).
+// SetBaseURL overrides the Ollama API endpoint: a self-hosted Ollama server
+// via OLLAMA_BASE_URL, or a test server.
 func (c *Client) SetBaseURL(url string) { c.baseURL = url }
 
 func (c *Client) Enrich(ctx context.Context, input *EnrichInput) (string, error) {
