@@ -25,6 +25,13 @@ func TestLoadConfig_OllamaModelRequired(t *testing.T) {
 			wantErrSubstr: "OLLAMA_MODEL",
 		},
 		{
+			name:          "empty is an error",
+			env:           "",
+			set:           true,
+			wantErr:       true,
+			wantErrSubstr: "OLLAMA_MODEL",
+		},
+		{
 			name:          "whitespace-only is an error",
 			env:           "   ",
 			set:           true,
