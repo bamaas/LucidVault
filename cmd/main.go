@@ -895,9 +895,9 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 		return nil, fmt.Errorf("VAULT_PATH is required")
 	}
 
-	model := os.Getenv("OLLAMA_MODEL")
+	model := strings.TrimSpace(os.Getenv("OLLAMA_MODEL"))
 	if model == "" {
-		model = "qwen3.5"
+		return nil, fmt.Errorf("OLLAMA_MODEL is required")
 	}
 
 	pollInterval := 5 * time.Minute
