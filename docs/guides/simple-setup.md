@@ -65,9 +65,13 @@ Skip it and everything still works - just without personalization.
 ```bash
 docker run -d --name lucidvault --restart unless-stopped \
   -e OLLAMA_API_KEY=<your-key> \
+  -e OLLAMA_MODEL=<model> \
   -v ~/lucid-vault:/vault \
   ghcr.io/bamaas/lucidvault:latest
 ```
+
+Pick `<model>` from <https://ollama.com/search?c=cloud> (or `ollama list` on a
+self-hosted server) - there's no default.
 
 **With Raindrop.io** (auto-feeds bookmarks into the inbox) - add the token:
 
@@ -84,7 +88,7 @@ The repo root ships a single-container [`docker-compose.yml`](../../docker-compo
 that runs exactly this. From the repo root:
 
 ```bash
-cp .env.example .env      # then set OLLAMA_API_KEY
+cp .env.example .env      # then set OLLAMA_API_KEY and OLLAMA_MODEL
 docker compose up -d
 ```
 
@@ -102,6 +106,7 @@ touch ~/.claude/CLAUDE.md    # ensure it exists before mounting
 
 docker run -d --name lucidvault --restart unless-stopped \
   -e OLLAMA_API_KEY=<your-key> \
+  -e OLLAMA_MODEL=<model> \
   -e CLAUDE_MD_VAULT_PATH="$HOME/lucid-vault" \
   -v ~/lucid-vault:/vault \
   -v ~/.claude/CLAUDE.md:/CLAUDE.md \

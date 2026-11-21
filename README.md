@@ -50,6 +50,7 @@ Best for a single machine, no sync or chat UI.
 ```bash
 docker run -d --name lucidvault --restart unless-stopped \
   -e OLLAMA_API_KEY=<your-key> \
+  -e OLLAMA_MODEL=<model> \
   -v ~/lucid-vault:/vault \
   ghcr.io/bamaas/lucidvault:latest
 ```
@@ -76,7 +77,7 @@ Environment variables configure the service. CLI flags control one-off operation
 | `OLLAMA_API_KEY` | Yes | - | Ollama Cloud API key (free) |
 | `VAULT_PATH` | Yes | `/vault` (Docker) | Path to vault |
 | `RAINDROP_ACCESS_TOKEN` | No | - | Enables Raindrop.io as an inbox feeder. When set, bookmarks are synced to `inbox/` automatically. |
-| `OLLAMA_MODEL` | No | `qwen3.5` | LLM model for enrichment |
+| `OLLAMA_MODEL` | Yes | - | LLM model for enrichment. Pick one from <https://ollama.com/search?c=cloud> (or `ollama list` on a self-hosted server). |
 | `POLL_INTERVAL` | No | `5m` | How often to check for new inbox items |
 | `ENRICH_DELAY_MS` | No | `500` | Delay between API calls (rate limiting) |
 | `ENRICH_MAX_RETRIES` | No | `3` | Max retries on API failure |
