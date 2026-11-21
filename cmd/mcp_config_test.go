@@ -20,6 +20,7 @@ func unsetenv(t *testing.T, key string) error {
 // enabled only when set to a truthy value.
 func TestLoadConfig_MCPReadTools(t *testing.T) {
 	t.Setenv("OLLAMA_API_KEY", "test")
+	t.Setenv("OLLAMA_MODEL", "test-model")
 	t.Setenv("VAULT_PATH", "/tmp/test")
 
 	tests := []struct {
@@ -63,6 +64,7 @@ func TestLoadConfig_MCPReadTools(t *testing.T) {
 // honoured when set.
 func TestLoadConfig_MCPHTTPAddr(t *testing.T) {
 	t.Setenv("OLLAMA_API_KEY", "test")
+	t.Setenv("OLLAMA_MODEL", "test-model")
 	t.Setenv("VAULT_PATH", "/tmp/test")
 
 	// Default: empty → MCP off.
@@ -95,6 +97,7 @@ func TestLoadConfig_MCPHTTPAddr(t *testing.T) {
 //   - "" / "  " / "*"  → guard disabled (nil)
 func TestLoadConfig_MCPAllowedHost(t *testing.T) {
 	t.Setenv("OLLAMA_API_KEY", "test")
+	t.Setenv("OLLAMA_MODEL", "test-model")
 	t.Setenv("VAULT_PATH", "/tmp/test")
 
 	tests := []struct {

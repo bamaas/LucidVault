@@ -93,6 +93,7 @@ mise run lint:commits          # Check commit message (used by commit-msg hook)
 ## Environment Variables
 
 - `OLLAMA_API_KEY` — (required) Ollama Cloud API key
+- `OLLAMA_MODEL` — (required) LLM model for enrichment. No default — pick one from <https://ollama.com/search?c=cloud> (or `ollama list` on a self-hosted server). Trimmed of surrounding whitespace; unset or whitespace-only fails `loadConfig` with `OLLAMA_MODEL is required` (see `docs/adr/030-no-default-ollama-model.md`).
 - `VAULT_PATH` — (required) Path to Obsidian vault
 - `RAINDROP_ACCESS_TOKEN` — (optional) Enables Raindrop.io as an inbox feeder
 - `SUPADATA_API_KEY` — (optional) Supadata API key for YouTube transcript extraction

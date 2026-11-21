@@ -8,6 +8,7 @@ import "testing"
 func TestLoadConfig_OllamaBaseURL(t *testing.T) {
 	t.Setenv("OLLAMA_API_KEY", "test")
 	t.Setenv("VAULT_PATH", "/tmp/test")
+	t.Setenv("OLLAMA_MODEL", "test-model")
 
 	tests := []struct {
 		name string
@@ -38,6 +39,7 @@ func TestLoadConfig_OllamaBaseURL(t *testing.T) {
 func TestLoadConfig_SupadataLang(t *testing.T) {
 	t.Setenv("OLLAMA_API_KEY", "test")
 	t.Setenv("VAULT_PATH", "/tmp/test")
+	t.Setenv("OLLAMA_MODEL", "test-model")
 
 	tests := []struct {
 		name string
