@@ -1,3 +1,17 @@
+## v1.0.0 (2026-11-21)
+
+### BREAKING CHANGE
+
+- OLLAMA_MODEL is now required. Installs that never
+set it will fail at startup with "OLLAMA_MODEL is required" instead
+of silently defaulting to the now-retired qwen3.5. Pick a model from
+https://ollama.com/search?c=cloud (or `ollama list` for a self-hosted
+server) and set OLLAMA_MODEL before upgrading.
+
+### Feat
+
+- require OLLAMA_MODEL, drop qwen3.5 default (#107)
+
 ## v0.27.0 (2026-11-21)
 
 ### Feat
