@@ -36,6 +36,8 @@ type config struct {
 	enrichDelayMs     int
 	enrichRetries     int
 	supadataAPIKey    string
+	supadataLang      string
+	ollamaBaseURL     string
 	forceReEnrich     bool
 	forceReFetch      bool
 	hygieneInterval   int
@@ -139,10 +141,16 @@ func main() {
 	// Initialize scraper and enricher
 	sc := scraper.New()
 	if cfg.supadataAPIKey != "" {
-		sc.SetYouTubeClient(scraper.NewYouTubeClient(cfg.supadataAPIKey))
-		slog.Info("youtube transcript support enabled via supadata")
+		yt := scraper.NewYouTubeClient(cfg.supadataAPIKey)
+		yt.SetLang(cfg.supadataLang)
+		sc.SetYouTubeClient(yt)
+		slog.Info("youtube transcript support enabled via supadata", "lang", cfg.supadataLang)
 	}
 	en := enrich.NewClient(cfg.ollamaAPIKey, cfg.ollamaModel, cfg.enrichRetries, cfg.enrichDelayMs)
+	if cfg.ollamaBaseURL != "" {
+		en.SetBaseURL(cfg.ollamaBaseURL)
+		slog.Info("using custom ollama endpoint", "url", cfg.ollamaBaseURL)
+	}
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -929,6 +937,14 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 
 	supadataAPIKey := os.Getenv("SUPADATA_API_KEY")
 
+	// SUPADATA_LANG: preferred YouTube transcript language (ISO 639-1). Empty
+	// keeps Supadata's default (first available track).
+	supadataLang := strings.TrimSpace(os.Getenv("SUPADATA_LANG"))
+
+	// OLLAMA_BASE_URL: Ollama API endpoint. Empty keeps Ollama Cloud
+	// (https://ollama.com); set it to use a self-hosted Ollama server.
+	ollamaBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("OLLAMA_BASE_URL")), "/")
+
 	hygieneInterval := 10
 	if v := os.Getenv("HYGIENE_INTERVAL"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -971,6 +987,8 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 		enrichDelayMs:     enrichDelayMs,
 		enrichRetries:     enrichRetries,
 		supadataAPIKey:    supadataAPIKey,
+		supadataLang:      supadataLang,
+		ollamaBaseURL:     ollamaBaseURL,
 		forceReEnrich:     forceReEnrich,
 		forceReFetch:      forceReFetch,
 		hygieneInterval:   hygieneInterval,

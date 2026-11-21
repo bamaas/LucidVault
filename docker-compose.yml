@@ -13,6 +13,8 @@ services:
       - VAULT_PATH=/vault
       - RAINDROP_ACCESS_TOKEN=${RAINDROP_ACCESS_TOKEN:-}
       - SUPADATA_API_KEY=${SUPADATA_API_KEY:-}
+      - SUPADATA_LANG=${SUPADATA_LANG:-}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-}
       - POLL_INTERVAL=${POLL_INTERVAL:-}
       # Expose the in-process MCP server over HTTP (empty = off). The full-stack

@@ -270,3 +270,43 @@ func TestScrape_NonYouTubeUsesJina(t *testing.T) {
 		t.Errorf("got content %q, want jina content", result.Content)
 	}
 }
+
+// TestFetchTranscript_Lang verifies the preferred transcript language is sent
+// as `lang` only when set: videos with auto-translated tracks otherwise come
+// back in whichever language Supadata lists first.
+func TestFetchTranscript_Lang(t *testing.T) {
+	tests := []struct {
+		name     string
+		lang     string
+		wantLang string
+		wantSet  bool
+	}{
+		{name: "no preference omits lang", lang: "", wantSet: false},
+		{name: "preference is sent", lang: "en", wantLang: "en", wantSet: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotLang string
+			var gotSet bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotLang = r.URL.Query().Get("lang")
+				_, gotSet = r.URL.Query()["lang"]
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(transcriptResponse{Content: "transcript", Lang: "en"})
+			}))
+			defer srv.Close()
+
+			yt := NewYouTubeClient("test-key")
+			yt.SetBaseURL(srv.URL)
+			yt.SetLang(tt.lang)
+
+			if _, err := yt.FetchTranscript(context.Background(), "https://www.youtube.com/watch?v=abc123"); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotSet != tt.wantSet || gotLang != tt.wantLang {
+				t.Errorf("lang query = %q (present=%v), want %q (present=%v)", gotLang, gotSet, tt.wantLang, tt.wantSet)
+			}
+		})
+	}
+}

@@ -15,6 +15,7 @@ import (
 type YouTubeClient struct {
 	apiKey     string
 	baseURL    string
+	lang       string
 	httpClient *http.Client
 }
 
@@ -60,10 +61,20 @@ func NewYouTubeClient(apiKey string) *YouTubeClient {
 // SetBaseURL overrides the Supadata API endpoint (used in tests).
 func (yt *YouTubeClient) SetBaseURL(u string) { yt.baseURL = u }
 
+// SetLang sets the preferred transcript language (ISO 639-1, e.g. "en").
+// Without it Supadata returns whichever track comes first, which for videos
+// with auto-translated tracks can be any language. Supadata falls back to an
+// available language when the preferred one does not exist. Empty means no
+// preference.
+func (yt *YouTubeClient) SetLang(lang string) { yt.lang = lang }
+
 // FetchTranscript retrieves the transcript for a YouTube video URL.
 // It handles both synchronous (200) and asynchronous (202) responses.
 func (yt *YouTubeClient) FetchTranscript(ctx context.Context, videoURL string) (*Result, error) {
 	endpoint := fmt.Sprintf("%s/v1/transcript?url=%s&text=true", yt.baseURL, url.QueryEscape(videoURL))
+	if yt.lang != "" {
+		endpoint += "&lang=" + url.QueryEscape(yt.lang)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
