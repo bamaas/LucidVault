@@ -78,10 +78,12 @@ Environment variables configure the service. CLI flags control one-off operation
 | `VAULT_PATH` | Yes | `/vault` (Docker) | Path to vault |
 | `RAINDROP_ACCESS_TOKEN` | No | - | Enables Raindrop.io as an inbox feeder. When set, bookmarks are synced to `inbox/` automatically. |
 | `OLLAMA_MODEL` | Yes | - | LLM model for enrichment. Pick one from <https://ollama.com/search?c=cloud> (or `ollama list` on a self-hosted server). |
+| `OLLAMA_BASE_URL` | No | `https://ollama.com` | Ollama API endpoint. Set to use a self-hosted Ollama server (e.g. `http://ollama:11434`) instead of Ollama Cloud. |
 | `POLL_INTERVAL` | No | `5m` | How often to check for new inbox items |
 | `ENRICH_DELAY_MS` | No | `500` | Delay between API calls (rate limiting) |
 | `ENRICH_MAX_RETRIES` | No | `3` | Max retries on API failure |
 | `SUPADATA_API_KEY` | No | - | [Supadata](https://supadata.ai) API key for YouTube transcript extraction. When set, YouTube URLs are routed to Supadata instead of Jina. |
+| `SUPADATA_LANG` | No | - | Preferred YouTube transcript language (ISO 639-1, e.g. `en`). Without it Supadata returns the first available track, which for videos with auto-translated tracks can be any language. Falls back to an available language when the preferred one does not exist. |
 | `HYGIENE_INTERVAL` | No | `10` | Run vault hygiene (broken edge cleanup, index sync, raw/wiki consistency) every Nth poll cycle |
 | `MCP_HTTP_ADDR` | No | - | Serve the MCP server over HTTP in-process with the pipeline (e.g. `:8080`). Empty disables it. See [Exposing MCP over HTTP](#exposing-mcp-over-http). |
 | `MCP_ALLOWED_HOST` | No | `localhost,127.0.0.1` | Comma-separated Host-header allowlist (DNS-rebinding guard). `*` or empty disables the guard - needed in Kubernetes. |
