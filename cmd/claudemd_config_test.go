@@ -14,6 +14,7 @@ import "testing"
 // exercised (see MINOR-1, test round 2).
 func TestLoadConfig_ClaudeMDVaultPath(t *testing.T) {
 	t.Setenv("OLLAMA_API_KEY", "test")
+	t.Setenv("OLLAMA_MODEL", "test-model")
 	t.Setenv("VAULT_PATH", "/container/vault")
 
 	tests := []struct {

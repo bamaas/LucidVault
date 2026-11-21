@@ -283,6 +283,7 @@ func TestRunHygiene_EmptyVaultIsNoop(t *testing.T) {
 func TestLoadConfig_HygieneInterval(t *testing.T) {
 	// Set required vars
 	t.Setenv("OLLAMA_API_KEY", "test")
+	t.Setenv("OLLAMA_MODEL", "test-model")
 	t.Setenv("VAULT_PATH", "/tmp/test")
 
 	// Default
