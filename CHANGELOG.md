@@ -1,3 +1,13 @@
+## v0.27.0 (2026-11-21)
+
+### Feat
+
+- configurable Ollama endpoint and YouTube transcript language (#105)
+
+### Fix
+
+- **deps**: bump go toolchain to 1.26.11 for GO-2026-6859 (#106)
+
 ## v0.26.5 (2026-10-23)
 
 ### Fix
