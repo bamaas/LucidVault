@@ -282,8 +282,8 @@ func TestRunHygiene_EmptyVaultIsNoop(t *testing.T) {
 
 func TestLoadConfig_HygieneInterval(t *testing.T) {
 	// Set required vars
-	t.Setenv("OLLAMA_API_KEY", "test")
-	t.Setenv("OLLAMA_MODEL", "test-model")
+	t.Setenv("ENRICH_BASE_URL", "http://enrich.test/v1")
+	t.Setenv("ENRICH_MODEL", "test-model")
 	t.Setenv("VAULT_PATH", "/tmp/test")
 
 	// Default

@@ -19,8 +19,8 @@ func unsetenv(t *testing.T, key string) error {
 // default (native-first retrieval — agents read the vault directly), and
 // enabled only when set to a truthy value.
 func TestLoadConfig_MCPReadTools(t *testing.T) {
-	t.Setenv("OLLAMA_API_KEY", "test")
-	t.Setenv("OLLAMA_MODEL", "test-model")
+	t.Setenv("ENRICH_BASE_URL", "http://enrich.test/v1")
+	t.Setenv("ENRICH_MODEL", "test-model")
 	t.Setenv("VAULT_PATH", "/tmp/test")
 
 	tests := []struct {
@@ -63,8 +63,8 @@ func TestLoadConfig_MCPReadTools(t *testing.T) {
 // TestLoadConfig_MCPHTTPAddr verifies MCP_HTTP_ADDR parsing: empty by default,
 // honoured when set.
 func TestLoadConfig_MCPHTTPAddr(t *testing.T) {
-	t.Setenv("OLLAMA_API_KEY", "test")
-	t.Setenv("OLLAMA_MODEL", "test-model")
+	t.Setenv("ENRICH_BASE_URL", "http://enrich.test/v1")
+	t.Setenv("ENRICH_MODEL", "test-model")
 	t.Setenv("VAULT_PATH", "/tmp/test")
 
 	// Default: empty → MCP off.
@@ -96,8 +96,8 @@ func TestLoadConfig_MCPHTTPAddr(t *testing.T) {
 //   - unset            → default localhost,127.0.0.1
 //   - "" / "  " / "*"  → guard disabled (nil)
 func TestLoadConfig_MCPAllowedHost(t *testing.T) {
-	t.Setenv("OLLAMA_API_KEY", "test")
-	t.Setenv("OLLAMA_MODEL", "test-model")
+	t.Setenv("ENRICH_BASE_URL", "http://enrich.test/v1")
+	t.Setenv("ENRICH_MODEL", "test-model")
 	t.Setenv("VAULT_PATH", "/tmp/test")
 
 	tests := []struct {

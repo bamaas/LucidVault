@@ -14,9 +14,21 @@ func newTestServer(handler http.HandlerFunc) *httptest.Server {
 	return httptest.NewServer(handler)
 }
 
+// chatJSON builds an OpenAI-compatible chat completions response whose
+// choices[0].message.content is content. It uses plain maps so the tests do
+// not depend on the client's internal response types.
 func chatJSON(content string) []byte {
-	resp := chatResponse{}
-	resp.Message.Content = content
+	resp := map[string]any{
+		"id":     "chatcmpl-test",
+		"object": "chat.completion",
+		"choices": []map[string]any{
+			{
+				"index":         0,
+				"message":       map[string]any{"role": "assistant", "content": content},
+				"finish_reason": "stop",
+			},
+		},
+	}
 	b, _ := json.Marshal(resp)
 	return b
 }
@@ -57,7 +69,7 @@ func TestEnrich_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "## Summary") {
+	if !strings.Contains(result, "This is a test summary.") {
 		t.Errorf("expected result to contain Summary section, got: %s", result)
 	}
 }
@@ -88,7 +100,7 @@ func TestEnrich_RetryOnValidationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "## Summary") {
+	if !strings.Contains(result, "This is a test summary.") {
 		t.Errorf("expected valid result after retry, got: %s", result)
 	}
 	if calls.Load() != 2 {
@@ -145,7 +157,7 @@ func TestEnrich_RetryOnHTTPError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "## Summary") {
+	if !strings.Contains(result, "This is a test summary.") {
 		t.Errorf("expected valid result after retry, got: %s", result)
 	}
 }
@@ -175,7 +187,7 @@ func TestEnrich_RateLimitBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "## Summary") {
+	if !strings.Contains(result, "This is a test summary.") {
 		t.Errorf("expected valid result after rate limit retry")
 	}
 	if calls.Load() != 2 {
@@ -338,6 +350,8 @@ func TestSuggestTags_StripsWhitespaceAndBullets(t *testing.T) {
 }
 
 func TestSuggestTags_FallbackOnError(t *testing.T) {
+	// 5xx is not "backend unavailable" (ADR-031): it still ends in the
+	// ["untagged"] fallback without an error.
 	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("server error"))

@@ -13,8 +13,8 @@ import "testing"
 // usingVaultPathFallback -- so this table is the only place that condition is
 // exercised (see MINOR-1, test round 2).
 func TestLoadConfig_ClaudeMDVaultPath(t *testing.T) {
-	t.Setenv("OLLAMA_API_KEY", "test")
-	t.Setenv("OLLAMA_MODEL", "test-model")
+	t.Setenv("ENRICH_BASE_URL", "http://enrich.test/v1")
+	t.Setenv("ENRICH_MODEL", "test-model")
 	t.Setenv("VAULT_PATH", "/container/vault")
 
 	tests := []struct {
