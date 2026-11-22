@@ -18,6 +18,8 @@ const baseURLRequiredMsg = "ENRICH_BASE_URL is required: the base URL of an Open
 
 const modelRequiredMsg = "ENRICH_MODEL is required"
 
+const baseURLInvalidMsg = "ENRICH_BASE_URL is not a valid http(s) URL"
+
 // enrichEnvVars are the six variables this feature reads. Every test controls
 // all of them so values in the developer's shell cannot leak in.
 var enrichEnvVars = []string{
@@ -117,6 +119,27 @@ func TestLoadConfig_EnrichRequiredErrors(t *testing.T) {
 			},
 			wantErr: modelRequiredMsg,
 		},
+		{
+			// A value that fails to parse, or parses but is missing a
+			// scheme/host, must fail fast at startup with a clear error
+			// instead of making every request fail later at
+			// http.NewRequestWithContext (which callAPI does not classify
+			// as ErrBackendUnavailable, so it would retry and write stub
+			// pages — the exact outcome ADR-031 rejects).
+			name:    "base URL has no scheme",
+			env:     map[string]string{"ENRICH_BASE_URL": "enrich.test/v1", "ENRICH_MODEL": "m"},
+			wantErr: baseURLInvalidMsg,
+		},
+		{
+			name:    "base URL has an invalid scheme",
+			env:     map[string]string{"ENRICH_BASE_URL": "ftp://enrich.test/v1", "ENRICH_MODEL": "m"},
+			wantErr: baseURLInvalidMsg,
+		},
+		{
+			name:    "base URL fails to parse (space in host)",
+			env:     map[string]string{"ENRICH_BASE_URL": "https://ho st/v1", "ENRICH_MODEL": "m"},
+			wantErr: baseURLInvalidMsg,
+		},
 	}
 
 	for _, tt := range tests {
@@ -131,6 +154,29 @@ func TestLoadConfig_EnrichRequiredErrors(t *testing.T) {
 				t.Errorf("error = %q, want it to contain %q", err.Error(), tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestLoadConfig_InvalidBaseURLNeverLeaksPassword guards the "never echo
+// the raw value" rule for the malformed-URL error: ENRICH_BASE_URL can carry
+// a password (https://user:pass@host/v1), and a user who mistypes it must
+// not get that password printed back in the startup error.
+func TestLoadConfig_InvalidBaseURLNeverLeaksPassword(t *testing.T) {
+	const password = "s3cret-password"
+	setEnrichEnv(t, map[string]string{
+		"ENRICH_BASE_URL": "https://user:" + password + "@ho st/v1",
+		"ENRICH_MODEL":    "m",
+	})
+
+	_, err := loadConfig(false, false)
+	if err == nil {
+		t.Fatal("expected an error for a malformed base URL, got nil")
+	}
+	if strings.Contains(err.Error(), password) {
+		t.Errorf("error leaks the URL's password: %v", err)
+	}
+	if !strings.Contains(err.Error(), baseURLInvalidMsg) {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), baseURLInvalidMsg)
 	}
 }
 

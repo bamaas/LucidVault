@@ -194,7 +194,7 @@ this up for you.
 |-----------|--------|
 | Language | Go |
 | Web scraping | Jina Reader, Supadata (YouTube) |
-| LLM | Ollama Cloud |
+| LLM | Any OpenAI-compatible endpoint (Ollama Cloud, self-hosted Ollama, ...) |
 | Storage | Obsidian vault (markdown) |
 | State | SQLite (modernc.org/sqlite) |
 | Deployment | Docker / Docker Compose / static binary |

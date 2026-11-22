@@ -91,10 +91,19 @@ func NewClient(apiKey, model string, maxRetries, delayMs int) *Client {
 		httpClient: &http.Client{
 			Timeout: 300 * time.Second,
 			Transport: &http.Transport{
-				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-				TLSHandshakeTimeout:   10 * time.Second,
+				DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+				TLSHandshakeTimeout: 10 * time.Second,
+				// Calls are seconds to minutes apart (delayMs, retry
+				// backoff, LLM latency itself), so connection reuse saves
+				// almost nothing. Disabling it also removes a correctness
+				// trap: httptrace.GotConn fires for a reused connection too,
+				// so if the backend had already closed it (its own
+				// keep-alive timeout) just as this request went out, that
+				// failure would be misclassified as ErrBackendUnavailable —
+				// a healthy backend wrongly reported as down — instead of
+				// retried like any other mid-flight failure.
+				DisableKeepAlives:     true,
 				ResponseHeaderTimeout: 300 * time.Second,
-				IdleConnTimeout:       90 * time.Second,
 				ForceAttemptHTTP2:     true,
 			},
 		},
@@ -114,12 +123,16 @@ func (c *Client) SetBaseURL(base string) { c.baseURL = base }
 func (c *Client) BaseURL() string { return redactURLForLog(c.baseURL) }
 
 // redactURLForLog returns raw with any userinfo password replaced with
-// "xxxxx", for safe inclusion in logs and error messages. Returns raw
-// unchanged if it does not parse as a URL.
+// "xxxxx", for safe inclusion in logs and error messages. loadConfig
+// rejects a base URL that fails to parse before the client ever sees it,
+// but on the defensive path where that somehow is not true, a URL that
+// fails to parse could itself be the reason (e.g. a stray password
+// character breaking the syntax), so this never falls back to the raw
+// value — it returns a fixed placeholder instead.
 func redactURLForLog(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return raw
+		return "<invalid URL>"
 	}
 	return u.Redacted()
 }

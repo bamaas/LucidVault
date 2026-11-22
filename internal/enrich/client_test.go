@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -580,17 +581,34 @@ func TestClient_BackendUnavailableTLSHandshakeTimeout(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 
+	// Accept in a loop (not just once): a retried dial would otherwise
+	// complete silently in the kernel's accept backlog without this test
+	// ever noticing, making the "exactly 1 attempt" assertion below
+	// vacuous. Accepting in a loop means a real retry shows up as a second
+	// accepted connection.
 	var accepted atomic.Int32
-	acceptedConn := make(chan net.Conn, 1)
+	var mu sync.Mutex
+	var conns []net.Conn
 	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
+			// Never writes a TLS ServerHello, so the client's handshake
+			// times out instead of completing or failing outright.
 		}
-		accepted.Add(1)
-		acceptedConn <- conn
-		// Never writes a TLS ServerHello, so the client's handshake times
-		// out instead of completing or failing outright.
+	}()
+	defer func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
 	}()
 
 	c := NewClient("key", "model", 2, 0)
@@ -603,15 +621,13 @@ func TestClient_BackendUnavailableTLSHandshakeTimeout(t *testing.T) {
 		DateSaved: "2024-01-01",
 	})
 
-	select {
-	case conn := <-acceptedConn:
-		_ = conn.Close()
-	case <-time.After(time.Second):
-	}
-
 	if !errors.Is(err, ErrBackendUnavailable) {
 		t.Errorf("errors.Is(err, ErrBackendUnavailable) = false; err = %v", err)
 	}
+	// Give a would-be retry time to reach the listener before checking the
+	// count: ErrBackendUnavailable means no retry, so nothing more should
+	// arrive after Enrich has already returned.
+	time.Sleep(50 * time.Millisecond)
 	if got := accepted.Load(); got != 1 {
 		t.Errorf("expected exactly 1 connection attempt (no retries), got %d", got)
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -954,6 +955,16 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 	if baseURLFromLegacy && !strings.HasSuffix(enrichBaseURL, "/v1") {
 		// OLLAMA_BASE_URL is an Ollama root, not an OpenAI-compatible base.
 		enrichBaseURL += "/v1"
+	}
+	// A malformed value (e.g. a space in the host, or no scheme) would make
+	// every request fail at http.NewRequestWithContext instead of
+	// ErrBackendUnavailable, so it would retry and write stub pages for
+	// every item — the exact outcome ADR-031 rejects. Catch it here instead,
+	// at startup, and never echo the raw value: it may carry a password if
+	// the user put one directly in the URL.
+	if parsed, err := url.Parse(enrichBaseURL); err != nil || parsed.Host == "" ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, fmt.Errorf("ENRICH_BASE_URL is not a valid http(s) URL")
 	}
 
 	enrichModel, _ := resolveEnrichVar(
