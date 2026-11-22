@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -486,6 +487,114 @@ func TestCallAPI_CancellationMidFlight(t *testing.T) {
 	}
 	if errors.Is(err, ErrBackendUnavailable) {
 		t.Error("a mid-flight cancellation inside callAPI must not be classified as ErrBackendUnavailable")
+	}
+}
+
+// TestCallAPI_RedactsAPIKeyFromBody covers callAPI's plain non-200 branch
+// (status codes outside the backend-unavailable set, e.g. 500), which is
+// retried and logged on every attempt. A backend or intermediary that
+// echoes the presented key in its error body must never leak it into that
+// logged error.
+func TestCallAPI_RedactsAPIKeyFromBody(t *testing.T) {
+	const key = "sk-secret-leak-test"
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("upstream rejected key " + key))
+	})
+	defer srv.Close()
+
+	c := NewClient(key, "model", 0, 0)
+	c.SetBaseURL(srv.URL)
+
+	_, _, err := c.callAPI(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("expected an error for a 500 response")
+	}
+	if strings.Contains(err.Error(), key) {
+		t.Errorf("error leaks the API key: %v", err)
+	}
+	if !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Errorf("expected the redaction marker in the error, got: %v", err)
+	}
+}
+
+// fakeTimeoutError simulates a timed-out net.Error without any real network
+// wait, so dial-phase-timeout classification can be tested deterministically
+// and fast.
+type fakeTimeoutError struct{}
+
+func (fakeTimeoutError) Error() string   { return "i/o timeout" }
+func (fakeTimeoutError) Timeout() bool   { return true }
+func (fakeTimeoutError) Temporary() bool { return false }
+
+// fakeDialTimeoutTransport always fails as if the dial phase itself timed
+// out (e.g. a firewall silently dropping SYN packets) — a real connect
+// timeout against an unroutable address would also work, but takes minutes
+// on a default Linux TCP stack, which is too slow for a unit test.
+type fakeDialTimeoutTransport struct{ calls *atomic.Int32 }
+
+func (tr *fakeDialTimeoutTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	tr.calls.Add(1)
+	return nil, &net.OpError{Op: "dial", Net: "tcp", Err: fakeTimeoutError{}}
+}
+
+// TestEnrich_DialTimeoutIsBackendUnavailable covers the case the plain
+// "any Timeout() == true is retried like a 5xx" rule used to get wrong: a
+// dial-phase timeout never reached the backend at all, so it belongs with
+// connection-refused/DNS/TLS as ErrBackendUnavailable, not as a retryable
+// slow response.
+func TestEnrich_DialTimeoutIsBackendUnavailable(t *testing.T) {
+	var calls atomic.Int32
+	c := NewClient("key", "model", 2, 0)
+	c.SetBaseURL("http://enrich.invalid")
+	c.httpClient.Transport = &fakeDialTimeoutTransport{calls: &calls}
+
+	_, err := c.Enrich(context.Background(), &EnrichInput{
+		Title:     "Test",
+		URL:       "http://example.com",
+		DateSaved: "2024-01-01",
+	})
+	if !errors.Is(err, ErrBackendUnavailable) {
+		t.Errorf("errors.Is(err, ErrBackendUnavailable) = false; err = %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("expected exactly 1 dial attempt (no retries), got %d", got)
+	}
+}
+
+func TestIsDialFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "dial op error",
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+			want: true,
+		},
+		{
+			name: "dial op timeout is still a dial failure",
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: fakeTimeoutError{}},
+			want: true,
+		},
+		{
+			name: "read op error is not a dial failure",
+			err:  &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")},
+			want: false,
+		},
+		{
+			name: "plain error is not a dial failure",
+			err:  errors.New("some other error"),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDialFailure(tt.err); got != tt.want {
+				t.Errorf("isDialFailure(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
 

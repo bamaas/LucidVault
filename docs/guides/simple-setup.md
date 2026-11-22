@@ -8,8 +8,8 @@ UI - for those, see the [full-stack runbook](./agent-chat/agent-chat-setup.md).
 ## Prerequisites
 
 - Docker
-- An OpenAI-compatible Enrichment Backend - a free [Ollama Cloud](https://ollama.com)
-  account, or a self-hosted Ollama
+- An OpenAI-compatible Enrichment Backend - an [Ollama Cloud](https://ollama.com)
+  account (paid, no free tier), or a self-hosted Ollama (no key needed)
 - (Optional) A [Raindrop.io](https://raindrop.io) account (free) - automatic
   bookmark syncing
 

@@ -31,7 +31,7 @@ your Obsidian vault, ready to query from Claude Code, a browser, or any synced d
 - **Inbox** - Drop a `.md` file with a URL into `inbox/` and it gets scraped, enriched, and added to your vault. Works standalone - no external service required
 - **Raindrop.io integration** - Optionally connect Raindrop.io to auto-feed bookmarks into the inbox. Backfills all existing bookmarks on first run
 - **YouTube videos** - YouTube URLs are transcribed via [Supadata](https://supadata.ai) and enriched like any other source, so a video becomes a searchable, linkable wiki page
-- **Enrich** - Any OpenAI-compatible LLM endpoint (Ollama Cloud, free, or a self-hosted Ollama) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
+- **Enrich** - Any OpenAI-compatible LLM endpoint (Ollama Cloud or a self-hosted Ollama) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** - Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **MCP server** - Built-in MCP server exposes the vault as structured retrieval primitives for any AI client (Claude Code, Cursor, Windsurf, OpenClaw). Supports stdio and Streamable HTTP transports
 - **Notes indexing** - Personal notes in `notes/` are automatically scanned and get a wiki copy in `wiki/` with tags. Notes without tags are auto-tagged via the LLM; notes with existing tags keep them as-is. Same-named notes (or a note named like an existing page) never overwrite each other - colliding slugs get `-2`, `-3`, ... wiki pages
@@ -39,9 +39,10 @@ your Obsidian vault, ready to query from Claude Code, a browser, or any synced d
 
 ## Getting started
 
-You need Docker and an OpenAI-compatible Enrichment Backend - a free
-[Ollama Cloud](https://ollama.com) API key, or a self-hosted Ollama. Then pick the
-setup that fits - both build on the same container.
+You need Docker and an OpenAI-compatible Enrichment Backend - an
+[Ollama Cloud](https://ollama.com) API key (paid, no free tier), or a self-hosted
+Ollama (no key needed). Then pick the setup that fits - both build on the same
+container.
 
 ### Simple - single container
 

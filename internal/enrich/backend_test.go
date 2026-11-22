@@ -682,6 +682,16 @@ func TestClient_BackendUnavailableErrorMessage(t *testing.T) {
 			wantContains: []string{"404", "model not found"},
 			maxLen:       10_000,
 		},
+		{
+			// A proxy or gateway in front of the real backend can echo the
+			// presented key in its own error body (e.g. "invalid API key:
+			// sk-..."). The client must redact it before it reaches an
+			// error message that gets logged.
+			name:         "API key echoed in body is redacted",
+			status:       http.StatusUnauthorized,
+			body:         `{"error":"invalid API key: ` + secretKey + `"}`,
+			wantContains: []string{"401", "[REDACTED]"},
+		},
 	}
 
 	for _, op := range operations() {

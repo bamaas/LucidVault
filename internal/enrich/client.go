@@ -87,6 +87,8 @@ func NewClient(apiKey, model string, maxRetries, delayMs int) *Client {
 		httpClient: &http.Client{
 			Timeout: 300 * time.Second,
 			Transport: &http.Transport{
+				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+				TLSHandshakeTimeout:   10 * time.Second,
 				ResponseHeaderTimeout: 300 * time.Second,
 				IdleConnTimeout:       90 * time.Second,
 				ForceAttemptHTTP2:     true,
@@ -319,13 +321,17 @@ func (c *Client) callAPI(ctx context.Context, prompt string) (string, int, error
 		if ctx.Err() != nil {
 			return "", 0, ctx.Err()
 		}
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			// A timeout is treated like a 5xx: retry, then fall back.
-			return "", 0, fmt.Errorf("calling enrichment backend: %w", err)
+		if !isDialFailure(err) {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				// Connected, then timed out waiting for a response: treated
+				// like a 5xx, retry then fall back.
+				return "", 0, fmt.Errorf("calling enrichment backend: %w", err)
+			}
 		}
-		// Connection refused, DNS failure, or TLS handshake failure: the
-		// backend is not reachable at all, so retrying is pointless.
+		// Connection refused, DNS failure, TLS handshake failure, or a
+		// dial-phase timeout (e.g. a firewall silently dropping packets):
+		// the backend is not reachable at all, so retrying is pointless.
 		return "", 0, fmt.Errorf("enrichment backend unreachable at %s: %v: %w", c.baseURL, err, ErrBackendUnavailable)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -337,11 +343,11 @@ func (c *Client) callAPI(ctx context.Context, prompt string) (string, int, error
 
 	if isBackendUnavailableStatus(resp.StatusCode) {
 		return "", resp.StatusCode, fmt.Errorf("enrichment backend returned %d: %s: %w",
-			resp.StatusCode, truncateBody(body), ErrBackendUnavailable)
+			resp.StatusCode, c.safeBody(body), ErrBackendUnavailable)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", resp.StatusCode, fmt.Errorf("enrichment backend returned %d: %s", resp.StatusCode, string(body))
+		return "", resp.StatusCode, fmt.Errorf("enrichment backend returned %d: %s", resp.StatusCode, c.safeBody(body))
 	}
 
 	var chatResp chatCompletionResponse
@@ -369,12 +375,37 @@ func isBackendUnavailableStatus(statusCode int) bool {
 	}
 }
 
+// isDialFailure reports whether err happened before a connection was ever
+// established — refused, DNS, or a dial-phase timeout (e.g. a firewall
+// silently dropping packets). These count as ErrBackendUnavailable even
+// though the underlying error reports Timeout() == true: retrying for
+// minutes against an address that never answers is the "wrong retry"
+// ADR-031 warns against, as opposed to a backend that accepted the
+// connection and was merely slow to answer.
+func isDialFailure(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
+}
+
 // truncateBody trims a response body for inclusion in an error message,
 // capping it at maxErrorBodyBytes so a huge body can't blow up the error.
 func truncateBody(body []byte) string {
 	s := strings.TrimSpace(string(body))
 	if len(s) > maxErrorBodyBytes {
 		return s[:maxErrorBodyBytes] + "...(truncated)"
+	}
+	return s
+}
+
+// safeBody prepares a failed response body for inclusion in an error
+// message: truncated by truncateBody, then with the configured API key
+// redacted. Some backends echo the presented key in their error body (e.g.
+// "invalid API key: sk-..."), and that body flows into a log line wherever
+// this error is logged, so the key must never survive into it.
+func (c *Client) safeBody(body []byte) string {
+	s := truncateBody(body)
+	if c.apiKey != "" {
+		s = strings.ReplaceAll(s, c.apiKey, "[REDACTED]")
 	}
 	return s
 }
