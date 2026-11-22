@@ -4,8 +4,11 @@ The full LucidVault setup: the pipeline, multi-device sync, and **two ways for A
 agents to work with your vault**, sharing one narrow write path.
 
 - **Browser chat** - ask a question in [OpenWebUI](https://github.com/open-webui/open-webui)
-  and an agent ([Hermes](https://github.com/NousResearch/hermes-agent)) explores the
-  vault and answers with citations, or files a bookmark / writes a note / edits a page.
+  and a coding agent's CLI, run inside an [Open Terminal](https://github.com/open-webui/open-terminal)
+  container, explores the vault and answers with citations, or files a bookmark /
+  writes a note / edits a page. **Claude Code is the worked example below; Codex or
+  any other [ACP](https://agentclientprotocol.com/)-compatible agent is wired up the
+  same way** - swap the sign-in step and the CLI name.
 - **Claude Code on your machine** - reads the LiveSync-synced local vault directly
   and writes back through the same remote MCP server, so edits from your editor are
   deterministic and propagate to every device.
@@ -13,9 +16,9 @@ agents to work with your vault**, sharing one narrow write path.
 Both run with the vault **read-only** and can only mutate it through LucidVault's
 MCP tools - a capable agent without the keys to your host or files.
 
-A **worked example**, not a supported product - Hermes and OpenWebUI are
-third-party. Files here: `docker-compose.agent.yml` (the full-stack compose overlay)
-and `hermes.config.example.yaml` (the Hermes wiring keys).
+A **worked example**, not a supported product - OpenWebUI and Open Terminal are
+third-party. File here: `docker-compose.agent.yml` (the full-stack compose
+overlay). Decision record: `docs/adr/032-agent-chat-via-open-terminal.md`.
 
 ---
 
@@ -28,9 +31,12 @@ and `hermes.config.example.yaml` (the Hermes wiring keys).
            │  http
            ▼
         OpenWebUI  :3000
-           │  OpenAI-compatible API   (Bearer = HERMES_API_KEY)
+           │  Terminal Server connection   (Bearer = OPEN_TERMINAL_API_KEY)
            ▼
-        Hermes  :8090   (container)
+        Open Terminal  :8000   (container)
+           │      launches the agent CLI (e.g. `claude --input-format
+           │      stream-json --output-format stream-json`), inheriting the
+           │      container's env (login token/key, MCP registration)
            │      reads the vault through a READ-ONLY mount
            │      all writes go through the MCP tools
            │
@@ -50,16 +56,16 @@ and `hermes.config.example.yaml` (the Hermes wiring keys).
                                                         ▲
   ─── Access surface B:  editor agent ──────────────────┘
 
-        Claude Code   (your machine)
+        Claude Code   (your machine, independent of the container above)
            • reads   ── the local synced vault above   (filesystem, read-only)
-           • writes  ── straight to  MCP lucidvault:8080/mcp   (never via Hermes)
+           • writes  ── straight to  MCP lucidvault:8080/mcp   (never via OpenWebUI)
 ```
 
 | Part | Runs as | Role |
 |---|---|---|
 | `lucidvault` | container | pipeline + **in-process MCP** on `:8080` |
-| `hermes` | container | OpenAI-compatible API `:8090` + agent loop + MCP client |
-| `open-webui` | container | chat UI `:3000`, points at Hermes as its backend |
+| `open-terminal` | container | runs the agent CLI, exposes it to OpenWebUI on `:8000` |
+| `open-webui` | container | chat UI `:3000`, connects to Open Terminal as a "Terminal Server" |
 | `couchdb` + `livesync-bridge` | containers | multi-device sync spine |
 
 ---
@@ -67,73 +73,123 @@ and `hermes.config.example.yaml` (the Hermes wiring keys).
 ## Setup
 
 **Prerequisites:** Docker + Compose v2, the repo checked out (root
-`docker-compose.yml`, `.env`, `vault/`), and an LLM API key for the agent (this
-example uses Ollama Cloud). Images are pulled automatically. This overlay adds
-CouchDB + livesync-bridge (sync) and Hermes + OpenWebUI (agents) on top of the
-lucidvault container.
+`docker-compose.yml`, `.env`, `vault/`), and an LLM API key for enrichment (this
+example uses Ollama Cloud) plus a way to sign the agent in to Claude (subscription
+login or an API key - see step 3). Images are pulled automatically. This overlay
+adds CouchDB + livesync-bridge (sync) and Open Terminal + OpenWebUI (agents) on top
+of the lucidvault container.
 
-**1. Configure Hermes** (`~/.hermes`, bind-mounted to `/opt/data`).
+**0. Pin and back up OpenWebUI before any upgrade.** `docker-compose.agent.yml`
+pins `ghcr.io/open-webui/open-webui:v0.13.4` (not `:main`) - each release can run
+database migrations on first start. Before pulling a newer tag, back up the
+`open-webui` volume:
 
 ```bash
-docker run --rm -it -v ~/.hermes:/opt/data nousresearch/hermes-agent:latest model
+docker run --rm -v open-webui:/data -v "$PWD":/backup alpine \
+  tar czf /backup/open-webui-backup-$(date +%F).tar.gz -C /data .
 ```
 
-Point it at the MCP server in `~/.hermes/config.yaml` (see
-[`hermes.config.example.yaml`](./hermes.config.example.yaml)):
+Then `docker compose pull open-webui && docker compose up -d open-webui` and check
+the logs for a clean migration before trusting it with real chats.
 
-```yaml
-mcp_servers:
-  lucidvault:
-    url: "http://lucidvault:8080/mcp"   # compose service name, NOT 127.0.0.1
-```
-
-Set the API server + LLM keys in `~/.hermes/.env`:
+**1. Generate the Open Terminal API key** and set it in the repo-root `.env`
+(this is the bearer secret between OpenWebUI and Open Terminal, not an LLM key):
 
 ```dotenv
-OLLAMA_API_KEY=<your-ollama-cloud-key>
-API_SERVER_ENABLED=true
-API_SERVER_HOST=0.0.0.0        # reachable by open-webui on the compose network
-API_SERVER_PORT=8090
-API_SERVER_KEY=<shared-secret> # generate with: openssl rand -hex 24
-```
-
-**2. Set the repo-root `.env`** - the shared secret must equal `API_SERVER_KEY`,
-and CouchDB needs a password:
-
-```dotenv
-HERMES_API_KEY=<shared-secret>     # identical to API_SERVER_KEY above
+OPEN_TERMINAL_API_KEY=<generate with: openssl rand -hex 24>
 COUCHDB_PASSWORD=<couchdb-pass>    # must match deploy/livesync-bridge/config.json
-# HERMES_HOME=~/.hermes   HERMES_UID/HERMES_GID default 1000 (set to id -u / id -g)
 ```
 
-**3. Mount the vault read-only at the path the agent expects.** The agent finds the
-vault by the absolute path in its `HERMES.md`/`AGENTS.md`. Fresh setup: mount at
-`/vault` and tell the agent so. Migrating a host-native Hermes: mount at its
-existing host path (e.g. `./vault:/home/you/apps/lucidvault/vault:ro`). Either way,
-`:ro`. Edit the mount in `docker-compose.agent.yml` accordingly.
+**2. Confirm the image tag.** `docker-compose.agent.yml` pins
+`ghcr.io/open-webui/open-terminal:0.17.21-agents`, following the project's
+`<version>-agents` tag convention. Verify that exact tag still exists before you
+rely on it (tags move faster than this guide):
 
-**4. Bring it up:**
+```bash
+docker manifest inspect ghcr.io/open-webui/open-terminal:0.17.21-agents >/dev/null \
+  && echo "tag exists" || echo "pick a current tag from the package page"
+```
+
+If it's gone, pick the closest current `<version>-agents` tag and update both
+`docker-compose.agent.yml` and this note.
+
+**3. Sign the agent in.** Open Terminal launches the agent CLI inside the
+container and the CLI inherits the container's environment, so either works:
+
+- **Subscription login** - run `claude setup-token` on any machine where you're
+  already logged in to get a long-lived token, then set it in `.env`:
+
+  ```dotenv
+  CLAUDE_CODE_OAUTH_TOKEN=<token from: claude setup-token>
+  ```
+
+- **API key** - set `ANTHROPIC_API_KEY=<key>` in `.env` instead.
+
+  Set only one of the two in `.env` (leave the other blank) - `docker-compose.agent.yml`
+  passes both through as empty-string defaults. For Codex or another ACP agent,
+  substitute that agent's own login/token mechanism here; the rest of this guide
+  is unaffected.
+
+**4. Mount the vault read-only and point the agent at it.** The compose file
+mounts `./vault:/home/user/vault:ro` - Open Terminal's `HOME` is `/home/user`,
+persisted in the `open_terminal_home` named volume (also where the agent's login,
+MCP registration, and session state live). If you need a different host path,
+edit the left side of that mount; keep the right side and the `:ro` as-is.
+
+**5. Agent instructions: point the agent at the vault's `AGENTS.md`.** LucidVault
+generates `vault/AGENTS.md` with the retrieval and citation rules every agent
+should follow (ADR-023, ADR-024). Give the containerized agent a `CLAUDE.md` that
+imports it, in a dedicated start directory inside the persisted home volume:
+
+```bash
+docker compose up -d open-terminal   # creates the home volume if needed
+docker compose exec -u user open-terminal mkdir -p /home/user/vault-agent
+docker compose exec -u user open-terminal sh -c \
+  'echo "@/home/user/vault/AGENTS.md" > /home/user/vault-agent/CLAUDE.md'
+```
+
+`OPEN_TERMINAL_START_DIR=vault-agent` in `docker-compose.agent.yml` makes this the
+agent's working directory, so Claude Code loads that `CLAUDE.md` - and through its
+`@`-import, the vault's `AGENTS.md` - every session. (Codex/other ACP agents:
+use the equivalent memory-file mechanism in the same directory.)
+
+**6. Register the MCP server** for the Open Terminal user (persisted in
+`~/.claude.json` inside the home volume, so this is a one-time step per volume):
+
+```bash
+docker compose exec -u user open-terminal \
+  claude mcp add --scope user --transport http lucidvault http://lucidvault:8080/mcp
+docker compose exec -u user open-terminal claude mcp list
+                                          # → lucidvault: connected
+```
+
+`MCP_ALLOWED_HOST` on the `lucidvault` service already includes `lucidvault` (the
+compose service name Open Terminal connects to) - `docker-compose.agent.yml` sets
+this for you.
+
+**7. Bring the rest of the stack up:**
 
 ```bash
 docker compose -f docker-compose.yml \
   -f docs/guides/agent-chat/docker-compose.agent.yml up -d
 ```
 
-**5. Verify** (Hermes' API is bridge-only - check via the real path, open-webui):
+OpenWebUI picks up the Open Terminal connection declaratively from
+`TERMINAL_SERVER_CONNECTIONS` in the compose file - no manual wiring needed. If you
+ever need to do it by hand (or just want to confirm it took): **Admin → Settings →
+Integrations → Open Terminal**, URL `http://open-terminal:8000`, the API key from
+`.env`.
 
-```bash
-KEY=$(grep -m1 ^API_SERVER_KEY= ~/.hermes/.env | cut -d= -f2-)
+**8. Verify tool approvals are on.** `ENABLE_TOOL_PERMISSIONS=True` is set in the
+compose file; confirm it under OpenWebUI's Admin settings for your version - the
+default mode lets reads through and holds writes/commands for your approval in
+chat.
 
-docker exec open-webui curl -sf http://hermes:8090/v1/models \
-  -H "Authorization: Bearer $KEY"                     # → lists hermes-agent
-docker exec hermes sh -c 'cd /opt/data && hermes mcp test lucidvault'
-                                                       # → Connected, 7 tools
-docker exec hermes sh -c 'touch <vault-mount>/__t 2>&1 || echo READ-ONLY-OK'
-                                                       # → Read-only file system
-```
-
-Then open `http://<host>:3000`, create the admin account, pick **`hermes-agent`**,
-and ask about your vault.
+**9. Chat.** In OpenWebUI, start a **new chat**, select the Open Terminal
+connection as the model source, then pick `claude-code/<model>` from the picker
+(the model list is populated once the terminal is selected). Ask it a question
+about your vault, approve the first write it proposes, and confirm an attempt to
+edit a vault file directly fails (`Read-only file system`).
 
 ### Multi-device sync (LiveSync)
 
@@ -147,40 +203,50 @@ use it:
   `wiki/`, `index.md` (overwritten on re-enrichment); `raw/` is large - exclude on
   mobile. Full design: `docs/design/017-couchdb-livesync.md`.
 
-This is what makes surface B work: your machine's synced copy is what Claude Code
-reads.
+This is what makes surface B work: your machine's synced copy is what your own
+local Claude Code reads - independent of the Open Terminal container above.
 
 ---
 
 ## Rationale - why it's built this way
 
-**The problem.** Hermes is a general, code-executing agent. Pointed at a knowledge
-base it's useful - it can grep the index, read wiki pages, walk the wiki-link graph,
-and cite sources - but a general agent with shell access near your vault is a risk.
+**The problem.** A coding agent is general and code-executing. Pointed at a
+knowledge base it's useful - it can grep the index, read wiki pages, walk the
+wiki-link graph, and cite sources - but a general agent with shell access near
+your vault is a risk. See `docs/adr/032-agent-chat-via-open-terminal.md` for why
+this landed on Open Terminal over the alternatives (keeping an always-on agent
+daemon, a bespoke OpenAI-compatible proxy, a read-write mount).
 
 **The containment (kernel-enforced, not prompt-enforced):**
 
-- **Containerized.** Hermes' only host mounts are its own home (`~/.hermes`, rw) and
-  the vault (`:ro`). It cannot write anywhere else on the host - not `$HOME`, not
-  system paths.
-- **Vault read-only.** The agent reads vault files directly (native-first retrieval,
-  ADR-023); a write is refused with `Read-only file system` even from its own shell.
+- **Containerized.** Open Terminal's only host-adjacent mounts are its own home
+  (`open_terminal_home`, rw) and the vault (`:ro`). It cannot write anywhere else
+  on the host - not `$HOME`, not system paths.
+- **Vault read-only.** The agent reads vault files directly (native-first
+  retrieval, ADR-023); a write is refused with `Read-only file system` even from
+  its own shell.
 - **Writes only through MCP.** The single path that mutates the vault is the MCP
   tool set (`add_note`, `update_wiki`, `edit_page`, `delete_page`, `add_bookmark`):
   structured, auditable, deterministic. Retrieval is open; mutation is a narrow gate.
 - **MCP isn't world-exposed.** Loopback (or a trusted-LAN IP) plus a
   `MCP_ALLOWED_HOST` allowlist. It carries mutation tools - treat it as privileged.
-- **Chat API is bearer-authed.** OpenWebUI authenticates to Hermes with the shared
-  secret; Hermes is otherwise unreachable from outside the compose network.
+- **Chat connection is bearer-authed.** OpenWebUI authenticates to Open Terminal
+  with `OPEN_TERMINAL_API_KEY`; Open Terminal is otherwise unreachable from outside
+  the compose network (no published port).
+- **Tool approvals in chat.** `ENABLE_TOOL_PERMISSIONS=True` holds writes and
+  shell commands for your approval; reads run free.
 
-Residual blast radius: the agent can run code in its own container and write
-`~/.hermes` (skills, memory, sessions) - by design. Not the host, not the vault.
+Residual blast radius: the agent can run code in its own container and write its
+own home volume (login, MCP config, session state) - by design. Not the host, not
+the vault. Optional further hardening: an egress allowlist via
+`OPEN_TERMINAL_ALLOWED_DOMAINS` (needs `cap_add: [NET_ADMIN]`, commented out in
+`docker-compose.agent.yml`).
 
-**One vault, two front ends.** Because writes funnel through MCP into the vault, and
-the vault syncs over CouchDB/LiveSync, the same core serves both the browser chat
-*and* an editor agent (Claude Code) on your laptop reading the synced copy directly
-and writing back through the same MCP endpoint. They're independent and converge
-only at MCP + the vault.
+**One vault, two front ends.** Because writes funnel through MCP into the vault,
+and the vault syncs over CouchDB/LiveSync, the same core serves both the browser
+chat *and* an editor agent (Claude Code) on your laptop reading the synced copy
+directly and writing back through the same MCP endpoint. They're independent and
+converge only at MCP + the vault.
 
 To let a LAN workstation reach MCP for writes, publish it on the host's LAN IP and
 add that IP to `MCP_ALLOWED_HOST` - this exposes **mutation** tools to that LAN, so
@@ -193,21 +259,37 @@ only on a trusted network; otherwise keep MCP on loopback and tunnel
 
 ```bash
 alias dc='docker compose -f docker-compose.yml -f docs/guides/agent-chat/docker-compose.agent.yml'
-dc ps                          # status
-dc logs -f hermes              # follow agent logs
-dc restart hermes              # restart the agent
-dc pull hermes && dc up -d hermes   # upgrade Hermes
+dc ps                                  # status
+dc logs -f open-terminal               # follow agent/CLI logs
+dc restart open-terminal               # restart the agent container
+dc pull open-terminal open-webui && dc up -d open-terminal open-webui
+                                        # upgrade both - bump the pinned tags
+                                        # in docker-compose.agent.yml first,
+                                        # and back up the open-webui volume
+                                        # (step 0) before an OpenWebUI bump
 ```
 
-Back up `~/.hermes` (agent state) and the vault. Rotate the shared secret in both
-`.env` files together. **Never run a host-native Hermes gateway and the container
-against the same `~/.hermes` at once** - they share SQLite state; disable the old
-one with `systemctl --user disable --now hermes-gateway`.
+**Rollback.** If an upgrade goes wrong: restore the `open-webui` volume backup
+from step 0, revert both image tags in `docker-compose.agent.yml` to the previous
+pinned versions, and `dc up -d`.
+
+**Limits to know about:**
+
+- Agent chats in OpenWebUI cannot be regenerated or edited (an Open WebUI
+  limitation, not LucidVault's) - start a new chat instead.
+- Agent models only appear in saved chats, and only after you've selected the
+  Open Terminal connection as the chat's model source - a fresh chat with no
+  terminal selected won't show `claude-code/<model>` in the picker.
+- As of the versions pinned here, image attachments to agent chats are known to
+  be partially broken, and the model picker can silently fall back to a
+  non-agent model in some flows - check `open-webui/open-webui` issues for the
+  current state before relying on either.
 
 | Symptom | Fix |
 |---|---|
-| `/v1/models` → 401 | `HERMES_API_KEY` must equal `API_SERVER_KEY`; restart both |
-| OpenWebUI shows no models | same compose network? `API_SERVER_HOST=0.0.0.0`? |
-| Agent: "vault doesn't exist" | RO mount path ≠ path in `HERMES.md`/`AGENTS.md` - fix the mount |
-| `hermes mcp test` fails | URL uses the service name + it's in `MCP_ALLOWED_HOST` |
-| Agent can't write the vault | working as intended - writes go through MCP |
+| OpenWebUI shows no `claude-code/*` models | Did you select the Open Terminal connection first? Is `TERMINAL_SERVER_CONNECTIONS` set and does `OPEN_TERMINAL_API_KEY` match on both services? |
+| `claude mcp list` shows lucidvault disconnected | URL uses the compose service name (`lucidvault`, not `127.0.0.1`), and `lucidvault` is in `MCP_ALLOWED_HOST` |
+| Agent: "vault doesn't exist" / can't find AGENTS.md | Check `OPEN_TERMINAL_START_DIR` and that `/home/user/vault-agent/CLAUDE.md` exists and imports `/home/user/vault/AGENTS.md` |
+| Agent can't write the vault | Working as intended - writes go through MCP |
+| No tool-approval prompt in chat | `ENABLE_TOOL_PERMISSIONS` not actually on - check Admin settings for your OpenWebUI version |
+| Sign-in token rejected inside the container | Re-run `claude setup-token` and update `.env`, or switch to `ANTHROPIC_API_KEY` |

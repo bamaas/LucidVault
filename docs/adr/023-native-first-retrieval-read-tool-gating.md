@@ -4,6 +4,8 @@
 
 **Context:** Filesystem-capable agents (e.g. the Hermes daemon, which mounts the vault) over-rely on the MCP content-read tools (`get_soul`, `search_index`, `read_wiki`, `grep_vault`, `read_note`, `read_raw`, `vault_overview`) that merely duplicate direct file access. This funnels reactive exploration through narrower, capped tool contracts (e.g. `grep_vault` is substring-only and ≤20 results) and undercuts the reason an agent was chosen over RAG: free file access (see `docs/plans/plan-agent-retrieval.md`). AGENTS.md already frames direct reads as primary, but a registered tool stays salient and gets used regardless of instructions.
 
+Hermes was the example agent at the time this was written; `docs/adr/032-agent-chat-via-open-terminal.md` replaced it with a coding agent run via Open Terminal. This decision is unchanged and applies the same way to that agent.
+
 **Decision:** Gate the seven duplicate content-read MCP tools behind `MCP_READ_TOOLS` (default `false`); graph tools (`related_notes`, `expand_graph`) and all write tools (`add_bookmark`, `add_note`, `update_wiki`, `delete_page`) remain always registered. Filesystem-capable agents read the vault directly; clients reachable only over MCP (no filesystem) set `MCP_READ_TOOLS=true`.
 
 **Consequences:**

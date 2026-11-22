@@ -64,8 +64,8 @@ Full walkthrough - tokens, `soul.md`, Raindrop, Claude Code pointer:
 ### Full stack - Claude Code integration + browser chat + multi-device sync
 
 Query, extend, and curate your knowledge base from **Claude Code** as you work, chat
-with it in a browser, and read it on every device. The agents can only change the
-vault through safe, auditable tools.
+with a coding agent in a browser (OpenWebUI + Open Terminal), and read it on every
+device. The agents can only change the vault through safe, auditable tools.
 
 **[Full-stack runbook →](docs/guides/agent-chat/agent-chat-setup.md)**
 

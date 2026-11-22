@@ -4,6 +4,8 @@
 
 **Context:** LucidVault's retrieval is closed-world (vault-only); users want current or missing information from the web. The obvious move — a Tavily-backed `search_web` MCP tool gated on an API key, mirroring the Raindrop/Supadata feature pattern — has two fatal problems for this codebase. First, the primary consuming agent (the Hermes daemon) already has a native `web_search` capability, so a LucidVault web tool would duplicate it and reintroduce the exact tool-duplication that ADR-023 was just written to remove ("a registered tool stays salient and gets used regardless of instructions"). Second, web search is a fast-churning commodity market (Tavily, Exa, Brave, Firecrawl, fastCRW, Scavio, …); whichever provider LucidVault wrapped, swapping it would mean a Go change + release + redeploy — the wrong layer for something this volatile, and against the project's KISS / separation-of-concerns principles.
 
+Hermes was the example agent at the time this was written; `docs/adr/032-agent-chat-via-open-terminal.md` replaced it with a coding agent run via Open Terminal. This decision is unchanged and applies the same way to that agent.
+
 **Decision:** LucidVault does not provide, proxy, or wrap web search. Instead, the generated `AGENTS.md` instructs the agent how to use its *own* web search, via a provider-agnostic, configurable **Web Search Strategy**.
 
 **Consequences:**

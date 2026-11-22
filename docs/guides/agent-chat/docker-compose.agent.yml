@@ -10,10 +10,14 @@
 #
 #   lucidvault      turns the in-process MCP server ON, published on loopback
 #   couchdb         + livesync-bridge - Obsidian LiveSync sync spine
-#   hermes          the agent (OpenAI API + agent loop + MCP client), sandboxed
-#   open-webui      the browser chat UI, wired to Hermes
+#   open-terminal   runs a coding agent's CLI (Claude Code is the worked
+#                   example here; Codex or any ACP agent works the same way),
+#                   sandboxed, read-only vault mount
+#   open-webui      the browser chat UI, wired to Open Terminal
 #
-# Requires in .env: ENRICH_BASE_URL, ENRICH_MODEL, COUCHDB_PASSWORD, HERMES_API_KEY.
+# Requires in .env: ENRICH_BASE_URL, ENRICH_MODEL, COUCHDB_PASSWORD,
+# OPEN_TERMINAL_API_KEY, and one of CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY
+# (see agent-chat-setup.md for how to obtain each).
 
 services:
   lucidvault:
@@ -52,46 +56,69 @@ services:
     restart: unless-stopped
 
   # --- Agent access -------------------------------------------------------
-  hermes:
-    # Official multi-arch image - pulled automatically, no local build.
-    # Pin a date tag (e.g. :v2026.7.1) for reproducible deploys. Tags:
-    #   https://hub.docker.com/r/nousresearch/hermes-agent/tags
-    image: nousresearch/hermes-agent:latest
-    container_name: hermes
+  open-terminal:
+    # Official image - pulled automatically, no local build. Tag convention is
+    # "<open-terminal-version>-agents"; this one is unverified beyond research
+    # notes as of writing - confirm it exists before relying on it:
+    #   https://github.com/open-webui/open-terminal/pkgs/container/open-terminal
+    # (`docker manifest inspect ghcr.io/open-webui/open-terminal:<tag>` also works.)
+    image: ghcr.io/open-webui/open-terminal:0.17.21-agents
+    container_name: open-terminal
     depends_on:
       - lucidvault
     volumes:
-      # The agent's own home (config, skills, memory, sessions) - read/write.
-      - ${HERMES_HOME:-~/.hermes}:/opt/data
-      # The vault, READ-ONLY, at the SAME absolute path the agent's HERMES.md /
-      # AGENTS.md references, so its reads resolve. Fresh setups: use /vault.
-      # Writes are kernel-denied - they must go through the MCP tools.
-      - ./vault:/vault:ro
+      # Open Terminal's home (HOME=/home/user) - agent login, MCP registration
+      # (~/.claude.json) and session state live here. Read/write, named volume
+      # so they survive a container recreate.
+      - open_terminal_home:/home/user
+      # The vault, READ-ONLY. Writes are kernel-denied - they must go through
+      # the LucidVault MCP tools. See agent-chat-setup.md for how the agent's
+      # CLAUDE.md finds this path and the vault's own AGENTS.md.
+      - ./vault:/home/user/vault:ro
     environment:
-      # Remap the in-container user to the host owner of HERMES_HOME.
-      HERMES_UID: "${HERMES_UID:-1000}"
-      HERMES_GID: "${HERMES_GID:-1000}"
-      # API server binds inside the container; open-webui reaches it by name.
-      # API_SERVER_ENABLED / _KEY / _PORT come from the mounted /opt/data/.env.
-      API_SERVER_HOST: "0.0.0.0"
-    command: ["gateway", "run"]
+      OPEN_TERMINAL_API_KEY: "${OPEN_TERMINAL_API_KEY:?set OPEN_TERMINAL_API_KEY in .env}"
+      # Inherited by the `claude` process Open Terminal launches. Set exactly
+      # one: a token from `claude setup-token` (subscription login) or an
+      # Anthropic API key. Leave the other blank in .env.
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Working directory the agent starts in, relative to /home/user. Points
+      # at a folder containing a CLAUDE.md that imports the vault's AGENTS.md
+      # (see agent-chat-setup.md, "Agent instructions").
+      OPEN_TERMINAL_START_DIR: "${OPEN_TERMINAL_START_DIR:-vault-agent}"
+    # Optional hardening: restrict the container's own outbound network to an
+    # allowlist of domains. Needs NET_ADMIN to install the firewall rules.
+    # cap_add:
+    #   - NET_ADMIN
+    # environment:
+    #   OPEN_TERMINAL_ALLOWED_DOMAINS: "api.anthropic.com,github.com"
     restart: unless-stopped
 
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:v0.13.4
     container_name: open-webui
     depends_on:
-      - hermes
+      - open-terminal
     ports:
       - "0.0.0.0:3000:8080"
     environment:
-      OPENAI_API_BASE_URL: "http://hermes:8090/v1"
-      OPENAI_API_KEY: "${HERMES_API_KEY:?set HERMES_API_KEY in .env}"
-      ENABLE_OLLAMA_API: "false"
+      # Declarative Open Terminal connection - same effect as wiring it by
+      # hand in Admin -> Settings -> Integrations -> Open Terminal.
+      TERMINAL_SERVER_CONNECTIONS: >-
+        [{"id":"open-terminal",
+        "url":"http://open-terminal:8000",
+        "key":"${OPEN_TERMINAL_API_KEY}",
+        "name":"Open Terminal",
+        "auth_type":"bearer",
+        "config":{"access_grants":[]}}]
+      # Tool-call approvals in chat (reads run free, writes/commands wait for
+      # you). Verify this landed under Admin -> Settings in your version.
+      ENABLE_TOOL_PERMISSIONS: "True"
     volumes:
       - open-webui:/app/backend/data
     restart: unless-stopped
 
 volumes:
   couchdb_data:
+  open_terminal_home:
   open-webui:
