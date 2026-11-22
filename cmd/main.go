@@ -223,14 +223,20 @@ func runPollCycle(ctx context.Context, cfg *config, rd *raindrop.Client, sc *scr
 	}
 
 	// Step 2: Process inbox
+	backendUnavailable := false
 	if cfg.forceReEnrich {
-		reEnrichAll(ctx, en, db, v)
+		backendUnavailable = reEnrichAll(ctx, en, db, v)
 	} else {
-		processInbox(ctx, sc, en, db, v)
+		backendUnavailable = processInbox(ctx, sc, en, db, v)
 	}
 
-	// Step 3: Process notes
-	processNotes(ctx, en, db, v)
+	// Step 3: Process notes. Skipped when either Step 2 path (reEnrichAll or
+	// the normal processInbox) just stopped early because the Enrichment
+	// Backend is unavailable — calling it again from the same poll cycle
+	// would only repeat the same failure.
+	if !backendUnavailable {
+		processNotes(ctx, en, db, v)
+	}
 
 	// Step 4: Hygiene cycle (every Nth poll cycle)
 	pollCycleCount++
@@ -264,25 +270,33 @@ func syncRaindropToInbox(ctx context.Context, rd *raindrop.Client, db *store.Sto
 	slog.Info("raindrop sync complete", "fetched", len(bookmarks), "new_inbox_files", created)
 }
 
-func processInbox(ctx context.Context, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) {
+// processInbox processes every waiting inbox item. It returns true when the
+// run stopped early because the Enrichment Backend became unavailable, so
+// the caller (runPollCycle) can skip the rest of that poll cycle instead of
+// calling the same dead backend again via processNotes.
+func processInbox(ctx context.Context, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) bool {
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 
 	slog.Info("processing inbox")
 
 	var processed, failed int
 	failedPaths := make(map[string]bool)
+	stoppedEarly := false
+	backendUnavailable := false
 
 	for {
 		if ctx.Err() != nil {
 			slog.Info("shutdown requested, stopping processing")
+			stoppedEarly = true
 			break
 		}
 
 		item, err := inbox.ScanNext(v.BasePath, failedPaths)
 		if err != nil {
 			slog.Error("failed to scan inbox", "error", err)
+			stoppedEarly = true
 			break
 		}
 
@@ -294,6 +308,8 @@ func processInbox(ctx context.Context, sc *scraper.Scraper, en *enrich.Client, d
 			if errors.Is(err, enrich.ErrBackendUnavailable) {
 				slog.Error("enrichment backend unavailable, stopping inbox cycle",
 					"endpoint", en.BaseURL(), "error", err)
+				stoppedEarly = true
+				backendUnavailable = true
 				break
 			}
 			slog.Error("failed to process inbox item", "url", item.URL, "error", err)
@@ -310,9 +326,14 @@ func processInbox(ctx context.Context, sc *scraper.Scraper, en *enrich.Client, d
 		processed++
 	}
 
-	if processed == 0 && failed == 0 {
+	// The inbox is only "empty, nothing to process" when the scan genuinely
+	// found zero items. Stopping early (shutdown, scan error, or a backend
+	// that just became unavailable) can also leave processed == 0 && failed
+	// == 0 while unprocessed items remain, which must not be logged as if
+	// the inbox were empty.
+	if processed == 0 && failed == 0 && !stoppedEarly {
 		slog.Info("inbox empty, nothing to process")
-		return
+		return backendUnavailable
 	}
 
 	if failed > 0 {
@@ -320,6 +341,7 @@ func processInbox(ctx context.Context, sc *scraper.Scraper, en *enrich.Client, d
 	}
 
 	slog.Info("inbox cycle complete", "processed", processed, "failed", failed)
+	return backendUnavailable
 }
 
 func processInboxItem(ctx context.Context, item inbox.Item, sc *scraper.Scraper, en *enrich.Client, db *store.Store, v *vault.Vault) error {
@@ -424,9 +446,13 @@ func processInboxItem(ctx context.Context, item inbox.Item, sc *scraper.Scraper,
 	return nil
 }
 
-func reEnrichAll(ctx context.Context, en *enrich.Client, db *store.Store, v *vault.Vault) {
+// reEnrichAll re-enriches every stored bookmark. It returns true when the
+// run stopped early because the Enrichment Backend became unavailable, so
+// the caller (runPollCycle) can skip the rest of that poll cycle instead of
+// calling the same dead backend again via processNotes.
+func reEnrichAll(ctx context.Context, en *enrich.Client, db *store.Store, v *vault.Vault) bool {
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 
 	slog.Info("re-enriching all bookmarks")
@@ -434,10 +460,11 @@ func reEnrichAll(ctx context.Context, en *enrich.Client, db *store.Store, v *vau
 	records, err := db.ListBookmarks()
 	if err != nil {
 		slog.Error("failed to list bookmarks for re-enrichment", "error", err)
-		return
+		return false
 	}
 
 	var processed, failed int
+	backendUnavailable := false
 
 	for _, rec := range records {
 		if ctx.Err() != nil {
@@ -449,6 +476,7 @@ func reEnrichAll(ctx context.Context, en *enrich.Client, db *store.Store, v *vau
 			if errors.Is(err, enrich.ErrBackendUnavailable) {
 				slog.Error("enrichment backend unavailable, stopping re-enrichment",
 					"endpoint", en.BaseURL(), "error", err)
+				backendUnavailable = true
 				break
 			}
 			slog.Error("failed to re-enrich bookmark", "title", rec.Title, "error", err)
@@ -459,6 +487,7 @@ func reEnrichAll(ctx context.Context, en *enrich.Client, db *store.Store, v *vau
 	}
 
 	slog.Info("re-enrichment complete", "processed", processed, "failed", failed)
+	return backendUnavailable
 }
 
 func reEnrichBookmark(ctx context.Context, rec store.BookmarkRecord, en *enrich.Client, db *store.Store, v *vault.Vault) error {

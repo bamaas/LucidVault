@@ -27,5 +27,6 @@ LucidVault talks to its Enrichment Backend only through the OpenAI-compatible ch
 - `OLLAMA_API_KEY`, `OLLAMA_MODEL` and `OLLAMA_BASE_URL` keep working as deprecated fallbacks (a legacy `OLLAMA_BASE_URL` gets `/v1` appended) with a warning per variable; the new name wins when both are set. The fallback is removed in the next major release.
 - Keyless endpoints (self-hosted Ollama, a local wrapper) need no dummy key: the `Authorization` header is only sent when `ENRICH_API_KEY` is set.
 - An unusable backend (connection failure, HTTP 401, 402, 403, 404, 410) is an error, not a minimal page: the inbox item stays, the note stays unhashed, and both are retried next cycle. 429 keeps its backoff; 5xx, timeouts and invalid model output still end in a minimal page after retries.
+- A connection reset mid-request counts as a connection failure (backend unavailable): it can't be told apart from a crashed backend, and a wrong "stop" costs one cycle of delay while a wrong "retry" can write a stub page.
 - ADR-030's requirement moves from `OLLAMA_MODEL` to `ENRICH_MODEL`; its "no default model" rationale is unchanged.
 - Verify with: `grep -rn '/api/chat' internal/ cmd/` returns nothing; `grep -rniE 'claude|anthropic' internal/enrich README.md .env.example` returns nothing.

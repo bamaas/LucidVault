@@ -3,11 +3,13 @@ package enrich
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newTestServer(handler http.HandlerFunc) *httptest.Server {
@@ -215,6 +217,275 @@ func TestEnrich_ContextCancellation(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
+	}
+}
+
+// TestEnrich_TimeoutRetriesThenMinimalPage covers the timeout branch
+// (client.go callAPI: a net.Error with Timeout() == true is treated like a
+// 5xx, not ErrBackendUnavailable).
+func TestEnrich_TimeoutRetriesThenMinimalPage(t *testing.T) {
+	var calls atomic.Int32
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		// Sleep well past the client's timeout so httpClient.Do fails with a
+		// timeout error instead of succeeding.
+		time.Sleep(200 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 1, 0)
+	c.SetBaseURL(srv.URL)
+	c.httpClient.Timeout = 50 * time.Millisecond
+
+	result, err := c.Enrich(context.Background(), &EnrichInput{
+		Title:     "Test",
+		URL:       "http://example.com",
+		DateSaved: "2024-01-01",
+	})
+	if err != nil {
+		t.Fatalf("timeout is not backend-unavailable, want nil error, got: %v", err)
+	}
+	if errors.Is(err, ErrBackendUnavailable) {
+		t.Error("timeout must not be classified as ErrBackendUnavailable")
+	}
+	if calls.Load() != 2 {
+		t.Errorf("expected 2 calls (1 + 1 retry), got %d", calls.Load())
+	}
+	if !strings.Contains(result, "Enrichment failed") {
+		t.Errorf("expected minimal page after retries, got: %s", result)
+	}
+}
+
+// TestSuggestTags_TimeoutRetriesThenUntagged is the SuggestTags counterpart
+// of TestEnrich_TimeoutRetriesThenMinimalPage.
+func TestSuggestTags_TimeoutRetriesThenUntagged(t *testing.T) {
+	var calls atomic.Int32
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		time.Sleep(200 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 1, 0)
+	c.SetBaseURL(srv.URL)
+	c.httpClient.Timeout = 50 * time.Millisecond
+
+	tags, err := c.SuggestTags(context.Background(), &TagInput{
+		Content: "# Test",
+		Title:   "Test",
+	})
+	if err != nil {
+		t.Fatalf("timeout is not backend-unavailable, want nil error, got: %v", err)
+	}
+	if errors.Is(err, ErrBackendUnavailable) {
+		t.Error("timeout must not be classified as ErrBackendUnavailable")
+	}
+	if calls.Load() != 2 {
+		t.Errorf("expected 2 calls (1 + 1 retry), got %d", calls.Load())
+	}
+	if len(tags) != 1 || tags[0] != "untagged" {
+		t.Errorf("tags = %v, want [untagged]", tags)
+	}
+}
+
+// TestEnrich_CancellationDuringRequest covers a context deadline that
+// expires while httpClient.Do is in flight (client.go callAPI:319-321 and
+// Enrich:136-138) — distinct from cancelling before the call is ever made.
+//
+// Honesty note: this test cannot isolate the ctx.Err() guard at
+// callAPI:319-321 from the netErr.Timeout() branch right after it
+// (client.go:322-326). A context.WithTimeout deadline produces
+// context.DeadlineExceeded, which itself satisfies net.Error's Timeout() ==
+// true — so even if the ctx.Err() check at 319-321 were deleted, the
+// Timeout() branch would classify the same underlying error identically
+// (wrapped, not ErrBackendUnavailable) and this test would still pass. It
+// documents the deadline-based behaviour, not a regression guard for that
+// specific line. See TestEnrich_CancellationMidFlight below for a
+// context.WithCancel variant that does isolate it.
+func TestEnrich_CancellationDuringRequest(t *testing.T) {
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 2, 0)
+	c.SetBaseURL(srv.URL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := c.Enrich(ctx, &EnrichInput{
+		Title:     "Test",
+		URL:       "http://example.com",
+		DateSaved: "2024-01-01",
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("errors.Is(err, context.DeadlineExceeded) = false; err = %v", err)
+	}
+	if errors.Is(err, ErrBackendUnavailable) {
+		t.Error("a cancellation mid-request must not be classified as ErrBackendUnavailable")
+	}
+}
+
+// TestSuggestTags_CancellationDuringRequest is the SuggestTags counterpart
+// of TestEnrich_CancellationDuringRequest (client.go SuggestTags:201-203).
+// Same honesty note applies: a deadline, not a plain cancel, can't isolate
+// callAPI's ctx.Err() guard from its neighboring netErr.Timeout() branch.
+func TestSuggestTags_CancellationDuringRequest(t *testing.T) {
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 2, 0)
+	c.SetBaseURL(srv.URL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := c.SuggestTags(ctx, &TagInput{
+		Content: "# Test",
+		Title:   "Test",
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("errors.Is(err, context.DeadlineExceeded) = false; err = %v", err)
+	}
+	if errors.Is(err, ErrBackendUnavailable) {
+		t.Error("a cancellation mid-request must not be classified as ErrBackendUnavailable")
+	}
+}
+
+// TestEnrich_CancellationMidFlight covers a genuine mid-flight cancellation
+// (context.WithCancel, triggered by the test only once the handler has
+// actually received the request) rather than a deadline — distinct from
+// TestEnrich_CancellationDuringRequest above.
+//
+// Honesty note: this still cannot isolate the ctx.Err() guard inside
+// callAPI (client.go, right after httpClient.Do fails) from Enrich's own
+// redundant ctx.Err() recheck a few lines after callAPI returns (client.go
+// ~136-138). Verified empirically (by temporarily deleting callAPI's guard):
+// this test still passes even with that line removed, because Enrich's
+// outer recheck sees the same still-canceled ctx and returns ctx.Err()
+// regardless of what callAPI itself returned. Isolating callAPI's guard
+// specifically requires calling it directly, which
+// TestCallAPI_CancellationMidFlight below does.
+//
+// The handler blocks on a test-controlled channel, not on r.Context().Done():
+// verified empirically that Go's net/http server does not reliably cancel
+// the server-side request context when a client-initiated context
+// cancellation aborts a POST with a body still in flight — httpClient.Do()
+// on the client side still returns immediately with context.Canceled either
+// way, which is the only thing this test needs. Waiting on r.Context().Done()
+// instead left the handler blocked forever and hung httptest.Server.Close().
+func TestEnrich_CancellationMidFlight(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 2, 0)
+	c.SetBaseURL(srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	_, err := c.Enrich(ctx, &EnrichInput{
+		Title:     "Test",
+		URL:       "http://example.com",
+		DateSaved: "2024-01-01",
+	})
+	close(release) // let the handler return so srv.Close() doesn't block
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("errors.Is(err, context.Canceled) = false; err = %v", err)
+	}
+	if errors.Is(err, ErrBackendUnavailable) {
+		t.Error("a mid-flight cancellation must not be classified as ErrBackendUnavailable")
+	}
+}
+
+// TestSuggestTags_CancellationMidFlight is the SuggestTags counterpart of
+// TestEnrich_CancellationMidFlight (same honesty note: it cannot isolate
+// callAPI's ctx.Err() guard from SuggestTags' own redundant recheck either;
+// same note on why the handler blocks on a test-controlled channel rather
+// than r.Context().Done()).
+func TestSuggestTags_CancellationMidFlight(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 2, 0)
+	c.SetBaseURL(srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	_, err := c.SuggestTags(ctx, &TagInput{
+		Content: "# Test",
+		Title:   "Test",
+	})
+	close(release) // let the handler return so srv.Close() doesn't block
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("errors.Is(err, context.Canceled) = false; err = %v", err)
+	}
+	if errors.Is(err, ErrBackendUnavailable) {
+		t.Error("a mid-flight cancellation must not be classified as ErrBackendUnavailable")
+	}
+}
+
+// TestCallAPI_CancellationMidFlight genuinely isolates the ctx.Err() guard
+// at client.go callAPI (immediately after httpClient.Do fails, immediately
+// before the netErr.Timeout() check) from Enrich/SuggestTags' own redundant
+// outer recheck, by calling callAPI directly (this file is package enrich,
+// not enrich_test, so the unexported method is reachable). Confirmed by
+// temporarily deleting that guard: this test fails (the error becomes
+// ErrBackendUnavailable) while TestEnrich_CancellationMidFlight and
+// TestSuggestTags_CancellationMidFlight above still pass, which is exactly
+// why those two cannot be relied on to catch a regression in this
+// particular line.
+func TestCallAPI_CancellationMidFlight(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+	})
+	defer srv.Close()
+
+	c := NewClient("key", "model", 0, 0)
+	c.SetBaseURL(srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	_, _, err := c.callAPI(ctx, "prompt")
+	close(release) // let the handler return so srv.Close() doesn't block
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("errors.Is(err, context.Canceled) = false; err = %v", err)
+	}
+	if errors.Is(err, ErrBackendUnavailable) {
+		t.Error("a mid-flight cancellation inside callAPI must not be classified as ErrBackendUnavailable")
 	}
 }
 

@@ -214,6 +214,18 @@ func TestLoadConfig_EnrichSettings(t *testing.T) {
 			wantBaseURL: "http://new-host:11434/v1",
 			wantModel:   "new-model",
 			wantAPIKey:  "new-key",
+			wantSilent:  legacyEnrichEnvVars,
+		},
+		{
+			name: "new base URL without /v1 wins over legacy base URL, no /v1 appended",
+			env: map[string]string{
+				"ENRICH_BASE_URL": "http://gw:4000",
+				"ENRICH_MODEL":    "m",
+				"OLLAMA_BASE_URL": "http://old:11434",
+			},
+			wantBaseURL: "http://gw:4000",
+			wantModel:   "m",
+			wantSilent:  []string{"OLLAMA_BASE_URL"},
 		},
 		{
 			name: "whitespace-only legacy variables are unset and do not warn",

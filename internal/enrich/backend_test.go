@@ -355,6 +355,12 @@ func emptyOutputResponses() []struct {
 				},
 			}),
 		},
+		{
+			// A 200 response whose body is not valid JSON at all (client.go
+			// parse-error branch): still a failed call, not panic/crash.
+			name: "malformed json body",
+			body: []byte("not json"),
+		},
 	}
 }
 
@@ -468,6 +474,57 @@ func TestClient_BackendUnavailableStatuses(t *testing.T) {
 	}
 }
 
+// TestClient_OtherFourXXStatusesAreNotBackendUnavailable checks statuses
+// that look similar to the backend-unavailable set (401/402/403/404/410) but
+// are not in it: isBackendUnavailableStatus must return false for these, so
+// the call still retries and ends in the normal fallback, never
+// ErrBackendUnavailable.
+func TestClient_OtherFourXXStatusesAreNotBackendUnavailable(t *testing.T) {
+	statuses := []int{
+		http.StatusBadRequest,            // 400
+		http.StatusRequestTimeout,        // 408
+		http.StatusRequestEntityTooLarge, // 413
+		http.StatusUnprocessableEntity,   // 422
+	}
+
+	for _, op := range operations() {
+		for _, status := range statuses {
+			t.Run(op.name+"/"+http.StatusText(status), func(t *testing.T) {
+				t.Parallel()
+
+				var calls atomic.Int32
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					w.WriteHeader(status)
+					_, _ = w.Write([]byte(`{"error":"bad request"}`))
+				}))
+				defer srv.Close()
+
+				c := enrich.NewClient("", "test-model", 1, 0)
+				c.SetBaseURL(srv.URL)
+
+				// A nil error here already rules out ErrBackendUnavailable (or
+				// any other error), so there is nothing left for a separate
+				// errors.Is check to catch.
+				out, err := op.call(context.Background(), c)
+				if err != nil {
+					t.Fatalf("HTTP %d: not backend-unavailable, want nil error, got: %v", status, err)
+				}
+				if calls.Load() != 2 {
+					t.Errorf("HTTP %d: expected 2 calls (1 + 1 retry), got %d", status, calls.Load())
+				}
+				if op.name == "Enrich" {
+					if !strings.Contains(out, minimalPageMarker) {
+						t.Errorf("HTTP %d: expected minimal page after retries, got: %q", status, out)
+					}
+				} else if out != "untagged" {
+					t.Errorf("HTTP %d: expected fallback tag \"untagged\", got: %q", status, out)
+				}
+			})
+		}
+	}
+}
+
 func TestClient_BackendUnavailableConnectionRefused(t *testing.T) {
 	for _, op := range operations() {
 		t.Run(op.name, func(t *testing.T) {
@@ -546,6 +603,59 @@ func TestClient_BackendUnavailableTLSError(t *testing.T) {
 			}
 			if out != "" {
 				t.Errorf("expected no output (no minimal page / fallback tags), got %q", out)
+			}
+		})
+	}
+}
+
+// TestClient_BackendUnavailableConnectionReset covers a connection that
+// resets mid-request (the backend process crashing after accepting the
+// connection but before writing a response), rather than refusing the
+// connection outright. Per ADR-031's connection-level-failure consequence,
+// this is treated the same as connection-refused: ErrBackendUnavailable,
+// stop-cycle, no retry — there is no reliable way at the transport level to
+// tell "backend crashed mid-response" apart from "backend truly down".
+func TestClient_BackendUnavailableConnectionReset(t *testing.T) {
+	for _, op := range operations() {
+		t.Run(op.name, func(t *testing.T) {
+			t.Parallel()
+
+			var conns atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conns.Add(1)
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					t.Fatal("ResponseWriter does not support hijacking")
+				}
+				conn, _, err := hj.Hijack()
+				if err != nil {
+					t.Fatalf("Hijack: %v", err)
+				}
+				// Close the raw connection without writing any response,
+				// simulating the backend process dying mid-request.
+				_ = conn.Close()
+			}))
+			defer srv.Close()
+
+			c := enrich.NewClient(secretKey, "test-model", 2, 0)
+			c.SetBaseURL(srv.URL)
+
+			out, err := op.call(context.Background(), c)
+
+			if err == nil {
+				t.Fatalf("expected an error, got nil (output: %q)", out)
+			}
+			if !errors.Is(err, enrich.ErrBackendUnavailable) {
+				t.Errorf("errors.Is(err, ErrBackendUnavailable) = false; err = %v", err)
+			}
+			if got := conns.Load(); got != 1 {
+				t.Errorf("expected exactly 1 connection attempt (no retries), got %d", got)
+			}
+			if out != "" {
+				t.Errorf("expected no output (no minimal page / fallback tags), got %q", out)
+			}
+			if strings.Contains(err.Error(), secretKey) {
+				t.Errorf("error leaks the API key: %v", err)
 			}
 		})
 	}
