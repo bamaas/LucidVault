@@ -3,9 +3,12 @@
 docker run -d \
   --name lucidvault \
   -e RAINDROP_ACCESS_TOKEN="${RAINDROP_ACCESS_TOKEN}" \
-  -e ENRICH_BASE_URL="${ENRICH_BASE_URL}" \
-  -e ENRICH_API_KEY="${ENRICH_API_KEY}" \
-  -e ENRICH_MODEL="${ENRICH_MODEL}" \
+  -e ENRICH_BASE_URL="${ENRICH_BASE_URL:-}" \
+  -e ENRICH_API_KEY="${ENRICH_API_KEY:-}" \
+  -e ENRICH_MODEL="${ENRICH_MODEL:-}" \
+  -e OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-}" \
+  -e OLLAMA_API_KEY="${OLLAMA_API_KEY:-}" \
+  -e OLLAMA_MODEL="${OLLAMA_MODEL:-}" \
   -e VAULT_PATH="${PWD}/test-vault" \
   -v "${PWD}/test-vault":/vault \
   lucidvault:latest
