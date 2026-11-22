@@ -1,3 +1,20 @@
+## v2.0.0 (2026-11-22)
+
+### BREAKING CHANGE
+
+- ENRICH_BASE_URL is now required — the base URL of an
+OpenAI-compatible API that /chat/completions is appended to (usually
+ending in /v1). Ollama Cloud: https://ollama.com/v1. Self-hosted
+Ollama: http://<host>:11434/v1 (Ollama's native root without /v1 does
+not work). The deprecated OLLAMA_BASE_URL/OLLAMA_MODEL/OLLAMA_API_KEY
+still work as fallbacks (OLLAMA_BASE_URL gets /v1 appended
+automatically) and log a deprecation warning; they will be removed in
+a future major release.
+
+### Feat
+
+- talk to any OpenAI-compatible enrichment backend (#114)
+
 ## v1.0.0 (2026-11-21)
 
 ### BREAKING CHANGE
