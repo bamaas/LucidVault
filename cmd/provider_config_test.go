@@ -2,44 +2,15 @@ package main
 
 import "testing"
 
-// TestLoadConfig_OllamaBaseURL verifies OLLAMA_BASE_URL: empty by default (the
-// enricher keeps Ollama Cloud), trimmed of whitespace and a trailing slash so
-// the client can append /api/chat.
-func TestLoadConfig_OllamaBaseURL(t *testing.T) {
-	t.Setenv("OLLAMA_API_KEY", "test")
-	t.Setenv("VAULT_PATH", "/tmp/test")
-	t.Setenv("OLLAMA_MODEL", "test-model")
-
-	tests := []struct {
-		name string
-		env  string
-		want string
-	}{
-		{name: "unset keeps default", env: "", want: ""},
-		{name: "plain url", env: "http://ollama:11434", want: "http://ollama:11434"},
-		{name: "trailing slash and space trimmed", env: " http://ollama:11434/ ", want: "http://ollama:11434"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("OLLAMA_BASE_URL", tt.env)
-			cfg, err := loadConfig(false, false)
-			if err != nil {
-				t.Fatalf("loadConfig: %v", err)
-			}
-			if cfg.ollamaBaseURL != tt.want {
-				t.Errorf("OLLAMA_BASE_URL=%q: ollamaBaseURL=%q, want %q", tt.env, cfg.ollamaBaseURL, tt.want)
-			}
-		})
-	}
-}
+// OLLAMA_BASE_URL parsing moved to enrich_config_test.go: it is now a
+// deprecated fallback for ENRICH_BASE_URL (ADR-031).
 
 // TestLoadConfig_SupadataLang verifies SUPADATA_LANG: empty by default (no
 // language preference), trimmed when set.
 func TestLoadConfig_SupadataLang(t *testing.T) {
-	t.Setenv("OLLAMA_API_KEY", "test")
+	t.Setenv("ENRICH_BASE_URL", "http://enrich.test/v1")
 	t.Setenv("VAULT_PATH", "/tmp/test")
-	t.Setenv("OLLAMA_MODEL", "test-model")
+	t.Setenv("ENRICH_MODEL", "test-model")
 
 	tests := []struct {
 		name string

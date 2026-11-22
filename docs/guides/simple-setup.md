@@ -8,13 +8,16 @@ UI - for those, see the [full-stack runbook](./agent-chat/agent-chat-setup.md).
 ## Prerequisites
 
 - Docker
-- An [Ollama Cloud](https://ollama.com) account (free)
+- An OpenAI-compatible Enrichment Backend - an [Ollama Cloud](https://ollama.com)
+  account (paid, no free tier), or a self-hosted Ollama (no key needed)
 - (Optional) A [Raindrop.io](https://raindrop.io) account (free) - automatic
   bookmark syncing
 
 ## 1. Get your API tokens
 
-- **Ollama Cloud:** <https://ollama.com/settings/keys> → create an API key.
+- **Ollama Cloud:** <https://ollama.com/settings/keys> → create an API key. Base URL:
+  `https://ollama.com/v1`.
+- **Self-hosted Ollama:** no key needed. Base URL: `http://<host>:11434/v1`.
 - **Raindrop** (optional): <https://app.raindrop.io/settings/integrations> → create
   a test token (doesn't expire for personal use).
 
@@ -64,14 +67,16 @@ Skip it and everything still works - just without personalization.
 
 ```bash
 docker run -d --name lucidvault --restart unless-stopped \
-  -e OLLAMA_API_KEY=<your-key> \
-  -e OLLAMA_MODEL=<model> \
+  -e ENRICH_BASE_URL=https://ollama.com/v1 \
+  -e ENRICH_API_KEY=<your-key> \
+  -e ENRICH_MODEL=<model> \
   -v ~/lucid-vault:/vault \
   ghcr.io/bamaas/lucidvault:latest
 ```
 
 Pick `<model>` from <https://ollama.com/search?c=cloud> (or `ollama list` on a
-self-hosted server) - there's no default.
+self-hosted server) - there's no default. For a self-hosted Ollama, use
+`ENRICH_BASE_URL=http://<host>:11434/v1` and omit `ENRICH_API_KEY`.
 
 **With Raindrop.io** (auto-feeds bookmarks into the inbox) - add the token:
 
@@ -88,7 +93,7 @@ The repo root ships a single-container [`docker-compose.yml`](../../docker-compo
 that runs exactly this. From the repo root:
 
 ```bash
-cp .env.example .env      # then set OLLAMA_API_KEY and OLLAMA_MODEL
+cp .env.example .env      # then set ENRICH_BASE_URL and ENRICH_MODEL
 docker compose up -d
 ```
 
@@ -105,8 +110,9 @@ the vault's `AGENTS.md` (which carries the retrieval strategy). Bind-mount it:
 touch ~/.claude/CLAUDE.md    # ensure it exists before mounting
 
 docker run -d --name lucidvault --restart unless-stopped \
-  -e OLLAMA_API_KEY=<your-key> \
-  -e OLLAMA_MODEL=<model> \
+  -e ENRICH_BASE_URL=https://ollama.com/v1 \
+  -e ENRICH_API_KEY=<your-key> \
+  -e ENRICH_MODEL=<model> \
   -e CLAUDE_MD_VAULT_PATH="$HOME/lucid-vault" \
   -v ~/lucid-vault:/vault \
   -v ~/.claude/CLAUDE.md:/CLAUDE.md \

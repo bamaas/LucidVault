@@ -31,7 +31,7 @@ your Obsidian vault, ready to query from Claude Code, a browser, or any synced d
 - **Inbox** - Drop a `.md` file with a URL into `inbox/` and it gets scraped, enriched, and added to your vault. Works standalone - no external service required
 - **Raindrop.io integration** - Optionally connect Raindrop.io to auto-feed bookmarks into the inbox. Backfills all existing bookmarks on first run
 - **YouTube videos** - YouTube URLs are transcribed via [Supadata](https://supadata.ai) and enriched like any other source, so a video becomes a searchable, linkable wiki page
-- **Enrich** - LLM (Ollama Cloud, free) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
+- **Enrich** - Any OpenAI-compatible LLM endpoint (Ollama Cloud or a self-hosted Ollama) generates a wiki-style summary with key takeaways, tags, and wiki-links to related pages
 - **Retrieve** - Built-in Claude Code integration with a tiered lookup strategy (index → wiki → raw) that keeps token usage low
 - **MCP server** - Built-in MCP server exposes the vault as structured retrieval primitives for any AI client (Claude Code, Cursor, Windsurf, OpenClaw). Supports stdio and Streamable HTTP transports
 - **Notes indexing** - Personal notes in `notes/` are automatically scanned and get a wiki copy in `wiki/` with tags. Notes without tags are auto-tagged via the LLM; notes with existing tags keep them as-is. Same-named notes (or a note named like an existing page) never overwrite each other - colliding slugs get `-2`, `-3`, ... wiki pages
@@ -39,8 +39,10 @@ your Obsidian vault, ready to query from Claude Code, a browser, or any synced d
 
 ## Getting started
 
-You need Docker and a free [Ollama Cloud](https://ollama.com) API key. Then pick the
-setup that fits - both build on the same container.
+You need Docker and an OpenAI-compatible Enrichment Backend - an
+[Ollama Cloud](https://ollama.com) API key (paid, no free tier), or a self-hosted
+Ollama (no key needed). Then pick the setup that fits - both build on the same
+container.
 
 ### Simple - single container
 
@@ -49,8 +51,9 @@ Best for a single machine, no sync or chat UI.
 
 ```bash
 docker run -d --name lucidvault --restart unless-stopped \
-  -e OLLAMA_API_KEY=<your-key> \
-  -e OLLAMA_MODEL=<model> \
+  -e ENRICH_BASE_URL=https://ollama.com/v1 \
+  -e ENRICH_API_KEY=<your-key> \
+  -e ENRICH_MODEL=<model> \
   -v ~/lucid-vault:/vault \
   ghcr.io/bamaas/lucidvault:latest
 ```
@@ -74,11 +77,11 @@ Environment variables configure the service. CLI flags control one-off operation
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OLLAMA_API_KEY` | Yes | - | Ollama Cloud API key (free) |
+| `ENRICH_BASE_URL` | Yes | - | Base URL of an OpenAI-compatible chat completions API - the URL `/chat/completions` is appended to (usually ends in `/v1`). Ollama Cloud: `https://ollama.com/v1`. Self-hosted Ollama: `http://<host>:11434/v1`. Ollama's native root (`http://host:11434`, no `/v1`) does not work. Deprecated fallback: `OLLAMA_BASE_URL` (an Ollama root - `/v1` is appended for you - logs a deprecation warning). |
+| `ENRICH_API_KEY` | No | - | API key for the Enrichment Backend. Leave unset for a keyless endpoint (e.g. self-hosted Ollama) - no `Authorization` header is sent. Deprecated fallback: `OLLAMA_API_KEY`. |
 | `VAULT_PATH` | Yes | `/vault` (Docker) | Path to vault |
 | `RAINDROP_ACCESS_TOKEN` | No | - | Enables Raindrop.io as an inbox feeder. When set, bookmarks are synced to `inbox/` automatically. |
-| `OLLAMA_MODEL` | Yes | - | LLM model for enrichment. Pick one from <https://ollama.com/search?c=cloud> (or `ollama list` on a self-hosted server). |
-| `OLLAMA_BASE_URL` | No | `https://ollama.com` | Ollama API endpoint. Set to use a self-hosted Ollama server (e.g. `http://ollama:11434`) instead of Ollama Cloud. |
+| `ENRICH_MODEL` | Yes | - | LLM model for enrichment. Pick one from <https://ollama.com/search?c=cloud> (or `ollama list` on a self-hosted server), or whatever your OpenAI-compatible endpoint serves. Deprecated fallback: `OLLAMA_MODEL`. |
 | `POLL_INTERVAL` | No | `5m` | How often to check for new inbox items |
 | `ENRICH_DELAY_MS` | No | `500` | Delay between API calls (rate limiting) |
 | `ENRICH_MAX_RETRIES` | No | `3` | Max retries on API failure |
@@ -191,7 +194,7 @@ this up for you.
 |-----------|--------|
 | Language | Go |
 | Web scraping | Jina Reader, Supadata (YouTube) |
-| LLM | Ollama Cloud |
+| LLM | Any OpenAI-compatible endpoint (Ollama Cloud, self-hosted Ollama, ...) |
 | Storage | Obsidian vault (markdown) |
 | State | SQLite (modernc.org/sqlite) |
 | Deployment | Docker / Docker Compose / static binary |

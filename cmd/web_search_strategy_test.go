@@ -36,8 +36,8 @@ func TestLoadConfig_AgentWebSearchStrategy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("OLLAMA_API_KEY", "test")
-			t.Setenv("OLLAMA_MODEL", "test-model")
+			t.Setenv("ENRICH_BASE_URL", "http://enrich.test/v1")
+			t.Setenv("ENRICH_MODEL", "test-model")
 			t.Setenv("VAULT_PATH", "/tmp/test")
 
 			if tt.set {

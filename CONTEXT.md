@@ -24,6 +24,8 @@ Domain glossary for LucidVault. Pure terminology — no implementation details.
 
 **Enrichment**: The process of sending scraped content to an LLM and receiving a wiki-formatted summary with tags, key takeaways, and wiki-links.
 
+**Enrichment Backend**: The LLM that Enrichment and Tag Suggestion send their prompts to. Any endpoint that speaks the OpenAI-compatible chat API — Ollama Cloud, a self-hosted Ollama, or a wrapper around another LLM tool. Swapping the backend never changes what a Wiki Page looks like.
+
 **Scraping**: Fetching the content of a URL and converting it to markdown. Uses Jina Reader for web pages and Supadata for YouTube transcripts.
 
 **Tag Suggestion**: The process of sending a note's content to an LLM to generate relevant tags. Applied to notes that lack tags.

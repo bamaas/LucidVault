@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"lucidvault/internal/vault"
+	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -16,6 +20,19 @@ import (
 // maxResponseBytes limits the size of API responses to prevent OOM (10 MB).
 const maxResponseBytes = 10 * 1024 * 1024
 
+// maxErrorBodyBytes caps how much of a failed response body is carried into
+// an error message, so a pathological backend can't produce a giant error.
+const maxErrorBodyBytes = 1000
+
+// ErrBackendUnavailable marks an Enrichment Backend (ADR-031) that cannot be
+// used right now: a connection failure (refused, DNS, TLS) or an HTTP status
+// that means the request itself will never succeed (bad key, no credits, no
+// such model). Callers treat it as a signal to stop and retry later, never by
+// falling back to a minimal page — errors.Is(err, ErrBackendUnavailable).
+var ErrBackendUnavailable = errors.New("enrichment backend unavailable")
+
+// Client talks to any OpenAI-compatible chat completions API (ADR-031):
+// Ollama Cloud, a self-hosted Ollama, or another compatible endpoint.
 type Client struct {
 	apiKey     string
 	model      string
@@ -54,22 +71,39 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
-type chatResponse struct {
-	Message struct {
-		Content string `json:"content"`
-	} `json:"message"`
+// chatCompletionResponse is the OpenAI-compatible chat completions response
+// shape. Only choices[0].message.content is used.
+type chatCompletionResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
 }
 
 func NewClient(apiKey, model string, maxRetries, delayMs int) *Client {
 	return &Client{
-		apiKey:  apiKey,
-		model:   model,
-		baseURL: "https://ollama.com",
+		apiKey: apiKey,
+		model:  model,
+		// No default: ADR-031 rejects defaulting to any one provider.
+		// SetBaseURL is always called with ENRICH_BASE_URL (required).
+		baseURL: "",
 		httpClient: &http.Client{
 			Timeout: 300 * time.Second,
 			Transport: &http.Transport{
+				DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+				TLSHandshakeTimeout: 10 * time.Second,
+				// Calls are seconds to minutes apart (delayMs, retry
+				// backoff, LLM latency itself), so connection reuse saves
+				// almost nothing. Disabling it also removes a correctness
+				// trap: httptrace.GotConn fires for a reused connection too,
+				// so if the backend had already closed it (its own
+				// keep-alive timeout) just as this request went out, that
+				// failure would be misclassified as ErrBackendUnavailable —
+				// a healthy backend wrongly reported as down — instead of
+				// retried like any other mid-flight failure.
+				DisableKeepAlives:     true,
 				ResponseHeaderTimeout: 300 * time.Second,
-				IdleConnTimeout:       90 * time.Second,
 				ForceAttemptHTTP2:     true,
 			},
 		},
@@ -78,9 +112,30 @@ func NewClient(apiKey, model string, maxRetries, delayMs int) *Client {
 	}
 }
 
-// SetBaseURL overrides the Ollama API endpoint: a self-hosted Ollama server
-// via OLLAMA_BASE_URL, or a test server.
-func (c *Client) SetBaseURL(url string) { c.baseURL = url }
+// SetBaseURL overrides the Enrichment Backend's base URL (ENRICH_BASE_URL, a
+// self-hosted Ollama server, another OpenAI-compatible endpoint, or a test
+// server). It must be the base that "/chat/completions" is appended to.
+func (c *Client) SetBaseURL(base string) { c.baseURL = base }
+
+// BaseURL returns the configured Enrichment Backend base URL, for logging
+// which endpoint failed. Never returns the API key, and redacts any
+// password a user put directly in the URL (e.g. https://user:pass@host/v1).
+func (c *Client) BaseURL() string { return redactURLForLog(c.baseURL) }
+
+// redactURLForLog returns raw with any userinfo password replaced with
+// "xxxxx", for safe inclusion in logs and error messages. loadConfig
+// rejects a base URL that fails to parse before the client ever sees it,
+// but on the defensive path where that somehow is not true, a URL that
+// fails to parse could itself be the reason (e.g. a stray password
+// character breaking the syntax), so this never falls back to the raw
+// value — it returns a fixed placeholder instead.
+func redactURLForLog(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid URL>"
+	}
+	return u.Redacted()
+}
 
 func (c *Client) Enrich(ctx context.Context, input *EnrichInput) (string, error) {
 	prompt := buildPrompt(input)
@@ -113,6 +168,10 @@ func (c *Client) Enrich(ctx context.Context, input *EnrichInput) (string, error)
 			return "", ctx.Err()
 		}
 
+		if errors.Is(err, ErrBackendUnavailable) {
+			return "", err
+		}
+
 		if statusCode == 429 {
 			wait := time.Second * time.Duration(1<<attempt)
 			slog.Warn("rate limited, backing off", "attempt", attempt+1, "wait", wait)
@@ -142,7 +201,8 @@ func (c *Client) Enrich(ctx context.Context, input *EnrichInput) (string, error)
 
 // SuggestTags generates tags for a note using a lightweight LLM prompt.
 // Returns a fallback ["untagged"] on persistent failure instead of an error,
-// unless the context is cancelled.
+// unless the context is cancelled or the backend is unavailable
+// (ErrBackendUnavailable).
 func (c *Client) SuggestTags(ctx context.Context, input *TagInput) ([]string, error) {
 	prompt := buildTagPrompt(input)
 
@@ -171,6 +231,10 @@ func (c *Client) SuggestTags(ctx context.Context, input *TagInput) ([]string, er
 
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+
+		if errors.Is(err, ErrBackendUnavailable) {
+			return nil, err
 		}
 
 		if statusCode == 429 {
@@ -251,6 +315,12 @@ func buildTagPrompt(input *TagInput) string {
 	return b.String()
 }
 
+// callAPI sends one OpenAI-compatible chat completions request and returns
+// the model's response text, the HTTP status code (0 if no response was
+// received), and an error. The returned error wraps ErrBackendUnavailable for
+// a connection failure (refused, DNS, TLS) or an HTTP status that means the
+// request will never succeed (401, 402, 403, 404, 410); callers must not
+// retry in that case.
 func (c *Client) callAPI(ctx context.Context, prompt string) (string, int, error) {
 	reqBody := chatRequest{
 		Model: c.model,
@@ -265,34 +335,126 @@ func (c *Client) callAPI(ctx context.Context, prompt string) (string, int, error
 		return "", 0, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/chat", bytes.NewReader(jsonBody))
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(jsonBody))
 	if err != nil {
 		return "", 0, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	// connected becomes true only once a fully usable connection exists —
+	// for https that is after the TLS handshake completes, not just the TCP
+	// dial. GotConn is the standard way to tell "never reached a connection
+	// we could use" apart from "connected, then something else went wrong",
+	// which covers dial failures, DNS failures, and TLS handshake failures
+	// or timeouts uniformly, instead of pattern-matching error types.
+	var connected bool
+	trace := &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { connected = true },
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", 0, fmt.Errorf("calling ollama API: %w", err)
+		if ctx.Err() != nil {
+			return "", 0, ctx.Err()
+		}
+		if !connected {
+			// Never got a usable connection: refused, DNS failure, a TLS
+			// handshake failure or timeout, or a dial-phase timeout (e.g. a
+			// firewall silently dropping packets). The backend is not
+			// reachable at all, so retrying is pointless.
+			return "", 0, fmt.Errorf("enrichment backend unreachable at %s: %v: %w", c.BaseURL(), err, ErrBackendUnavailable)
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			// Connected, then timed out waiting for a response: treated
+			// like a 5xx, retry then fall back.
+			return "", 0, fmt.Errorf("calling enrichment backend: %w", err)
+		}
+		// Connected, then failed some other way (e.g. a reset): there is no
+		// reliable way to tell "backend crashed mid-response" from "truly
+		// down" at the transport level (ADR-031), so treat it the same.
+		return "", 0, fmt.Errorf("enrichment backend unreachable at %s: %v: %w", c.BaseURL(), err, ErrBackendUnavailable)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return "", resp.StatusCode, fmt.Errorf("reading response: %w", err)
+		if ctx.Err() != nil {
+			return "", resp.StatusCode, ctx.Err()
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			// Slow to finish sending the body: treated like a 5xx, retry
+			// then fall back.
+			return "", resp.StatusCode, fmt.Errorf("reading response: %w", err)
+		}
+		// The connection was already established and a status code
+		// received, so a non-timeout failure here (e.g. a connection reset
+		// mid-stream) is the same "connected, then broke" case as above.
+		return "", resp.StatusCode, fmt.Errorf("enrichment backend connection broke reading response: %v: %w", err, ErrBackendUnavailable)
+	}
+
+	if isBackendUnavailableStatus(resp.StatusCode) {
+		return "", resp.StatusCode, fmt.Errorf("enrichment backend returned %d: %s: %w",
+			resp.StatusCode, c.safeBody(body), ErrBackendUnavailable)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", resp.StatusCode, fmt.Errorf("ollama API returned %d: %s", resp.StatusCode, string(body))
+		return "", resp.StatusCode, fmt.Errorf("enrichment backend returned %d: %s", resp.StatusCode, c.safeBody(body))
 	}
 
-	var chatResp chatResponse
+	var chatResp chatCompletionResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
 		return "", resp.StatusCode, fmt.Errorf("parsing response: %w", err)
 	}
 
-	return chatResp.Message.Content, resp.StatusCode, nil
+	if len(chatResp.Choices) == 0 {
+		return "", resp.StatusCode, nil
+	}
+
+	return chatResp.Choices[0].Message.Content, resp.StatusCode, nil
+}
+
+// isBackendUnavailableStatus reports whether an HTTP status means the
+// request will never succeed against this backend/key/model combination, so
+// retrying is pointless (ADR-031).
+func isBackendUnavailableStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden,
+		http.StatusNotFound, http.StatusGone:
+		return true
+	default:
+		return false
+	}
+}
+
+// truncateBody trims a response body for inclusion in an error message,
+// capping it at maxErrorBodyBytes so a huge body can't blow up the error.
+func truncateBody(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if len(s) > maxErrorBodyBytes {
+		return s[:maxErrorBodyBytes] + "...(truncated)"
+	}
+	return s
+}
+
+// safeBody prepares a failed response body for inclusion in an error
+// message: the configured API key redacted first, then truncated by
+// truncateBody. Redaction must run before truncation — otherwise a key that
+// straddles the truncation cutoff would have its surviving prefix leak into
+// the error. Some backends echo the presented key in their error body (e.g.
+// "invalid API key: sk-..."), and that body flows into a log line wherever
+// this error is logged, so the key must never survive into it.
+func (c *Client) safeBody(body []byte) string {
+	if c.apiKey == "" {
+		return truncateBody(body)
+	}
+	return truncateBody([]byte(strings.ReplaceAll(string(body), c.apiKey, "[REDACTED]")))
 }
 
 func cleanResponse(content string) string {

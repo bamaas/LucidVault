@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -66,23 +65,14 @@ func setupTestEnv(t *testing.T) (string, *store.Store, *vault.Vault, *scraper.Sc
 	sc := scraper.New()
 	sc.SetBaseURL(jinaServer.URL + "/")
 
-	// Test HTTP server for Ollama enricher
-	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		}{}
-		resp.Message.Content = validWikiResponse
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			t.Errorf("json.Encode: %v", err)
-		}
+	// Test HTTP server for the Enrichment Backend (OpenAI-compatible)
+	enrichServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeChatCompletion(t, w, validWikiResponse)
 	}))
-	t.Cleanup(ollamaServer.Close)
+	t.Cleanup(enrichServer.Close)
 
 	en := enrich.NewClient("test-key", "test-model", 0, 0)
-	en.SetBaseURL(ollamaServer.URL)
+	en.SetBaseURL(enrichServer.URL)
 
 	return tmpDir, db, v, sc, en
 }
@@ -272,16 +262,7 @@ func TestProcessInbox_ShutdownStopsProcessing(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		resp := struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		}{}
-		resp.Message.Content = validWikiResponse
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			t.Errorf("json.Encode: %v", err)
-		}
+		writeChatCompletion(t, w, validWikiResponse)
 	}))
 	t.Cleanup(ollamaServer.Close)
 
@@ -652,16 +633,7 @@ func TestProcessNotes_AutoTagsTaglessNote(t *testing.T) {
 
 	// Mock Ollama server that returns tags for SuggestTags
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		}{}
-		resp.Message.Content = "golang, concurrency, goroutines"
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			t.Errorf("json.Encode: %v", err)
-		}
+		writeChatCompletion(t, w, "golang, concurrency, goroutines")
 	}))
 	t.Cleanup(ollamaServer.Close)
 
@@ -848,14 +820,7 @@ See also [[related-topic]] and [[another-page]].
 - Test takeaway
 `
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		}{}
-		resp.Message.Content = wikiWithLinks
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		writeChatCompletion(t, w, wikiWithLinks)
 	}))
 	t.Cleanup(ollamaServer.Close)
 
