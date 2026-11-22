@@ -9,13 +9,13 @@ services:
   lucidvault:
     image: ghcr.io/bamaas/lucidvault:latest
     environment:
-      - OLLAMA_API_KEY=${OLLAMA_API_KEY:?OLLAMA_API_KEY is required}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:?OLLAMA_MODEL is required}
+      - ENRICH_BASE_URL=${ENRICH_BASE_URL:?ENRICH_BASE_URL is required}
+      - ENRICH_MODEL=${ENRICH_MODEL:?ENRICH_MODEL is required}
+      - ENRICH_API_KEY=${ENRICH_API_KEY:-}
       - VAULT_PATH=/vault
       - RAINDROP_ACCESS_TOKEN=${RAINDROP_ACCESS_TOKEN:-}
       - SUPADATA_API_KEY=${SUPADATA_API_KEY:-}
       - SUPADATA_LANG=${SUPADATA_LANG:-}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
       - POLL_INTERVAL=${POLL_INTERVAL:-}
       # Expose the in-process MCP server over HTTP (empty = off). The full-stack
       # runbook turns this on; leave empty for the plain pipeline.

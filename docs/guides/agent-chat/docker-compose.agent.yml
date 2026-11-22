@@ -13,7 +13,7 @@
 #   hermes          the agent (OpenAI API + agent loop + MCP client), sandboxed
 #   open-webui      the browser chat UI, wired to Hermes
 #
-# Requires in .env: OLLAMA_API_KEY, OLLAMA_MODEL, COUCHDB_PASSWORD, HERMES_API_KEY.
+# Requires in .env: ENRICH_BASE_URL, ENRICH_MODEL, COUCHDB_PASSWORD, HERMES_API_KEY.
 
 services:
   lucidvault:

@@ -1,6 +1,6 @@
 # Claude instructions for LucidVault
 
-AI-powered personal knowledge base. Scrapes URLs, enriches via Ollama Cloud, writes to Obsidian vault. URLs enter through an inbox folder — either manually or via optional Raindrop.io integration.
+AI-powered personal knowledge base. Scrapes URLs, enriches via an OpenAI-compatible Enrichment Backend (Ollama Cloud, a self-hosted Ollama, or any other compatible endpoint), writes to Obsidian vault. URLs enter through an inbox folder — either manually or via optional Raindrop.io integration.
 
 ## Pipeline
 
@@ -14,14 +14,14 @@ Poll loop (configurable interval)
   ├─ processInbox:
   │    inbox.Scan(vaultPath)              → []Item (reads inbox/*.md)
   │    scraper.Scrape(url)                → markdown content (Jina Reader; YouTube via Supadata)
-  │    enrich.Enrich(content)             → wiki-style summary (Ollama Cloud)
+  │    enrich.Enrich(content)             → wiki-style summary (Enrichment Backend)
   │    vault.WriteRaw() + vault.WriteWiki() + vault.UpdateIndex()
   │    store.UpsertBookmark()             → mark processed in SQLite
   │    inbox.Delete()                     → remove processed inbox file
   │
   └─ processNotes:
        notes.Scan(vaultPath)              → detect new/changed notes
-       enrich.SuggestTags(content)        → auto-tag notes without tags (Ollama Cloud)
+       enrich.SuggestTags(content)        → auto-tag notes without tags (Enrichment Backend)
        vault.WriteWiki() + vault.UpdateIndex()  → wiki copy with tags
        store.UpsertNote()                 → track content hashes + wiki path
 ```
@@ -34,7 +34,7 @@ internal/claudemd/       — CLAUDE.md upsert logic for Claude Code integration
 internal/inbox/          — Inbox scanner and file management
 internal/raindrop/       — Raindrop API client and inbox sync (optional feeder)
 internal/scraper/        — Scraper (Jina Reader + Supadata YouTube transcripts)
-internal/enrich/         — Ollama Cloud enrichment
+internal/enrich/         — OpenAI-compatible Enrichment Backend client
 internal/notes/          — Notes scanner, frontmatter parser
 internal/mcpserver/      — MCP server (retrieval, inbox write, vault mutation tools for AI agents)
 internal/agentsmd/       — AGENTS.md generator (static template + dynamic MCP tools + vault stats)
@@ -55,7 +55,7 @@ docker-compose.yml        — Full stack: LucidVault + LiveSync bridge + CouchDB
 - **`raindrop.Client`** — `FetchBookmarks(ctx) ([]Bookmark, error)`. Fetches all bookmarks from Raindrop API.
 - **`raindrop.SyncToInbox`** — `SyncToInbox(bookmarks, db, vaultPath) (int, error)`. Creates inbox files for new URLs (dedup via DB).
 - **`scraper.Scraper`** — `Scrape(ctx, url) (*Result, error)`. Uses Jina Reader; delegates YouTube URLs to `YouTubeClient` (Supadata).
-- **`enrich.Client`** — `Enrich(ctx, *EnrichInput) (string, error)`. Calls Ollama Cloud with retry logic. Returns wiki-formatted markdown. `SuggestTags(ctx, *TagInput) ([]string, error)` generates tags for notes.
+- **`enrich.Client`** — `Enrich(ctx, *EnrichInput) (string, error)`. Calls the Enrichment Backend (any OpenAI-compatible chat completions API) with retry logic. Returns wiki-formatted markdown. `SuggestTags(ctx, *TagInput) ([]string, error)` generates tags for notes. Both return an error wrapping `enrich.ErrBackendUnavailable` when the backend is unusable (bad key, no credits, no such model, unreachable) instead of falling back to a minimal page/`["untagged"]`.
 - **`vault.Vault`** — `WriteRaw()`, `WriteWiki()`, `UpdateIndex()`, `RemoveFromIndex()`, `ScanWikiDir()`, `ScanRawDir()`, `ScanNotesDir()`. Manages file layout and `index.md`.
 - **`store.Store`** — SQLite-backed deduplication and graph. Tracks processed bookmarks (by normalized URL), note content hashes, and wiki-link edges (`GetOutboundEdges`, `GetInboundEdges`, `EdgeCount`, `ExpandGraph`).
 
@@ -86,19 +86,19 @@ mise run lint:commits          # Check commit message (used by commit-msg hook)
 
 - **Pure-Go SQLite** — Uses `modernc.org/sqlite` (no CGO). Don't import `mattn/go-sqlite3`. Build tags for CGO will break the build.
 - **Jina Reader rate limits** — Scraper makes HTTP calls to `r.jina.ai`. Respect rate limits; the poll interval naturally throttles.
-- **Ollama Cloud retries** — `enrich.Client` has built-in retry with configurable `maxRetries` and `delayMs`. Don't add external retry wrappers.
+- **Enrichment Backend retries** — `enrich.Client` has built-in retry with configurable `maxRetries` and `delayMs`. Don't add external retry wrappers. An unavailable backend (`enrich.ErrBackendUnavailable`) is never retried — the pipeline stops the cycle instead.
 - **Inbox is the single entry point** — All URLs flow through `inbox/`. Raindrop is an optional feeder that creates inbox files. No other entry path exists.
 - **Vault index.md** — `vault.UpdateIndex()` appends to `index.md`. Idempotent by slug.
 
 ## Environment Variables
 
-- `OLLAMA_API_KEY` — (required) Ollama Cloud API key
-- `OLLAMA_MODEL` — (required) LLM model for enrichment. No default — pick one from <https://ollama.com/search?c=cloud> (or `ollama list` on a self-hosted server). Trimmed of surrounding whitespace; unset or whitespace-only fails `loadConfig` with `OLLAMA_MODEL is required` (see `docs/adr/030-no-default-ollama-model.md`).
+- `ENRICH_BASE_URL` — (required) Base URL of the Enrichment Backend's OpenAI-compatible chat completions API — the URL `/chat/completions` is appended to (usually ends in `/v1`). Ollama Cloud: `https://ollama.com/v1`. Self-hosted Ollama: `http://<host>:11434/v1`. Ollama's native root (no `/v1`) does not work. Trimmed of whitespace and trailing `/`. Deprecated fallback: `OLLAMA_BASE_URL` (an Ollama root — `/v1` appended automatically unless already present), logs a `WARN` deprecation notice. Unset/blank for both fails `loadConfig` with `ENRICH_BASE_URL is required: ...` (see `docs/adr/031-openai-compatible-enrichment-backend.md`).
+- `ENRICH_MODEL` — (required) LLM model for enrichment. No default — pick one from <https://ollama.com/search?c=cloud> (or `ollama list` on a self-hosted server), or whatever your OpenAI-compatible endpoint serves. Trimmed of surrounding whitespace; unset or whitespace-only fails `loadConfig` with `ENRICH_MODEL is required` (see `docs/adr/030-no-default-ollama-model.md`, `docs/adr/031-openai-compatible-enrichment-backend.md`). Deprecated fallback: `OLLAMA_MODEL`.
+- `ENRICH_API_KEY` — (optional) API key for the Enrichment Backend. Empty sends no `Authorization` header (for a keyless endpoint, e.g. self-hosted Ollama). Deprecated fallback: `OLLAMA_API_KEY`.
 - `VAULT_PATH` — (required) Path to Obsidian vault
 - `RAINDROP_ACCESS_TOKEN` — (optional) Enables Raindrop.io as an inbox feeder
 - `SUPADATA_API_KEY` — (optional) Supadata API key for YouTube transcript extraction
 - `SUPADATA_LANG` — (optional, default: empty) Preferred YouTube transcript language (ISO 639-1), sent as `lang` to Supadata via `YouTubeClient.SetLang`. Empty sends no preference (Supadata returns its first track).
-- `OLLAMA_BASE_URL` — (optional, default: `https://ollama.com`) Ollama API endpoint, applied with `enrich.Client.SetBaseURL`. Trailing slash trimmed. For self-hosted Ollama.
 - `HYGIENE_INTERVAL` — (optional, default: 10) Run vault hygiene every Nth poll cycle
 - `MCP_HTTP_ADDR` — (optional, default: empty/off) Serve the MCP server over HTTP in-process with the pipeline (e.g. `:8080`), sharing the same `*store.Store` and `*vault.Vault`. The MCP server can run in-process — no second container or process — which keeps SQLite writes safe.
 - `MCP_ALLOWED_HOST` — (optional, default: `localhost,127.0.0.1`) Comma-separated Host-header allowlist for the in-process MCP server; `*` or empty disables the guard (for Kubernetes ClusterIP + NetworkPolicy)

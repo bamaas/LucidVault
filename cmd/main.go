@@ -29,15 +29,15 @@ import (
 
 type config struct {
 	raindropToken     string
-	ollamaAPIKey      string
-	ollamaModel       string
+	enrichAPIKey      string
+	enrichModel       string
 	vaultPath         string
 	pollInterval      time.Duration
 	enrichDelayMs     int
 	enrichRetries     int
 	supadataAPIKey    string
 	supadataLang      string
-	ollamaBaseURL     string
+	enrichBaseURL     string
 	forceReEnrich     bool
 	forceReFetch      bool
 	hygieneInterval   int
@@ -146,11 +146,8 @@ func main() {
 		sc.SetYouTubeClient(yt)
 		slog.Info("youtube transcript support enabled via supadata", "lang", cfg.supadataLang)
 	}
-	en := enrich.NewClient(cfg.ollamaAPIKey, cfg.ollamaModel, cfg.enrichRetries, cfg.enrichDelayMs)
-	if cfg.ollamaBaseURL != "" {
-		en.SetBaseURL(cfg.ollamaBaseURL)
-		slog.Info("using custom ollama endpoint", "url", cfg.ollamaBaseURL)
-	}
+	en := enrich.NewClient(cfg.enrichAPIKey, cfg.enrichModel, cfg.enrichRetries, cfg.enrichDelayMs)
+	en.SetBaseURL(cfg.enrichBaseURL)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -181,7 +178,8 @@ func main() {
 
 	slog.Info("starting lucidvault",
 		"poll_interval", cfg.pollInterval,
-		"model", cfg.ollamaModel,
+		"enrich_base_url", cfg.enrichBaseURL,
+		"model", cfg.enrichModel,
 		"raindrop_enabled", rd != nil,
 		"force_re_enrich", cfg.forceReEnrich,
 		"force_re_fetch", cfg.forceReFetch,
@@ -293,6 +291,11 @@ func processInbox(ctx context.Context, sc *scraper.Scraper, en *enrich.Client, d
 		}
 
 		if err := processInboxItem(ctx, *item, sc, en, db, v); err != nil {
+			if errors.Is(err, enrich.ErrBackendUnavailable) {
+				slog.Error("enrichment backend unavailable, stopping inbox cycle",
+					"endpoint", en.BaseURL(), "error", err)
+				break
+			}
 			slog.Error("failed to process inbox item", "url", item.URL, "error", err)
 			failedPaths[item.Path] = true
 			failed++
@@ -443,6 +446,11 @@ func reEnrichAll(ctx context.Context, en *enrich.Client, db *store.Store, v *vau
 		}
 
 		if err := reEnrichBookmark(ctx, rec, en, db, v); err != nil {
+			if errors.Is(err, enrich.ErrBackendUnavailable) {
+				slog.Error("enrichment backend unavailable, stopping re-enrichment",
+					"endpoint", en.BaseURL(), "error", err)
+				break
+			}
 			slog.Error("failed to re-enrich bookmark", "title", rec.Title, "error", err)
 			failed++
 			continue
@@ -686,6 +694,11 @@ func processNotes(ctx context.Context, en *enrich.Client, db *store.Store, v *va
 				Profile: profile,
 			})
 			if err != nil {
+				if errors.Is(err, enrich.ErrBackendUnavailable) {
+					slog.Error("enrichment backend unavailable, stopping notes cycle",
+						"endpoint", en.BaseURL(), "error", err)
+					break
+				}
 				slog.Error("failed to suggest tags for note", "path", nf.Path, "error", err)
 				continue
 			}
@@ -893,20 +906,35 @@ func buildNoteWikiContent(title string, tags []string, body string) string {
 func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 	raindropToken := os.Getenv("RAINDROP_ACCESS_TOKEN")
 
-	apiKey := os.Getenv("OLLAMA_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("OLLAMA_API_KEY is required")
-	}
-
 	vaultPath := os.Getenv("VAULT_PATH")
 	if vaultPath == "" {
 		return nil, fmt.Errorf("VAULT_PATH is required")
 	}
 
-	model := strings.TrimSpace(os.Getenv("OLLAMA_MODEL"))
-	if model == "" {
-		return nil, fmt.Errorf("OLLAMA_MODEL is required")
+	// ENRICH_BASE_URL / ENRICH_MODEL / ENRICH_API_KEY configure the
+	// Enrichment Backend (ADR-031): any OpenAI-compatible chat completions
+	// API. OLLAMA_BASE_URL / OLLAMA_MODEL / OLLAMA_API_KEY are deprecated
+	// fallbacks, each logged once when used.
+	enrichBaseURL, baseURLFromLegacy := resolveEnrichVar(
+		os.Getenv("ENRICH_BASE_URL"), os.Getenv("OLLAMA_BASE_URL"), "ENRICH_BASE_URL", "OLLAMA_BASE_URL")
+	if enrichBaseURL == "" {
+		return nil, fmt.Errorf("ENRICH_BASE_URL is required: the base URL of an OpenAI-compatible API " +
+			"(Ollama Cloud: https://ollama.com/v1, self-hosted Ollama: http://<host>:11434/v1)")
 	}
+	enrichBaseURL = strings.TrimRight(enrichBaseURL, "/")
+	if baseURLFromLegacy && !strings.HasSuffix(enrichBaseURL, "/v1") {
+		// OLLAMA_BASE_URL is an Ollama root, not an OpenAI-compatible base.
+		enrichBaseURL += "/v1"
+	}
+
+	enrichModel, _ := resolveEnrichVar(
+		os.Getenv("ENRICH_MODEL"), os.Getenv("OLLAMA_MODEL"), "ENRICH_MODEL", "OLLAMA_MODEL")
+	if enrichModel == "" {
+		return nil, fmt.Errorf("ENRICH_MODEL is required")
+	}
+
+	enrichAPIKey, _ := resolveEnrichVar(
+		os.Getenv("ENRICH_API_KEY"), os.Getenv("OLLAMA_API_KEY"), "ENRICH_API_KEY", "OLLAMA_API_KEY")
 
 	pollInterval := 5 * time.Minute
 	if v := os.Getenv("POLL_INTERVAL"); v != "" {
@@ -940,10 +968,6 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 	// SUPADATA_LANG: preferred YouTube transcript language (ISO 639-1). Empty
 	// keeps Supadata's default (first available track).
 	supadataLang := strings.TrimSpace(os.Getenv("SUPADATA_LANG"))
-
-	// OLLAMA_BASE_URL: Ollama API endpoint. Empty keeps Ollama Cloud
-	// (https://ollama.com); set it to use a self-hosted Ollama server.
-	ollamaBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("OLLAMA_BASE_URL")), "/")
 
 	hygieneInterval := 10
 	if v := os.Getenv("HYGIENE_INTERVAL"); v != "" {
@@ -980,15 +1004,15 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 
 	return &config{
 		raindropToken:     raindropToken,
-		ollamaAPIKey:      apiKey,
-		ollamaModel:       model,
+		enrichAPIKey:      enrichAPIKey,
+		enrichModel:       enrichModel,
 		vaultPath:         vaultPath,
 		pollInterval:      pollInterval,
 		enrichDelayMs:     enrichDelayMs,
 		enrichRetries:     enrichRetries,
 		supadataAPIKey:    supadataAPIKey,
 		supadataLang:      supadataLang,
-		ollamaBaseURL:     ollamaBaseURL,
+		enrichBaseURL:     enrichBaseURL,
 		forceReEnrich:     forceReEnrich,
 		forceReFetch:      forceReFetch,
 		hygieneInterval:   hygieneInterval,
@@ -998,6 +1022,23 @@ func loadConfig(forceReEnrich, forceReFetch bool) (*config, error) {
 		webSearchStrategy: webSearchStrategy,
 		claudeMDVaultPath: claudeMDVaultPath,
 	}, nil
+}
+
+// resolveEnrichVar resolves one of the ENRICH_* settings against its
+// deprecated OLLAMA_* fallback (ADR-031). Whitespace-only counts as unset for
+// both. The new value wins whenever it is non-blank; otherwise the legacy
+// value is used and a WARN is logged once, naming the replacement — never its
+// value. usedLegacy reports which one was used, for callers that need to
+// apply legacy-only normalization (e.g. appending "/v1").
+func resolveEnrichVar(newValue, legacyValue, newName, legacyName string) (value string, usedLegacy bool) {
+	if v := strings.TrimSpace(newValue); v != "" {
+		return v, false
+	}
+	if v := strings.TrimSpace(legacyValue); v != "" {
+		slog.Warn(legacyName + " is deprecated, use " + newName)
+		return v, true
+	}
+	return "", false
 }
 
 // resolveClaudeMDVaultPath returns the vault path to advertise in the host
