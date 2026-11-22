@@ -58,14 +58,21 @@ services:
   # --- Agent access -------------------------------------------------------
   open-terminal:
     # Official image - pulled automatically, no local build. Tag convention is
-    # "<open-terminal-version>-agents"; this one is unverified beyond research
-    # notes as of writing - confirm it exists before relying on it:
+    # "<open-terminal-version>-agents". Pin an exact tag rather than tracking
+    # a floating one; before bumping it, check the package page:
     #   https://github.com/open-webui/open-terminal/pkgs/container/open-terminal
     # (`docker manifest inspect ghcr.io/open-webui/open-terminal:<tag>` also works.)
     image: ghcr.io/open-webui/open-terminal:0.17.21-agents
     container_name: open-terminal
     depends_on:
       - lucidvault
+    # Recommended hardening: the image grants the `user` account passwordless
+    # sudo; this blocks that escalation path. Verified: does not interfere
+    # with the agent CLI or MCP registration.
+    security_opt:
+      - no-new-privileges:true
+    # Verified on a live deployment: ~316 MiB idle. Adjust for your workload.
+    mem_limit: 1536m
     volumes:
       # Open Terminal's home (HOME=/home/user) - agent login, MCP registration
       # (~/.claude.json) and session state live here. Read/write, named volume
@@ -82,10 +89,15 @@ services:
       # Anthropic API key. Leave the other blank in .env.
       CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      # Working directory the agent starts in, relative to /home/user. Points
-      # at a folder containing a CLAUDE.md that imports the vault's AGENTS.md
-      # (see agent-chat-setup.md, "Agent instructions").
-      OPEN_TERMINAL_START_DIR: "${OPEN_TERMINAL_START_DIR:-vault-agent}"
+      # Working directory the agent starts in (absolute). Points at a folder
+      # containing a CLAUDE.md that states the read-only boundary and imports
+      # the vault's AGENTS.md (see agent-chat-setup.md, "Agent instructions").
+      OPEN_TERMINAL_START_DIR: "${OPEN_TERMINAL_START_DIR:-/home/user/workspace}"
+      # Open Terminal also serves a browser-automation and a desktop
+      # HTTP/WebSocket endpoint; this agent only needs a terminal, so turn
+      # both off to shrink the surface it exposes.
+      OPEN_TERMINAL_ENABLE_BROWSER: "false"
+      OPEN_TERMINAL_ENABLE_DESKTOP: "false"
     # Optional hardening: restrict the container's own outbound network to an
     # allowlist of domains. Needs NET_ADMIN to install the firewall rules.
     # cap_add:
@@ -114,6 +126,7 @@ services:
       # Tool-call approvals in chat (reads run free, writes/commands wait for
       # you). Verify this landed under Admin -> Settings in your version.
       ENABLE_TOOL_PERMISSIONS: "True"
+      ENABLE_TOOL_PERMISSIONS_AUTO: "True"
     volumes:
       - open-webui:/app/backend/data
     restart: unless-stopped

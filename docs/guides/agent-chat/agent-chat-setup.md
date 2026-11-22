@@ -100,18 +100,15 @@ OPEN_TERMINAL_API_KEY=<generate with: openssl rand -hex 24>
 COUCHDB_PASSWORD=<couchdb-pass>    # must match deploy/livesync-bridge/config.json
 ```
 
-**2. Confirm the image tag.** `docker-compose.agent.yml` pins
-`ghcr.io/open-webui/open-terminal:0.17.21-agents`, following the project's
-`<version>-agents` tag convention. Verify that exact tag still exists before you
-rely on it (tags move faster than this guide):
-
-```bash
-docker manifest inspect ghcr.io/open-webui/open-terminal:0.17.21-agents >/dev/null \
-  && echo "tag exists" || echo "pick a current tag from the package page"
-```
-
-If it's gone, pick the closest current `<version>-agents` tag and update both
-`docker-compose.agent.yml` and this note.
+**2. Image tag.** `docker-compose.agent.yml` pins
+`ghcr.io/open-webui/open-terminal:0.17.21-agents` (confirmed against a live
+deployment on Nov 22, 2026), following the project's `<version>-agents` tag
+convention. Pin an exact tag rather than tracking a floating one - tags move
+faster than this guide. If you bump it, check the
+[package page](https://github.com/open-webui/open-terminal/pkgs/container/open-terminal)
+for the current `<version>-agents` release (`docker manifest inspect
+ghcr.io/open-webui/open-terminal:<tag>` also confirms a tag exists) and update
+both `docker-compose.agent.yml` and this note.
 
 **3. Sign the agent in.** Open Terminal launches the agent CLI inside the
 container and the CLI inherits the container's environment, so either works:
@@ -139,19 +136,26 @@ edit the left side of that mount; keep the right side and the `:ro` as-is.
 **5. Agent instructions: point the agent at the vault's `AGENTS.md`.** LucidVault
 generates `vault/AGENTS.md` with the retrieval and citation rules every agent
 should follow (ADR-023, ADR-024). Give the containerized agent a `CLAUDE.md` that
-imports it, in a dedicated start directory inside the persisted home volume:
+states the read-only boundary up front and imports `AGENTS.md`, in a dedicated
+start directory inside the persisted home volume:
 
 ```bash
 docker compose up -d open-terminal   # creates the home volume if needed
-docker compose exec -u user open-terminal mkdir -p /home/user/vault-agent
-docker compose exec -u user open-terminal sh -c \
-  'echo "@/home/user/vault/AGENTS.md" > /home/user/vault-agent/CLAUDE.md'
+docker compose exec -u user open-terminal mkdir -p /home/user/workspace
+docker compose exec -u user open-terminal tee /home/user/workspace/CLAUDE.md >/dev/null <<'EOF'
+Vault at /home/user/vault is read-only. Follow /home/user/vault/AGENTS.md for
+retrieval and citations. Write only via the lucidvault MCP tools. Never modify
+files under /home/user/vault.
+
+@/home/user/vault/AGENTS.md
+EOF
 ```
 
-`OPEN_TERMINAL_START_DIR=vault-agent` in `docker-compose.agent.yml` makes this the
-agent's working directory, so Claude Code loads that `CLAUDE.md` - and through its
-`@`-import, the vault's `AGENTS.md` - every session. (Codex/other ACP agents:
-use the equivalent memory-file mechanism in the same directory.)
+`OPEN_TERMINAL_START_DIR=/home/user/workspace` in `docker-compose.agent.yml` makes
+this the agent's working directory, so Claude Code loads that `CLAUDE.md` -
+stating the read-only boundary explicitly, then through its `@`-import pulling
+in the vault's `AGENTS.md` - every session. (Codex/other ACP agents: use the
+equivalent memory-file mechanism in the same directory.)
 
 **6. Register the MCP server** for the Open Terminal user (persisted in
 `~/.claude.json` inside the home volume, so this is a one-time step per volume):
@@ -160,7 +164,7 @@ use the equivalent memory-file mechanism in the same directory.)
 docker compose exec -u user open-terminal \
   claude mcp add --scope user --transport http lucidvault http://lucidvault:8080/mcp
 docker compose exec -u user open-terminal claude mcp list
-                                          # → lucidvault: connected
+                                          # → lucidvault: ... - ✔ Connected
 ```
 
 `MCP_ALLOWED_HOST` on the `lucidvault` service already includes `lucidvault` (the
@@ -180,16 +184,29 @@ ever need to do it by hand (or just want to confirm it took): **Admin → Settin
 Integrations → Open Terminal**, URL `http://open-terminal:8000`, the API key from
 `.env`.
 
-**8. Verify tool approvals are on.** `ENABLE_TOOL_PERMISSIONS=True` is set in the
-compose file; confirm it under OpenWebUI's Admin settings for your version - the
-default mode lets reads through and holds writes/commands for your approval in
-chat.
+OpenWebUI only reads `TERMINAL_SERVER_CONNECTIONS` and initializes terminal
+servers at startup, so the overlay's `depends_on: [open-terminal]` on
+`open-webui` matters - without it, OpenWebUI can start before Open Terminal is
+ready to answer. If `docker compose logs open-webui` shows `Initialized 0
+terminal server(s)`, Open Terminal wasn't up in time: `docker compose restart
+open-webui` once it is.
+
+**8. Verify tool approvals are on.** `ENABLE_TOOL_PERMISSIONS=True` and
+`ENABLE_TOOL_PERMISSIONS_AUTO=True` are set in the compose file (both are the
+verified env var names and both are applied); confirm under OpenWebUI's Admin
+settings for your version - the default mode lets reads through and holds
+writes/commands for your approval in chat.
 
 **9. Chat.** In OpenWebUI, start a **new chat**, select the Open Terminal
 connection as the model source, then pick `claude-code/<model>` from the picker
-(the model list is populated once the terminal is selected). Ask it a question
-about your vault, approve the first write it proposes, and confirm an attempt to
-edit a vault file directly fails (`Read-only file system`).
+(the model list is populated once the terminal is selected - Open Terminal
+listens on `:8000` and serves this from its own `/agents` endpoint, bearer-authed
+with `OPEN_TERMINAL_API_KEY`; it lists the `claude-code` agent together with
+whatever models the CLI currently reports, e.g. `claude-sonnet-5-5`,
+`claude-opus-5-5`, `claude-haiku-5-5` - that list comes from the CLI and changes
+over time, so don't treat any particular model name here as authoritative). Ask
+it a question about your vault, approve the first write it proposes, and confirm
+an attempt to edit a vault file directly fails (`Read-only file system`).
 
 ### Multi-device sync (LiveSync)
 
@@ -205,6 +222,21 @@ use it:
 
 This is what makes surface B work: your machine's synced copy is what your own
 local Claude Code reads - independent of the Open Terminal container above.
+
+---
+
+## Verification
+
+Checks run against a live deployment (Nov 22, 2026):
+
+- **Sign-in** - `docker compose exec -u user open-terminal claude -p "Reply with
+  exactly: ok"` returns `ok`.
+- **MCP connected** - `docker compose exec -u user open-terminal claude mcp list`
+  shows `lucidvault` as `✔ Connected`.
+- **Read-only enforced** - `docker compose exec -u user open-terminal touch
+  /home/user/vault/x` fails (`Read-only file system`).
+- **End to end** - from OpenWebUI, select the Open Terminal connection, then pick
+  the `claude-code` model from the picker and send a message.
 
 ---
 
@@ -233,8 +265,20 @@ daemon, a bespoke OpenAI-compatible proxy, a read-write mount).
 - **Chat connection is bearer-authed.** OpenWebUI authenticates to Open Terminal
   with `OPEN_TERMINAL_API_KEY`; Open Terminal is otherwise unreachable from outside
   the compose network (no published port).
-- **Tool approvals in chat.** `ENABLE_TOOL_PERMISSIONS=True` holds writes and
-  shell commands for your approval; reads run free.
+- **Tool approvals in chat.** `ENABLE_TOOL_PERMISSIONS=True` and
+  `ENABLE_TOOL_PERMISSIONS_AUTO=True` hold writes and shell commands for your
+  approval; reads run free.
+- **Browser/desktop endpoints disabled.** `OPEN_TERMINAL_ENABLE_BROWSER=false`
+  and `OPEN_TERMINAL_ENABLE_DESKTOP=false` turn off Open Terminal's own
+  browser-automation and desktop HTTP/WebSocket endpoints - this deployment only
+  needs the terminal, so there's no reason to expose the other two.
+- **Recommended: `no-new-privileges`.** The image grants the `user` account
+  passwordless `sudo`; `security_opt: [no-new-privileges:true]` on
+  `open-terminal` blocks that escalation path without affecting the agent CLI or
+  MCP registration.
+- **Recommended: a memory ceiling.** `mem_limit: 1536m` on `open-terminal` caps
+  the container; idle usage measured ~316 MiB on a live deployment, so this
+  leaves headroom without being unbounded.
 
 Residual blast radius: the agent can run code in its own container and write its
 own home volume (login, MCP config, session state) - by design. Not the host, not
@@ -284,12 +328,16 @@ pinned versions, and `dc up -d`.
   be partially broken, and the model picker can silently fall back to a
   non-agent model in some flows - check `open-webui/open-webui` issues for the
   current state before relying on either.
+- LucidVault's MCP `delete_page` removes wiki pages but not a note's source file
+  in `notes/` - an agent that called `add_note` cannot fully undo it through MCP
+  alone; the leftover file in `notes/` needs manual cleanup.
 
 | Symptom | Fix |
 |---|---|
 | OpenWebUI shows no `claude-code/*` models | Did you select the Open Terminal connection first? Is `TERMINAL_SERVER_CONNECTIONS` set and does `OPEN_TERMINAL_API_KEY` match on both services? |
 | `claude mcp list` shows lucidvault disconnected | URL uses the compose service name (`lucidvault`, not `127.0.0.1`), and `lucidvault` is in `MCP_ALLOWED_HOST` |
-| Agent: "vault doesn't exist" / can't find AGENTS.md | Check `OPEN_TERMINAL_START_DIR` and that `/home/user/vault-agent/CLAUDE.md` exists and imports `/home/user/vault/AGENTS.md` |
+| Agent: "vault doesn't exist" / can't find AGENTS.md | Check `OPEN_TERMINAL_START_DIR` and that `/home/user/workspace/CLAUDE.md` exists and imports `/home/user/vault/AGENTS.md` |
+| OpenWebUI logs `Initialized 0 terminal server(s)` | Open Terminal wasn't ready when OpenWebUI started - `docker compose restart open-webui` |
 | Agent can't write the vault | Working as intended - writes go through MCP |
 | No tool-approval prompt in chat | `ENABLE_TOOL_PERMISSIONS` not actually on - check Admin settings for your OpenWebUI version |
 | Sign-in token rejected inside the container | Re-run `claude setup-token` and update `.env`, or switch to `ANTHROPIC_API_KEY` |
