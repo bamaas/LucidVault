@@ -178,7 +178,7 @@ func main() {
 
 	slog.Info("starting lucidvault",
 		"poll_interval", cfg.pollInterval,
-		"enrich_base_url", cfg.enrichBaseURL,
+		"enrich_base_url", en.BaseURL(),
 		"model", cfg.enrichModel,
 		"raindrop_enabled", rd != nil,
 		"force_re_enrich", cfg.forceReEnrich,

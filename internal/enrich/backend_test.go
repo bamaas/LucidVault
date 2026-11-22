@@ -661,6 +661,62 @@ func TestClient_BackendUnavailableConnectionReset(t *testing.T) {
 	}
 }
 
+// TestClient_BackendUnavailableConnectionResetDuringBodyRead covers a
+// connection that resets while the response body is still being read: the
+// backend accepted the request and started responding (valid status line
+// and headers), then crashed before finishing the body. Distinct from
+// TestClient_BackendUnavailableConnectionReset above, which resets before
+// any response is written at all. ADR-031 treats both the same: there is no
+// reliable way to tell a crashed backend apart from one that is truly down.
+func TestClient_BackendUnavailableConnectionResetDuringBodyRead(t *testing.T) {
+	for _, op := range operations() {
+		t.Run(op.name, func(t *testing.T) {
+			t.Parallel()
+
+			var conns atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conns.Add(1)
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					t.Fatal("ResponseWriter does not support hijacking")
+				}
+				conn, bufrw, err := hj.Hijack()
+				if err != nil {
+					t.Fatalf("Hijack: %v", err)
+				}
+				// A valid status line and headers declaring a body far
+				// longer than what actually follows, then the connection
+				// dies mid-body.
+				_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 10000\r\nContent-Type: application/json\r\n\r\n{\"partial")
+				_ = bufrw.Flush()
+				_ = conn.Close()
+			}))
+			defer srv.Close()
+
+			c := enrich.NewClient(secretKey, "test-model", 2, 0)
+			c.SetBaseURL(srv.URL)
+
+			out, err := op.call(context.Background(), c)
+
+			if err == nil {
+				t.Fatalf("expected an error, got nil (output: %q)", out)
+			}
+			if !errors.Is(err, enrich.ErrBackendUnavailable) {
+				t.Errorf("errors.Is(err, ErrBackendUnavailable) = false; err = %v", err)
+			}
+			if got := conns.Load(); got != 1 {
+				t.Errorf("expected exactly 1 request (no retries), got %d", got)
+			}
+			if out != "" {
+				t.Errorf("expected no output (no minimal page / fallback tags), got %q", out)
+			}
+			if strings.Contains(err.Error(), secretKey) {
+				t.Errorf("error leaks the API key: %v", err)
+			}
+		})
+	}
+}
+
 func TestClient_BackendUnavailableErrorMessage(t *testing.T) {
 	tests := []struct {
 		name         string

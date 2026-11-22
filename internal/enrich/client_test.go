@@ -290,18 +290,18 @@ func TestSuggestTags_TimeoutRetriesThenUntagged(t *testing.T) {
 }
 
 // TestEnrich_CancellationDuringRequest covers a context deadline that
-// expires while httpClient.Do is in flight (client.go callAPI:319-321 and
-// Enrich:136-138) — distinct from cancelling before the call is ever made.
+// expires while httpClient.Do is in flight (callAPI's ctx.Err() guard right
+// after httpClient.Do fails, and Enrich's own ctx.Err() recheck after
+// callAPI returns) — distinct from cancelling before the call is ever made.
 //
-// Honesty note: this test cannot isolate the ctx.Err() guard at
-// callAPI:319-321 from the netErr.Timeout() branch right after it
-// (client.go:322-326). A context.WithTimeout deadline produces
-// context.DeadlineExceeded, which itself satisfies net.Error's Timeout() ==
-// true — so even if the ctx.Err() check at 319-321 were deleted, the
+// Honesty note: this test cannot isolate callAPI's ctx.Err() guard from the
+// netErr.Timeout() branch right after it. A context.WithTimeout deadline
+// produces context.DeadlineExceeded, which itself satisfies net.Error's
+// Timeout() == true — so even if the ctx.Err() check were deleted, the
 // Timeout() branch would classify the same underlying error identically
 // (wrapped, not ErrBackendUnavailable) and this test would still pass. It
 // documents the deadline-based behaviour, not a regression guard for that
-// specific line. See TestEnrich_CancellationMidFlight below for a
+// specific check. See TestEnrich_CancellationMidFlight below for a
 // context.WithCancel variant that does isolate it.
 func TestEnrich_CancellationDuringRequest(t *testing.T) {
 	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
@@ -329,9 +329,10 @@ func TestEnrich_CancellationDuringRequest(t *testing.T) {
 }
 
 // TestSuggestTags_CancellationDuringRequest is the SuggestTags counterpart
-// of TestEnrich_CancellationDuringRequest (client.go SuggestTags:201-203).
-// Same honesty note applies: a deadline, not a plain cancel, can't isolate
-// callAPI's ctx.Err() guard from its neighboring netErr.Timeout() branch.
+// of TestEnrich_CancellationDuringRequest (SuggestTags' own ctx.Err()
+// recheck after callAPI returns). Same honesty note applies: a deadline, not
+// a plain cancel, can't isolate callAPI's ctx.Err() guard from its
+// neighboring netErr.Timeout() branch.
 func TestSuggestTags_CancellationDuringRequest(t *testing.T) {
 	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
@@ -362,9 +363,9 @@ func TestSuggestTags_CancellationDuringRequest(t *testing.T) {
 // TestEnrich_CancellationDuringRequest above.
 //
 // Honesty note: this still cannot isolate the ctx.Err() guard inside
-// callAPI (client.go, right after httpClient.Do fails) from Enrich's own
-// redundant ctx.Err() recheck a few lines after callAPI returns (client.go
-// ~136-138). Verified empirically (by temporarily deleting callAPI's guard):
+// callAPI (right after httpClient.Do fails) from Enrich's own redundant
+// ctx.Err() recheck a few lines after callAPI returns. Verified empirically
+// (by temporarily deleting callAPI's guard):
 // this test still passes even with that line removed, because Enrich's
 // outer recheck sees the same still-canceled ctx and returns ctx.Err()
 // regardless of what callAPI itself returned. Isolating callAPI's guard
@@ -451,9 +452,9 @@ func TestSuggestTags_CancellationMidFlight(t *testing.T) {
 }
 
 // TestCallAPI_CancellationMidFlight genuinely isolates the ctx.Err() guard
-// at client.go callAPI (immediately after httpClient.Do fails, immediately
-// before the netErr.Timeout() check) from Enrich/SuggestTags' own redundant
-// outer recheck, by calling callAPI directly (this file is package enrich,
+// inside callAPI (immediately after httpClient.Do fails, immediately before
+// the connected/netErr.Timeout() checks) from Enrich/SuggestTags' own
+// redundant outer recheck, by calling callAPI directly (this file is package enrich,
 // not enrich_test, so the unexported method is reachable). Confirmed by
 // temporarily deleting that guard: this test fails (the error becomes
 // ErrBackendUnavailable) while TestEnrich_CancellationMidFlight and
@@ -540,9 +541,12 @@ func (tr *fakeDialTimeoutTransport) RoundTrip(*http.Request) (*http.Response, er
 
 // TestEnrich_DialTimeoutIsBackendUnavailable covers the case the plain
 // "any Timeout() == true is retried like a 5xx" rule used to get wrong: a
-// dial-phase timeout never reached the backend at all, so it belongs with
-// connection-refused/DNS/TLS as ErrBackendUnavailable, not as a retryable
-// slow response.
+// dial-phase timeout never produces a usable connection (no httptrace
+// GotConn), so it belongs with connection-refused/DNS/TLS as
+// ErrBackendUnavailable, not as a retryable slow response. This fake
+// RoundTripper never calls the httptrace hooks at all (it bypasses the real
+// dialer entirely), which has the same "never connected" effect as a real
+// one that times out before GotConn fires.
 func TestEnrich_DialTimeoutIsBackendUnavailable(t *testing.T) {
 	var calls atomic.Int32
 	c := NewClient("key", "model", 2, 0)
@@ -562,39 +566,82 @@ func TestEnrich_DialTimeoutIsBackendUnavailable(t *testing.T) {
 	}
 }
 
-func TestIsDialFailure(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{
-			name: "dial op error",
-			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
-			want: true,
-		},
-		{
-			name: "dial op timeout is still a dial failure",
-			err:  &net.OpError{Op: "dial", Net: "tcp", Err: fakeTimeoutError{}},
-			want: true,
-		},
-		{
-			name: "read op error is not a dial failure",
-			err:  &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")},
-			want: false,
-		},
-		{
-			name: "plain error is not a dial failure",
-			err:  errors.New("some other error"),
-			want: false,
-		},
+// TestClient_BackendUnavailableTLSHandshakeTimeout covers a TLS handshake
+// that never completes (e.g. a backend that accepts the TCP connection but
+// hangs before sending a ServerHello). net/http reports this with
+// Timeout() == true, same as a slow-to-answer backend, but no usable
+// connection was ever established (httptrace's GotConn never fires), so it
+// must be classified as ErrBackendUnavailable, not retried like a slow
+// response.
+func TestClient_BackendUnavailableTLSHandshakeTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isDialFailure(tt.err); got != tt.want {
-				t.Errorf("isDialFailure(%v) = %v, want %v", tt.err, got, tt.want)
-			}
-		})
+	defer func() { _ = ln.Close() }()
+
+	var accepted atomic.Int32
+	acceptedConn := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		accepted.Add(1)
+		acceptedConn <- conn
+		// Never writes a TLS ServerHello, so the client's handshake times
+		// out instead of completing or failing outright.
+	}()
+
+	c := NewClient("key", "model", 2, 0)
+	c.SetBaseURL("https://" + ln.Addr().String())
+	c.httpClient.Transport.(*http.Transport).TLSHandshakeTimeout = 50 * time.Millisecond
+
+	_, err = c.Enrich(context.Background(), &EnrichInput{
+		Title:     "Test",
+		URL:       "http://example.com",
+		DateSaved: "2024-01-01",
+	})
+
+	select {
+	case conn := <-acceptedConn:
+		_ = conn.Close()
+	case <-time.After(time.Second):
+	}
+
+	if !errors.Is(err, ErrBackendUnavailable) {
+		t.Errorf("errors.Is(err, ErrBackendUnavailable) = false; err = %v", err)
+	}
+	if got := accepted.Load(); got != 1 {
+		t.Errorf("expected exactly 1 connection attempt (no retries), got %d", got)
+	}
+}
+
+// TestCallAPI_RedactsAPIKeyEvenWhenKeySpansTruncationBoundary guards
+// against redacting after truncating: if the body were truncated to
+// maxErrorBodyBytes before the key was replaced, a key straddling that cut
+// would have its surviving prefix leak into the error unredacted.
+func TestCallAPI_RedactsAPIKeyEvenWhenKeySpansTruncationBoundary(t *testing.T) {
+	const key = "sk-boundary-leak-0123456789"
+	// The key starts 10 bytes before the truncation cutoff, so a
+	// truncate-then-redact implementation would cut it mid-string.
+	body := strings.Repeat("x", maxErrorBodyBytes-10) + key
+
+	srv := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(body))
+	})
+	defer srv.Close()
+
+	c := NewClient(key, "model", 0, 0)
+	c.SetBaseURL(srv.URL)
+
+	_, _, err := c.callAPI(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("expected an error for a 500 response")
+	}
+	if strings.Contains(err.Error(), key[:10]) {
+		t.Errorf("error leaks a prefix of the API key across the truncation boundary: %v", err)
 	}
 }
 

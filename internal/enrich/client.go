@@ -11,6 +11,8 @@ import (
 	"lucidvault/internal/vault"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -81,9 +83,11 @@ type chatCompletionResponse struct {
 
 func NewClient(apiKey, model string, maxRetries, delayMs int) *Client {
 	return &Client{
-		apiKey:  apiKey,
-		model:   model,
-		baseURL: "https://ollama.com/v1",
+		apiKey: apiKey,
+		model:  model,
+		// No default: ADR-031 rejects defaulting to any one provider.
+		// SetBaseURL is always called with ENRICH_BASE_URL (required).
+		baseURL: "",
 		httpClient: &http.Client{
 			Timeout: 300 * time.Second,
 			Transport: &http.Transport{
@@ -102,11 +106,23 @@ func NewClient(apiKey, model string, maxRetries, delayMs int) *Client {
 // SetBaseURL overrides the Enrichment Backend's base URL (ENRICH_BASE_URL, a
 // self-hosted Ollama server, another OpenAI-compatible endpoint, or a test
 // server). It must be the base that "/chat/completions" is appended to.
-func (c *Client) SetBaseURL(url string) { c.baseURL = url }
+func (c *Client) SetBaseURL(base string) { c.baseURL = base }
 
 // BaseURL returns the configured Enrichment Backend base URL, for logging
-// which endpoint failed. Never returns the API key.
-func (c *Client) BaseURL() string { return c.baseURL }
+// which endpoint failed. Never returns the API key, and redacts any
+// password a user put directly in the URL (e.g. https://user:pass@host/v1).
+func (c *Client) BaseURL() string { return redactURLForLog(c.baseURL) }
+
+// redactURLForLog returns raw with any userinfo password replaced with
+// "xxxxx", for safe inclusion in logs and error messages. Returns raw
+// unchanged if it does not parse as a URL.
+func redactURLForLog(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return u.Redacted()
+}
 
 func (c *Client) Enrich(ctx context.Context, input *EnrichInput) (string, error) {
 	prompt := buildPrompt(input)
@@ -316,29 +332,58 @@ func (c *Client) callAPI(ctx context.Context, prompt string) (string, int, error
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 
+	// connected becomes true only once a fully usable connection exists —
+	// for https that is after the TLS handshake completes, not just the TCP
+	// dial. GotConn is the standard way to tell "never reached a connection
+	// we could use" apart from "connected, then something else went wrong",
+	// which covers dial failures, DNS failures, and TLS handshake failures
+	// or timeouts uniformly, instead of pattern-matching error types.
+	var connected bool
+	trace := &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { connected = true },
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", 0, ctx.Err()
 		}
-		if !isDialFailure(err) {
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				// Connected, then timed out waiting for a response: treated
-				// like a 5xx, retry then fall back.
-				return "", 0, fmt.Errorf("calling enrichment backend: %w", err)
-			}
+		if !connected {
+			// Never got a usable connection: refused, DNS failure, a TLS
+			// handshake failure or timeout, or a dial-phase timeout (e.g. a
+			// firewall silently dropping packets). The backend is not
+			// reachable at all, so retrying is pointless.
+			return "", 0, fmt.Errorf("enrichment backend unreachable at %s: %v: %w", c.BaseURL(), err, ErrBackendUnavailable)
 		}
-		// Connection refused, DNS failure, TLS handshake failure, or a
-		// dial-phase timeout (e.g. a firewall silently dropping packets):
-		// the backend is not reachable at all, so retrying is pointless.
-		return "", 0, fmt.Errorf("enrichment backend unreachable at %s: %v: %w", c.baseURL, err, ErrBackendUnavailable)
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			// Connected, then timed out waiting for a response: treated
+			// like a 5xx, retry then fall back.
+			return "", 0, fmt.Errorf("calling enrichment backend: %w", err)
+		}
+		// Connected, then failed some other way (e.g. a reset): there is no
+		// reliable way to tell "backend crashed mid-response" from "truly
+		// down" at the transport level (ADR-031), so treat it the same.
+		return "", 0, fmt.Errorf("enrichment backend unreachable at %s: %v: %w", c.BaseURL(), err, ErrBackendUnavailable)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return "", resp.StatusCode, fmt.Errorf("reading response: %w", err)
+		if ctx.Err() != nil {
+			return "", resp.StatusCode, ctx.Err()
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			// Slow to finish sending the body: treated like a 5xx, retry
+			// then fall back.
+			return "", resp.StatusCode, fmt.Errorf("reading response: %w", err)
+		}
+		// The connection was already established and a status code
+		// received, so a non-timeout failure here (e.g. a connection reset
+		// mid-stream) is the same "connected, then broke" case as above.
+		return "", resp.StatusCode, fmt.Errorf("enrichment backend connection broke reading response: %v: %w", err, ErrBackendUnavailable)
 	}
 
 	if isBackendUnavailableStatus(resp.StatusCode) {
@@ -375,18 +420,6 @@ func isBackendUnavailableStatus(statusCode int) bool {
 	}
 }
 
-// isDialFailure reports whether err happened before a connection was ever
-// established — refused, DNS, or a dial-phase timeout (e.g. a firewall
-// silently dropping packets). These count as ErrBackendUnavailable even
-// though the underlying error reports Timeout() == true: retrying for
-// minutes against an address that never answers is the "wrong retry"
-// ADR-031 warns against, as opposed to a backend that accepted the
-// connection and was merely slow to answer.
-func isDialFailure(err error) bool {
-	var opErr *net.OpError
-	return errors.As(err, &opErr) && opErr.Op == "dial"
-}
-
 // truncateBody trims a response body for inclusion in an error message,
 // capping it at maxErrorBodyBytes so a huge body can't blow up the error.
 func truncateBody(body []byte) string {
@@ -398,16 +431,17 @@ func truncateBody(body []byte) string {
 }
 
 // safeBody prepares a failed response body for inclusion in an error
-// message: truncated by truncateBody, then with the configured API key
-// redacted. Some backends echo the presented key in their error body (e.g.
+// message: the configured API key redacted first, then truncated by
+// truncateBody. Redaction must run before truncation — otherwise a key that
+// straddles the truncation cutoff would have its surviving prefix leak into
+// the error. Some backends echo the presented key in their error body (e.g.
 // "invalid API key: sk-..."), and that body flows into a log line wherever
 // this error is logged, so the key must never survive into it.
 func (c *Client) safeBody(body []byte) string {
-	s := truncateBody(body)
-	if c.apiKey != "" {
-		s = strings.ReplaceAll(s, c.apiKey, "[REDACTED]")
+	if c.apiKey == "" {
+		return truncateBody(body)
 	}
-	return s
+	return truncateBody([]byte(strings.ReplaceAll(string(body), c.apiKey, "[REDACTED]")))
 }
 
 func cleanResponse(content string) string {
